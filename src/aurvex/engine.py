@@ -1,0 +1,278 @@
+"""
+Engine loop.
+
+One async runner that drives the whole paper pipeline each cycle:
+
+    scan universe
+      -> per symbol: snapshot -> context -> setup -> score -> decide
+      -> execute ALLOW as a paper trade
+    manage all open trades against the latest bar (scale-out, BE, SL/TP)
+    resolve shadow signals
+    persist funnel + heartbeat
+    (once per UTC day) send a Telegram daily summary
+
+The SAME DecisionEngine instance is what a live runner would use; only the
+executor differs. Live execution is intentionally not wired here.
+
+Robustness: per-symbol work is wrapped so a single bad symbol cannot abort the
+cycle. Shutdown is graceful on SIGINT/SIGTERM.
+"""
+from __future__ import annotations
+
+import asyncio
+import datetime as dt
+import logging
+import signal as os_signal
+from typing import Dict, Optional
+
+from .config import Config
+from .decision import DecisionEngine
+from .executors import PaperExecutor
+from .filters import PortfolioView
+from .funnel import FunnelLogger
+from .journal import TradeJournal
+from .market_data import build_provider
+from .models import ALLOW, OPEN, MarketSnapshot, now_ms
+from .scanner import UniverseScanner
+from .setups import SetupDetector, build_context
+from .shadow import ShadowLearner
+from .storage import Storage
+from .telegram import build_notifier
+
+log = logging.getLogger("aurvex.engine")
+
+
+def _utc_day_start_ms(ts_ms: Optional[int] = None) -> int:
+    ts = (ts_ms or now_ms()) / 1000.0
+    d = dt.datetime.utcfromtimestamp(ts).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    return int(d.timestamp() * 1000)
+
+
+class Engine:
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self.db = Storage(cfg.db_path)
+        self.provider = build_provider(cfg)
+        self.scanner = UniverseScanner(cfg, self.provider)
+        self.detector = SetupDetector(cfg)
+        self.engine = DecisionEngine(cfg)          # the shared brain
+        self.executor = PaperExecutor(cfg)
+        self.journal = TradeJournal(self.db)
+        self.shadow = ShadowLearner(cfg, self.db)
+        self.notifier = build_notifier(cfg)
+        self._stop = asyncio.Event()
+        self._cycles = 0
+        self._last_summary_day = -1
+        self.db.ensure_balance(cfg.initial_paper_balance)
+
+    # -- lifecycle ---------------------------------------------------------
+    def request_stop(self, *_: object) -> None:
+        log.info("stop requested")
+        self._stop.set()
+
+    async def run(self, max_cycles: Optional[int] = None,
+                  sleep_override: Optional[float] = None) -> None:
+        bal = self.db.get_balance()
+        log.info("engine starting mode=%s provider=%s balance=%.2f",
+                 self.cfg.mode, self.cfg.data_provider, bal)
+        self.notifier.system_started(self.cfg.mode, bal)
+        try:
+            self.scanner.scan()  # warm the universe once
+        except Exception as exc:
+            log.warning("initial scan failed: %s", exc)
+        try:
+            while not self._stop.is_set():
+                started = now_ms()
+                try:
+                    await self._cycle()
+                except Exception as exc:                  # never die on a cycle
+                    log.exception("cycle error: %s", exc)
+                    self.notifier.health_warning(f"cycle error: {exc}")
+                self._cycles += 1
+                if max_cycles is not None and self._cycles >= max_cycles:
+                    break
+                elapsed = (now_ms() - started) / 1000.0
+                sleep_s = sleep_override if sleep_override is not None else self.cfg.cycle_interval_sec
+                await self._sleep(max(0.0, sleep_s - elapsed))
+        finally:
+            self.notifier.system_stopped(f"cycles={self._cycles}")
+            self.db.close()
+            log.info("engine stopped after %d cycles", self._cycles)
+
+    async def _sleep(self, seconds: float) -> None:
+        try:
+            await asyncio.wait_for(self._stop.wait(), timeout=seconds)
+        except asyncio.TimeoutError:
+            pass
+
+    # -- portfolio snapshot ------------------------------------------------
+    def _portfolio(self) -> PortfolioView:
+        opens = self.db.get_open_trades(mode=self.cfg.mode)
+        open_notional = sum(t.position_size * t.remaining_fraction for t in opens)
+        return PortfolioView(
+            balance=self.db.get_balance(),
+            open_count=len(opens),
+            open_symbols=[t.symbol for t in opens],
+            open_notional=open_notional,
+            last_trade_ms_by_symbol=self.db.last_trade_times(),
+            daily_realized_pnl=self.db.daily_realized_pnl(_utc_day_start_ms()),
+            now_ms=now_ms(),
+        )
+
+    # -- one cycle ---------------------------------------------------------
+    async def _cycle(self) -> None:
+        cycle_start = now_ms()
+        # Advance synthetic clock if the provider supports it (demo/offline).
+        adv = getattr(self.provider, "advance", None)
+        if callable(adv):
+            adv()
+
+        funnel = FunnelLogger()
+        symbols = self.scanner.scan()
+        snapshots: Dict[str, MarketSnapshot] = {}
+        pf = self._portfolio()
+        live_open_symbols = set(pf.open_symbols)
+        open_count = pf.open_count
+
+        scanned = symbols[: self.cfg.max_symbols_per_cycle]
+        candidates = 0
+
+        for sym in scanned:
+            try:
+                snap = self.provider.get_snapshot(sym)
+            except Exception as exc:
+                log.debug("snapshot failed %s: %s", sym, exc)
+                continue
+            snapshots[sym] = snap
+            ctx = build_context(self.cfg, snap)
+            if ctx is None:
+                continue
+            candidates += 1
+
+            signal = self.detector.detect(snap)
+            if signal is None:
+                continue
+            funnel.note_setup_detected()
+
+            # Score now so we can optionally apply a soft shadow nudge.
+            self.engine.scorer.build(signal, snap)
+            if self.cfg.shadow_apply:
+                delta = self.shadow.score_delta(signal.setup_type)
+                if delta:
+                    signal.score = max(0.0, min(100.0, signal.score + delta))
+
+            # Refresh portfolio view-ish counters locally for same-cycle gating.
+            pf.open_count = open_count
+            pf.open_symbols = list(live_open_symbols)
+            d = self.engine.decide(signal, snap, pf)
+            self.db.insert_signal_event(d)
+            funnel.record(d)
+
+            # Shadow tracking: opened paper trades AND high-score rejects.
+            source = "paper" if d.decision == ALLOW else "rejected"
+            self.shadow.track_signal(signal, d, source=source)
+
+            if d.decision == ALLOW:
+                if sym in live_open_symbols:
+                    continue  # one position per symbol
+                if open_count >= self.cfg.max_open_trades:
+                    continue
+                trade = self.executor.open(d)
+                self.journal.record_open(trade)
+                self.notifier.trade_opened(trade)
+                funnel.mark_executed()
+                live_open_symbols.add(sym)
+                open_count += 1
+
+        # Manage open trades (including symbols not scanned this cycle).
+        await self._manage_open_trades(snapshots)
+
+        # Resolve shadow signals against latest bars.
+        try:
+            self.shadow.update(snapshots)
+        except Exception as exc:
+            log.debug("shadow update error: %s", exc)
+
+        # Persist funnel.
+        last_times = self.db.last_trade_times()
+        last_min_ago = None
+        if last_times:
+            newest = max(last_times.values())
+            last_min_ago = round((now_ms() - newest) / 60000.0, 2)
+        funnel.set_scanned(len(symbols), candidates)
+        stats = funnel.finalize(last_min_ago, cycle_ms=float(now_ms() - cycle_start))
+        self.db.insert_funnel(stats)
+
+        # Heartbeat.
+        self.db.set_heartbeat("engine", {
+            "ts": now_ms(), "cycle": self._cycles, "balance": self.db.get_balance(),
+            "open_trades": open_count, "scanned": len(symbols),
+            "allow": stats.decision_allow_count, "executed": stats.executed_count,
+            "mode": self.cfg.mode,
+        })
+
+        # Daily summary once per UTC day (skip the very first cycle).
+        self._maybe_daily_summary()
+
+        log.info("cycle %d scanned=%d cand=%d setups=%d allow=%d exec=%d open=%d bal=%.2f",
+                 self._cycles, len(symbols), candidates, stats.setup_detected_count,
+                 stats.decision_allow_count, stats.executed_count, open_count,
+                 self.db.get_balance())
+
+    async def _manage_open_trades(self, snapshots: Dict[str, MarketSnapshot]) -> None:
+        opens = self.db.get_open_trades(mode=self.cfg.mode)
+        for trade in opens:
+            snap = snapshots.get(trade.symbol)
+            if snap is None:
+                try:
+                    snap = self.provider.get_snapshot(trade.symbol)
+                except Exception as exc:
+                    log.debug("manage snapshot failed %s: %s", trade.symbol, exc)
+                    continue
+            ltf = snap.ltf(self.cfg.ltf)
+            if not ltf:
+                continue
+            bar = ltf[-1]
+            events = self.executor.simulate_fill(trade, bar.high, bar.low, bar.close)
+            if not events:
+                continue
+            self.journal.record_fills(trade, events)
+            for ev in events:
+                if ev.kind == "BE_MOVE":
+                    continue
+                self.notifier.trade_event(trade, ev.kind, ev.price, ev.pnl)
+            if trade.status != OPEN:
+                self.notifier.trade_closed(trade)
+
+    def _maybe_daily_summary(self) -> None:
+        today = dt.datetime.utcnow().toordinal()
+        if self._last_summary_day == -1:
+            self._last_summary_day = today
+            return
+        if today != self._last_summary_day:
+            self._last_summary_day = today
+            try:
+                self.notifier.daily_summary(self.journal.metrics(mode=self.cfg.mode))
+            except Exception as exc:
+                log.debug("daily summary error: %s", exc)
+
+
+def run_engine(cfg: Config, max_cycles: Optional[int] = None,
+               sleep_override: Optional[float] = None) -> None:
+    logging.basicConfig(
+        level=getattr(logging, cfg.log_level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    engine = Engine(cfg)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    for sig in (os_signal.SIGINT, os_signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, engine.request_stop)
+        except (NotImplementedError, ValueError):    # e.g. Windows / non-main thread
+            pass
+    try:
+        loop.run_until_complete(engine.run(max_cycles=max_cycles,
+                                           sleep_override=sleep_override))
+    finally:
+        loop.close()
