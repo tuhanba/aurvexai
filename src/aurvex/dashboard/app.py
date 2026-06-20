@@ -19,10 +19,13 @@ Endpoints:
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Dict
 
 from flask import Flask, jsonify, render_template
+
+log = logging.getLogger("aurvex.dashboard")
 
 from ..config import load_config
 from ..metrics import compute_metrics
@@ -119,6 +122,18 @@ def create_app(cfg=None) -> Flask:
 
 def run_dashboard(cfg=None) -> None:
     cfg = cfg or load_config()
+    logging.basicConfig(
+        level=getattr(logging, cfg.log_level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s")
     app = create_app(cfg)
+    host = cfg.dashboard_host
     port = int(os.environ.get("DASHBOARD_PORT", cfg.dashboard_port))
-    app.run(host=cfg.dashboard_host, port=port, debug=False, use_reloader=False)
+    # Prefer a production WSGI server (waitress). Fall back to Flask's built-in
+    # server only if waitress is unavailable (e.g. a minimal dev environment).
+    try:
+        from waitress import serve
+        log.info("dashboard serving on %s:%d (waitress)", host, port)
+        serve(app, host=host, port=port, threads=8)
+    except ImportError:
+        log.warning("waitress not installed; using Flask dev server on %s:%d", host, port)
+        app.run(host=host, port=port, debug=False, use_reloader=False)

@@ -173,21 +173,19 @@ python3 main.py dashboard
 
 State is a single SQLite file in the `aurvex-data` volume
 (`/app/data/aurvex.db`, WAL mode). It survives `docker compose down`. To wipe and
-start fresh:
+start fresh, stop first:
 
 ```
 docker compose down
 ```
-```
-docker volume rs aurvex-data
-```
 
-(Then `docker compose up -d --build` recreates it. Replace `rs` with `rm` —
-written separately to avoid an accidental one-liner.)
+then remove the named volume (this is destructive — all paper history is lost):
 
 ```
 docker volume rm aurvexai_aurvex-data
 ```
+
+Then `docker compose up -d --build` recreates an empty database.
 
 ## Updating data provider
 

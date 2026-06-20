@@ -97,7 +97,7 @@ def compute_metrics(trades: List[Trade]) -> Dict[str, Any]:
 
 def _hour_key(t: Trade) -> str:
     ts = (t.open_time or 0) / 1000.0
-    return dt.datetime.utcfromtimestamp(ts).strftime("%H") + ":00 UTC"
+    return dt.datetime.fromtimestamp(ts, dt.timezone.utc).strftime("%H") + ":00 UTC"
 
 
 def _breakdown(trades: List[Trade], key_fn) -> List[Dict[str, Any]]:

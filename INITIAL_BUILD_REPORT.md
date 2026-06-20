@@ -16,8 +16,8 @@ executor is a gated stub that sends no real orders.
 
 ## Build at a glance
 
-- **22** Python modules, **~3,455** LOC in `src/`.
-- **9** test files, **48** tests, **all passing** (`pytest`).
+- **22** Python modules, **~3,460** LOC in `src/`.
+- **10** test files, **55** tests, **all passing** (`pytest`).
 - Verified offline: synthetic demo (60 cycles, trades opened/closed, balance
   ledger updated), all 9 dashboard endpoints return 200, backtester runs on
   2,000 bars × 4 symbols with a coherent metrics report.
@@ -77,7 +77,7 @@ also works for quick runs. CPU-only image (`python:3.12-slim`); no GPU needed.
 
 ## Tests — what passed
 
-All 48 tests pass:
+All 55 tests pass:
 
 - `test_decision_engine.py` — ALLOW/WATCH/REJECT paths, filter rejects,
   determinism, decision contract fields.
@@ -95,6 +95,8 @@ All 48 tests pass:
 - `test_metrics_storage.py` — expectancy/PF/winrate/drawdown maths; SQLite
   round-trips for trades, balance ledger, funnel, signals.
 - `test_backtest.py` — resample buckets, no-lookahead replay, coherent report.
+- `test_market_data.py` — synthetic provider OHLC sanity/determinism/advance,
+  ccxt provider builds without touching the network, pipeline fires setups.
 
 ## Tests / work remaining (future)
 

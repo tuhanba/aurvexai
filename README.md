@@ -66,6 +66,23 @@ docker compose up -d --build
 Engine + dashboard come up sharing one SQLite volume. Dashboard on `:5000`.
 Full server/Termius instructions are in [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
+## Operations (Docker)
+
+Run from the project root (helper scripts wrap the same `docker compose` calls):
+
+| Action | Command |
+| --- | --- |
+| Start (build + run) | `docker compose up -d --build`  ·  `bash scripts/start.sh` |
+| Stop (keep data) | `docker compose down`  ·  `bash scripts/stop.sh` |
+| Status | `docker compose ps` |
+| Logs (all / one) | `docker compose logs -f --tail=200 [engine\|dashboard]`  ·  `bash scripts/logs.sh [engine\|dashboard]` |
+| Health check | `curl -fsS http://localhost:5000/health`  ·  `bash scripts/health.sh` |
+| Update to latest | `git pull` → `docker compose up -d --build` |
+| Wipe paper history | `docker compose down` → `docker volume rm aurvexai_aurvex-data` |
+
+The `aurvex-data` volume (SQLite WAL) persists across `down`/up and restarts.
+Containers use `restart: unless-stopped`, so they survive reboots.
+
 ## Configuration
 
 All settings come from environment variables / `.env`. See
@@ -102,7 +119,7 @@ src/aurvex/
   engine.py        # async runner loop
   dashboard/       # Flask app + HTML
 main.py            # engine | dashboard | demo | backtest
-tests/             # 48 tests
+tests/             # 55 tests
 ```
 
 ## Tests

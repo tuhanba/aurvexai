@@ -44,7 +44,7 @@ log = logging.getLogger("aurvex.engine")
 
 def _utc_day_start_ms(ts_ms: Optional[int] = None) -> int:
     ts = (ts_ms or now_ms()) / 1000.0
-    d = dt.datetime.utcfromtimestamp(ts).replace(
+    d = dt.datetime.fromtimestamp(ts, dt.timezone.utc).replace(
         hour=0, minute=0, second=0, microsecond=0)
     return int(d.timestamp() * 1000)
 
@@ -246,7 +246,7 @@ class Engine:
                 self.notifier.trade_closed(trade)
 
     def _maybe_daily_summary(self) -> None:
-        today = dt.datetime.utcnow().toordinal()
+        today = dt.datetime.now(dt.timezone.utc).toordinal()
         if self._last_summary_day == -1:
             self._last_summary_day = today
             return
