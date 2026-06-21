@@ -76,7 +76,15 @@ class Engine:
         bal = self.db.get_balance()
         log.info("engine starting mode=%s provider=%s balance=%.2f",
                  self.cfg.mode, self.cfg.data_provider, bal)
+        # One-off Telegram self-test (getMe) so health is populated before the
+        # first message. Never raises; result is surfaced on the dashboard.
+        try:
+            self.notifier.verify()
+        except Exception as exc:
+            log.debug("telegram verify error: %s", exc)
+        self._persist_telegram_health()
         self.notifier.system_started(self.cfg.mode, bal)
+        self._persist_telegram_health()
         try:
             self.scanner.scan()  # warm the universe once
         except Exception as exc:
@@ -106,19 +114,37 @@ class Engine:
         except asyncio.TimeoutError:
             pass
 
+    def _persist_telegram_health(self) -> None:
+        """Write the notifier's (secret-free) health to storage for the dashboard."""
+        try:
+            self.db.set_heartbeat("telegram", self.notifier.health())
+        except Exception as exc:
+            log.debug("telegram health persist error: %s", exc)
+
     # -- portfolio snapshot ------------------------------------------------
     def _portfolio(self) -> PortfolioView:
         opens = self.db.get_open_trades(mode=self.cfg.mode)
         open_notional = sum(t.position_size * t.remaining_fraction for t in opens)
+        open_margin = sum(self._trade_margin(t) for t in opens)
         return PortfolioView(
             balance=self.db.get_balance(),
             open_count=len(opens),
             open_symbols=[t.symbol for t in opens],
             open_notional=open_notional,
+            open_margin=open_margin,
             last_trade_ms_by_symbol=self.db.last_trade_times(),
             daily_realized_pnl=self.db.daily_realized_pnl(_utc_day_start_ms()),
             now_ms=now_ms(),
         )
+
+    @staticmethod
+    def _trade_margin(t) -> float:
+        """Current margin committed by an open trade (scales with remaining size)."""
+        if t.margin_used and t.leverage:
+            return t.margin_used * t.remaining_fraction
+        # Legacy / fallback: derive from notional and leverage.
+        lev = t.leverage or 1
+        return (t.position_size * t.remaining_fraction) / lev
 
     # -- one cycle ---------------------------------------------------------
     async def _cycle(self) -> None:
@@ -134,6 +160,8 @@ class Engine:
         pf = self._portfolio()
         live_open_symbols = set(pf.open_symbols)
         open_count = pf.open_count
+        open_notional = pf.open_notional   # running, updated as trades open this cycle
+        open_margin = pf.open_margin       # running, updated as trades open this cycle
 
         scanned = symbols[: self.cfg.max_symbols_per_cycle]
         candidates = 0
@@ -162,9 +190,14 @@ class Engine:
                 if delta:
                     signal.score = max(0.0, min(100.0, signal.score + delta))
 
-            # Refresh portfolio view-ish counters locally for same-cycle gating.
+            # Refresh portfolio view counters locally for same-cycle gating. The
+            # exposure/margin running totals MUST be kept current here: otherwise
+            # every ALLOW in the same cycle sees the stale cycle-start exposure
+            # and the portfolio cap can be blown past in a single cycle.
             pf.open_count = open_count
             pf.open_symbols = list(live_open_symbols)
+            pf.open_notional = open_notional
+            pf.open_margin = open_margin
             d = self.engine.decide(signal, snap, pf)
             self.db.insert_signal_event(d)
             funnel.record(d)
@@ -184,6 +217,8 @@ class Engine:
                 funnel.mark_executed()
                 live_open_symbols.add(sym)
                 open_count += 1
+                open_notional += trade.position_size * trade.remaining_fraction
+                open_margin += self._trade_margin(trade)
 
         # Manage open trades (including symbols not scanned this cycle).
         await self._manage_open_trades(snapshots)
@@ -215,6 +250,9 @@ class Engine:
         # Daily summary once per UTC day (skip the very first cycle).
         self._maybe_daily_summary()
 
+        # Surface Telegram health to the dashboard (secret-free).
+        self._persist_telegram_health()
+
         log.info("cycle %d scanned=%d cand=%d setups=%d allow=%d exec=%d open=%d bal=%.2f",
                  self._cycles, len(symbols), candidates, stats.setup_detected_count,
                  stats.decision_allow_count, stats.executed_count, open_count,
@@ -222,6 +260,7 @@ class Engine:
 
     async def _manage_open_trades(self, snapshots: Dict[str, MarketSnapshot]) -> None:
         opens = self.db.get_open_trades(mode=self.cfg.mode)
+        marks: Dict[str, float] = {}
         for trade in opens:
             snap = snapshots.get(trade.symbol)
             if snap is None:
@@ -234,6 +273,7 @@ class Engine:
             if not ltf:
                 continue
             bar = ltf[-1]
+            marks[trade.symbol] = bar.close
             events = self.executor.simulate_fill(trade, bar.high, bar.low, bar.close)
             if not events:
                 continue
@@ -244,6 +284,11 @@ class Engine:
                 self.notifier.trade_event(trade, ev.kind, ev.price, ev.pnl)
             if trade.status != OPEN:
                 self.notifier.trade_closed(trade)
+        if marks:
+            try:
+                self.db.set_meta("marks", {"ts": now_ms(), "prices": marks})
+            except Exception as exc:
+                log.debug("marks persist error: %s", exc)
 
     def _maybe_daily_summary(self) -> None:
         today = dt.datetime.now(dt.timezone.utc).toordinal()

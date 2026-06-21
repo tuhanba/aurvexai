@@ -68,13 +68,15 @@ class BaseExecutor:
             position_size=decision.position_size,
             risk_pct=decision.risk_pct,
             leverage=decision.leverage,
+            margin_used=decision.margin_used,
             max_loss=decision.max_loss,
             score=decision.score,
             threshold=decision.threshold,
             mode=mode,
             metadata={"current_stop": decision.stop_loss,
                       "risk_amount": risk_amount,
-                      "stop_dist_frac": stop_dist_frac},
+                      "stop_dist_frac": stop_dist_frac,
+                      "liq_price": decision.metadata.get("liq_price", 0.0)},
         )
         return trade
 
@@ -243,6 +245,7 @@ class LiveExecutor(BaseExecutor):
 
         trade = self.build_trade(decision, LIVE)
         trade.position_size *= risk_mult
+        trade.margin_used *= risk_mult   # canary shrinks notional => shrinks margin too
         trade.metadata["simulated"] = True
         trade.metadata["order_ack"] = ack
         trade.metadata["canary_risk_mult"] = risk_mult

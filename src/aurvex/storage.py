@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS trades (
     max_loss REAL, status TEXT,
     open_time INTEGER, close_time INTEGER, close_price REAL, close_reason TEXT,
     remaining_fraction REAL, realized_pnl REAL, realized_pnl_pct REAL,
-    fees_paid REAL, metadata TEXT
+    fees_paid REAL, metadata TEXT, margin_used REAL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);
 CREATE INDEX IF NOT EXISTS idx_trades_open_time ON trades(open_time);
@@ -92,13 +92,15 @@ def _trade_to_row(t: Trade) -> tuple:
         t.position_size, t.risk_pct, t.leverage, t.max_loss, t.status,
         t.open_time, t.close_time, t.close_price, t.close_reason,
         t.remaining_fraction, t.realized_pnl, t.realized_pnl_pct,
-        t.fees_paid, json.dumps(t.metadata),
+        t.fees_paid, json.dumps(t.metadata), t.margin_used,
     )
 
 
 def _row_to_trade(r: sqlite3.Row) -> Trade:
     targets = [TPTarget(price=p, fraction=f, hit=bool(h))
                for p, f, h in json.loads(r["tp_targets"])]
+    keys = r.keys()
+    margin_used = r["margin_used"] if "margin_used" in keys and r["margin_used"] is not None else 0.0
     return Trade(
         id=r["id"], mode=r["mode"], symbol=r["symbol"], side=r["side"],
         setup_type=r["setup_type"], score=r["score"], threshold=r["threshold"],
@@ -109,7 +111,7 @@ def _row_to_trade(r: sqlite3.Row) -> Trade:
         close_price=r["close_price"], close_reason=r["close_reason"],
         remaining_fraction=r["remaining_fraction"], realized_pnl=r["realized_pnl"],
         realized_pnl_pct=r["realized_pnl_pct"], fees_paid=r["fees_paid"],
-        metadata=json.loads(r["metadata"]),
+        metadata=json.loads(r["metadata"]), margin_used=margin_used,
     )
 
 
@@ -124,7 +126,25 @@ class Storage:
         self.conn.execute("PRAGMA journal_mode=WAL;")
         self.conn.execute("PRAGMA synchronous=NORMAL;")
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self) -> None:
+        """Idempotent, additive schema migrations for pre-existing databases.
+
+        CREATE TABLE IF NOT EXISTS does not add columns to a table that already
+        exists, so a server DB created before a column was introduced must be
+        patched here. Only ever ADDs columns (never drops/renames) so it is safe
+        to run on every startup.
+        """
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(trades)").fetchall()}
+        if "margin_used" not in cols:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN margin_used REAL DEFAULT 0")
+            # Backfill a sensible value for legacy rows: notional / leverage.
+            self.conn.execute(
+                "UPDATE trades SET margin_used = position_size / leverage "
+                "WHERE (margin_used IS NULL OR margin_used = 0) AND leverage > 0")
+            self.conn.commit()
 
     def close(self) -> None:
         try:
@@ -183,8 +203,8 @@ class Storage:
         cols = ("id,mode,symbol,side,setup_type,score,threshold,entry,stop_loss,"
                 "tp_targets,position_size,risk_pct,leverage,max_loss,status,"
                 "open_time,close_time,close_price,close_reason,remaining_fraction,"
-                "realized_pnl,realized_pnl_pct,fees_paid,metadata")
-        placeholders = ",".join(["?"] * 24)
+                "realized_pnl,realized_pnl_pct,fees_paid,metadata,margin_used")
+        placeholders = ",".join(["?"] * 25)
         update = ",".join(f"{c}=excluded.{c}" for c in cols.split(","))
         self.conn.execute(
             f"INSERT INTO trades({cols}) VALUES({placeholders}) "

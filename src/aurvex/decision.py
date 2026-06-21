@@ -85,7 +85,8 @@ class DecisionEngine:
             return d
 
         # 3) Risk evaluation / sizing.
-        rr = self.risk.evaluate(signal, snap, pf.balance, pf.open_notional)
+        rr = self.risk.evaluate(signal, snap, pf.balance, pf.open_notional,
+                                open_margin=pf.open_margin)
         if not rr.allowed:
             d.decision = REJECT
             d.failed_stage = "risk"
@@ -103,8 +104,10 @@ class DecisionEngine:
         d.tp3 = rr.tp_targets[2].price
         d.position_size = rr.position_size
         d.leverage = rr.leverage
+        d.margin_used = rr.margin_used
         d.max_loss = rr.max_loss
         d.reason = f"allow:{signal.setup_type}"
         d.metadata["stop_dist_pct"] = rr.stop_dist_pct
+        d.metadata["liq_price"] = rr.liq_price
         d.metadata["tp_fractions"] = [t.fraction for t in rr.tp_targets]
         return d

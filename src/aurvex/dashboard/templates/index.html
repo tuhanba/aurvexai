@@ -47,6 +47,7 @@
   <div style="display:flex;gap:8px;align-items:center">
     <span id="modePill" class="pill mode">{{ mode }}</span>
     <span id="livePill" class="pill">live: off</span>
+    <span id="tgPill" class="pill">tg: ?</span>
     <span id="alivePill" class="pill dead">engine: ?</span>
     <span id="clock" class="pill"></span>
   </div>
@@ -77,9 +78,28 @@
     <div id="engineInfo" class="muted">waiting…</div>
   </div>
 
+  <div class="card span6"><h2>Accounting</h2>
+    <div class="row"><span class="muted">balance (realised cash)</span><span id="acBalance">—</span></div>
+    <div class="row"><span class="muted">closed realised PnL</span><span id="acClosed">—</span></div>
+    <div class="row"><span class="muted">open partial realised</span><span id="acOpenPartial">—</span></div>
+    <div class="row"><span class="muted">unrealised (open MtM)</span><span id="acUnreal">—</span></div>
+    <div class="row"><span class="muted">equity (cash + unreal.)</span><span id="acEquity">—</span></div>
+    <div class="row"><span class="muted">margin used / free</span><span id="acMargin">—</span></div>
+    <div class="row"><span class="muted">reconciled (cash = start + realised)</span><span id="acRecon">—</span></div>
+  </div>
+  <div class="card span6"><h2>Telegram</h2>
+    <div class="row"><span class="muted">configured</span><span id="tgConfigured">—</span></div>
+    <div class="row"><span class="muted">healthy</span><span id="tgHealthy">—</span></div>
+    <div class="row"><span class="muted">bot</span><span id="tgBot">—</span></div>
+    <div class="row"><span class="muted">sends ok / failed</span><span id="tgSends">—</span></div>
+    <div class="row"><span class="muted">last send</span><span id="tgLastSend">—</span></div>
+    <div class="row"><span class="muted">last error</span><span id="tgLastErr" style="max-width:60%;overflow:hidden;text-overflow:ellipsis">—</span></div>
+    <div class="row"><span class="muted">note</span><span id="tgNote">—</span></div>
+  </div>
+
   <div class="card span6"><h2>Open trades</h2>
     <div style="overflow:auto"><table id="openTbl"><thead><tr>
-      <th>sym</th><th>side</th><th>setup</th><th>entry</th><th>stop</th><th>size</th><th>rem</th><th>pnl</th>
+      <th>sym</th><th>side</th><th>setup</th><th>entry</th><th>stop</th><th>notional</th><th>lev</th><th>margin</th><th>risk</th><th>rem</th><th>pnl</th>
     </tr></thead><tbody></tbody></table></div>
   </div>
   <div class="card span6"><h2>Closed trades</h2>
@@ -114,10 +134,11 @@ async function getJSON(u){const r=await fetch(u);return r.json();}
 
 async function refresh(){
   try{
-    const [st,fn,me,op,cl,sg,sh] = await Promise.all([
+    const [st,fn,me,op,cl,sg,sh,ac,tg] = await Promise.all([
       getJSON('/api/status'),getJSON('/api/funnel'),getJSON('/api/metrics'),
       getJSON('/api/trades/open'),getJSON('/api/trades/closed'),
-      getJSON('/api/signals'),getJSON('/api/shadow')]);
+      getJSON('/api/signals'),getJSON('/api/shadow'),
+      getJSON('/api/accounting'),getJSON('/api/telegram')]);
 
     document.getElementById('balance').textContent = fmt(st.balance)+' ';
     const delta = st.balance - st.initial_balance;
@@ -164,9 +185,39 @@ async function refresh(){
     document.querySelector('#openTbl tbody').innerHTML = op.trades.map(t=>
       `<tr><td>${t.symbol}</td><td>${t.side}</td><td>${t.setup_type}</td>
        <td>${fmt(t.entry,4)}</td><td>${fmt(t.current_stop,4)}</td>
-       <td>${fmt(t.position_size)}</td><td>${fmt(t.remaining_fraction*100,0)}%</td>
+       <td>${fmt(t.position_size)}</td><td>${t.leverage}x</td>
+       <td>${fmt(t.margin_used)}</td>
+       <td class="muted">${fmt(t.risk_usdt)} / ${fmt(t.risk_pct,2)}%</td>
+       <td>${fmt(t.remaining_fraction*100,0)}%</td>
        <td class="${cls(t.realized_pnl)}">${fmt(t.realized_pnl)}</td></tr>`).join('')
-       || '<tr><td colspan="8" class="muted">none</td></tr>';
+       || '<tr><td colspan="11" class="muted">none</td></tr>';
+
+    // accounting
+    const setSigned=(id,v,d=2)=>{const el=document.getElementById(id);
+      el.textContent=(v>=0?'+':'')+fmt(v,d);el.className=cls(v);};
+    document.getElementById('acBalance').textContent=fmt(ac.balance)+' USDT';
+    setSigned('acClosed',ac.realized_closed);
+    setSigned('acOpenPartial',ac.realized_open_partial);
+    setSigned('acUnreal',ac.unrealized_open);
+    document.getElementById('acEquity').textContent=fmt(ac.equity)+' USDT';
+    document.getElementById('acMargin').textContent=fmt(ac.open_margin)+' / '+fmt(ac.free_margin)+' USDT';
+    const rec=document.getElementById('acRecon');
+    rec.textContent=ac.reconciled?('yes (Δ '+fmt(ac.reconciliation_diff,6)+')'):('NO (Δ '+fmt(ac.reconciliation_diff,6)+')');
+    rec.className=ac.reconciled?'pos':'neg';
+
+    // telegram
+    const tgPill=document.getElementById('tgPill');
+    const tgState=tg.configured?(tg.healthy?'ok':(tg.healthy===false?'err':'?')):'off';
+    tgPill.textContent='tg: '+tgState;
+    tgPill.className='pill '+(tgState==='ok'?'alive':(tgState==='err'?'dead':''));
+    document.getElementById('tgConfigured').textContent=tg.configured?'yes':'no';
+    document.getElementById('tgHealthy').textContent=tg.healthy===null?'untested':(tg.healthy?'yes':'no');
+    document.getElementById('tgBot').textContent=tg.bot_username?('@'+tg.bot_username):'—';
+    document.getElementById('tgSends').textContent=(tg.sends_ok||0)+' / '+(tg.sends_failed||0);
+    document.getElementById('tgLastSend').textContent=tg.last_send_ts?
+      (new Date(tg.last_send_ts).toLocaleTimeString()+' '+(tg.last_send_ok?'ok':'fail')):'—';
+    document.getElementById('tgLastErr').textContent=tg.last_error||'—';
+    document.getElementById('tgNote').textContent=tg.note||'—';
 
     // closed
     document.querySelector('#closedTbl tbody').innerHTML = cl.trades.map(t=>

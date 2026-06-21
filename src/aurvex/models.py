@@ -140,6 +140,7 @@ class Decision:
     tp3: float = 0.0
     position_size: float = 0.0    # notional in quote currency
     leverage: int = 1
+    margin_used: float = 0.0      # notional / leverage (initial margin committed)
     max_loss: float = 0.0
     reason: str = ""
     failed_stage: str = ""
@@ -179,6 +180,7 @@ class Trade:
     score: float
     threshold: float
     mode: str = PAPER
+    margin_used: float = 0.0   # initial margin committed = position_size / leverage
     id: str = field(default_factory=new_id)
     status: str = OPEN
     open_time: int = field(default_factory=now_ms)

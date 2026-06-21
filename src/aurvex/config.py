@@ -107,6 +107,17 @@ class Config:
     max_leverage: int = field(default_factory=lambda: _int("MAX_LEVERAGE", 10))
     coin_cooldown_minutes: float = field(default_factory=lambda: _float("COIN_COOLDOWN_MINUTES", 20.0))
 
+    # -- Leverage / margin model -------------------------------------------
+    # Maintenance margin rate used to estimate the liquidation price. Set this
+    # conservatively at or above the exchange's tier-1 rate for the traded
+    # symbols (Binance USDT-M tier-1 is ~0.4-1.0%). Higher = safer (further
+    # from the modelled liquidation, lower allowed leverage).
+    maint_margin_rate: float = field(default_factory=lambda: _float("MAINT_MARGIN_RATE", 0.005))
+    # The estimated liquidation move must be at least this multiple of the stop
+    # distance away from entry. >= 1.0; 2.0 means "liquidation must be twice as
+    # far as the stop". This is the hard guarantee that the stop fires first.
+    liq_safety_buffer: float = field(default_factory=lambda: _float("LIQ_SAFETY_BUFFER", 2.0))
+
     # Stop-distance guards (as fraction of price).
     min_stop_dist_pct: float = field(default_factory=lambda: _float("MIN_STOP_DIST_PCT", 0.30))
     max_stop_dist_pct: float = field(default_factory=lambda: _float("MAX_STOP_DIST_PCT", 2.50))
@@ -179,6 +190,9 @@ class Config:
         )
         assert 0 < self.risk_pct <= 5, "risk_pct out of sane range"
         assert self.mode in {"paper", "live"}, "AX_MODE must be 'paper' or 'live'"
+        assert self.maint_margin_rate >= 0, "maint_margin_rate must be >= 0"
+        assert self.liq_safety_buffer >= 1.0, "liq_safety_buffer must be >= 1.0"
+        assert self.max_leverage >= 1, "max_leverage must be >= 1"
 
     @property
     def is_live(self) -> bool:

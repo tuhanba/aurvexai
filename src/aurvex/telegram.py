@@ -6,22 +6,65 @@ config (which loads them from the environment) - nothing is hard-coded. When no
 bot token / chat id is configured, `build_notifier` returns a NullNotifier so
 the engine code path is identical with or without Telegram.
 
+Health is tracked on the notifier and surfaced to the dashboard WITHOUT ever
+exposing the token or chat id: only booleans, counters, a sanitised last_error,
+and (after a successful getMe) the public bot username.
+
 `requests` is imported lazily so the dependency is only needed when Telegram is
 actually enabled and configured.
 """
 from __future__ import annotations
 
 import logging
+import re
+import time
 from typing import Any, Dict, Optional
 
 from .config import Config
 
 log = logging.getLogger("aurvex.telegram")
 
+# Patterns that must never reach a log line or the dashboard.
+_BOT_TOKEN_RE = re.compile(r"\d{6,}:[A-Za-z0-9_\-]{20,}")
+
+
+def _sanitize(text: str, token: str = "", chat_id: str = "") -> str:
+    """Strip any bot token / chat id that may have leaked into an error string."""
+    if not text:
+        return text
+    out = _BOT_TOKEN_RE.sub("<bot_token>", text)
+    if token:
+        out = out.replace(token, "<bot_token>")
+    if chat_id:
+        out = out.replace(str(chat_id), "<chat_id>")
+    return out[:300]
+
 
 class BaseNotifier:
+    def __init__(self) -> None:
+        self._health: Dict[str, Any] = {
+            "configured": False,
+            "enabled": False,
+            "token_set": False,
+            "chat_id_set": False,
+            "healthy": None,        # None = never attempted
+            "last_send_ts": None,
+            "last_send_ok": None,
+            "last_error": None,
+            "sends_ok": 0,
+            "sends_failed": 0,
+            "bot_username": None,
+            "note": "",
+        }
+
     def send(self, text: str) -> bool:           # pragma: no cover - interface
         raise NotImplementedError
+
+    def verify(self) -> bool:                    # default: nothing to verify
+        return False
+
+    def health(self) -> Dict[str, Any]:
+        return dict(self._health)
 
     # Convenience event helpers ------------------------------------------
     def system_started(self, mode: str, balance: float) -> None:
@@ -31,13 +74,18 @@ class BaseNotifier:
         self.send(f"\U0001F534 AurvexAI stopped\n{reason}".rstrip())
 
     def trade_opened(self, t) -> None:
+        risk_usdt = t.metadata.get("risk_amount", t.max_loss)
+        liq = t.metadata.get("liq_price", 0.0)
+        stop_dist = abs(t.entry - t.stop_loss) / t.entry * 100.0 if t.entry else 0.0
+        liq_line = f"  liq~: {liq:.6g}" if liq else ""
         self.send(
-            f"\U0001F4C8 OPEN {t.side} {t.symbol}\nsetup: {t.setup_type}\n"
-            f"entry: {t.entry:.6g}  stop: {t.stop_loss:.6g}\n"
-            f"size: {t.position_size:.2f} USDT  score: {t.score:.0f}")
+            f"\U0001F4C8 OPEN {t.side} {t.symbol}\nsetup: {t.setup_type}  score: {t.score:.0f}\n"
+            f"entry: {t.entry:.6g}  stop: {t.stop_loss:.6g}{liq_line}\n"
+            f"notional: {t.position_size:.2f} USDT  lev: {t.leverage}x  margin: {t.margin_used:.2f} USDT\n"
+            f"risk: {risk_usdt:.2f} USDT ({t.risk_pct:.2f}%)  stop dist: {stop_dist:.2f}%")
 
     def trade_event(self, t, kind: str, price: float, pnl: float) -> None:
-        emoji = "\u2705" if pnl >= 0 else "\u274C"
+        emoji = "✅" if pnl >= 0 else "❌"
         self.send(f"{emoji} {kind} {t.symbol}\nprice: {price:.6g}  pnl: {pnl:+.2f} USDT")
 
     def trade_closed(self, t) -> None:
@@ -57,11 +105,20 @@ class BaseNotifier:
         self.send(f"\U0001F6A8 CRITICAL\n{message}")
 
     def health_warning(self, message: str) -> None:
-        self.send(f"\u26A0\uFE0F HEALTH\n{message}")
+        self.send(f"⚠️ HEALTH\n{message}")
 
 
 class NullNotifier(BaseNotifier):
     """No-op notifier used when Telegram is disabled or unconfigured."""
+
+    def __init__(self, enabled: bool = False, token_set: bool = False,
+                 chat_id_set: bool = False, note: str = "") -> None:
+        super().__init__()
+        self._health.update({
+            "configured": False, "enabled": enabled,
+            "token_set": token_set, "chat_id_set": chat_id_set,
+            "healthy": False, "note": note,
+        })
 
     def send(self, text: str) -> bool:
         log.debug("telegram disabled, dropping message: %s", text.replace("\n", " | "))
@@ -69,36 +126,101 @@ class NullNotifier(BaseNotifier):
 
 
 class TelegramNotifier(BaseNotifier):
-    API = "https://api.telegram.org/bot{token}/sendMessage"
+    API = "https://api.telegram.org/bot{token}/{method}"
 
     def __init__(self, token: str, chat_id: str, timeout: float = 8.0):
+        super().__init__()
         self.token = token
         self.chat_id = chat_id
         self.timeout = timeout
+        self._health.update({
+            "configured": True, "enabled": True,
+            "token_set": bool(token), "chat_id_set": bool(chat_id),
+        })
+
+    # -- self-test ---------------------------------------------------------
+    def verify(self) -> bool:
+        """Call getMe to confirm the token works and DNS/HTTPS is reachable.
+
+        Records the public bot username on success. Never logs the token.
+        """
+        try:
+            import requests  # lazy
+        except Exception:  # pragma: no cover
+            self._health["note"] = "requests not installed"
+            self._health["healthy"] = False
+            return False
+        try:
+            resp = requests.get(self.API.format(token=self.token, method="getMe"),
+                                timeout=self.timeout)
+            data = resp.json() if resp.content else {}
+            if resp.status_code == 200 and data.get("ok"):
+                self._health["bot_username"] = data.get("result", {}).get("username")
+                self._health["healthy"] = True
+                self._health["note"] = "getMe ok"
+                return True
+            desc = _sanitize(str(data.get("description", resp.text)), self.token, self.chat_id)
+            self._health["healthy"] = False
+            self._health["last_error"] = f"getMe {resp.status_code}: {desc}"
+            return False
+        except Exception as exc:  # pragma: no cover - network
+            self._health["healthy"] = False
+            self._health["last_error"] = _sanitize(repr(exc), self.token, self.chat_id)
+            return False
 
     def send(self, text: str) -> bool:
         try:
             import requests  # lazy
         except Exception:                          # pragma: no cover
             log.warning("requests not installed; cannot send Telegram message")
+            self._record(False, "requests not installed")
             return False
         try:
             resp = requests.post(
-                self.API.format(token=self.token),
+                self.API.format(token=self.token, method="sendMessage"),
                 json={"chat_id": self.chat_id, "text": text,
                       "disable_web_page_preview": True},
                 timeout=self.timeout)
             if resp.status_code != 200:
-                log.warning("telegram send failed: %s %s", resp.status_code, resp.text[:200])
+                desc = _sanitize(resp.text, self.token, self.chat_id)
+                log.warning("telegram send failed: %s %s", resp.status_code, desc)
+                self._record(False, f"send {resp.status_code}: {desc}")
                 return False
+            self._record(True, None)
             return True
         except Exception as exc:                   # pragma: no cover - network
-            log.warning("telegram send error: %s", exc)
+            err = _sanitize(repr(exc), self.token, self.chat_id)
+            log.warning("telegram send error: %s", err)
+            self._record(False, err)
             return False
+
+    def _record(self, ok: bool, error: Optional[str]) -> None:
+        self._health["last_send_ts"] = int(time.time() * 1000)
+        self._health["last_send_ok"] = ok
+        self._health["healthy"] = ok if ok else self._health.get("healthy", False)
+        if ok:
+            self._health["sends_ok"] += 1
+            self._health["healthy"] = True
+        else:
+            self._health["sends_failed"] += 1
+            self._health["last_error"] = error
+            self._health["healthy"] = False
 
 
 def build_notifier(cfg: Config) -> BaseNotifier:
-    if cfg.telegram_enabled and cfg.telegram_bot_token and cfg.telegram_chat_id:
-        log.info("Telegram notifier enabled")
-        return TelegramNotifier(cfg.telegram_bot_token, cfg.telegram_chat_id)
-    return NullNotifier()
+    if not cfg.telegram_enabled:
+        return NullNotifier(enabled=False, token_set=bool(cfg.telegram_bot_token),
+                            chat_id_set=bool(cfg.telegram_chat_id),
+                            note="TELEGRAM_ENABLED is false")
+    if not cfg.telegram_bot_token or not cfg.telegram_chat_id:
+        missing = []
+        if not cfg.telegram_bot_token:
+            missing.append("TELEGRAM_BOT_TOKEN")
+        if not cfg.telegram_chat_id:
+            missing.append("TELEGRAM_CHAT_ID")
+        note = "missing " + ", ".join(missing)
+        log.warning("Telegram enabled but %s; using NullNotifier", note)
+        return NullNotifier(enabled=True, token_set=bool(cfg.telegram_bot_token),
+                            chat_id_set=bool(cfg.telegram_chat_id), note=note)
+    log.info("Telegram notifier enabled")
+    return TelegramNotifier(cfg.telegram_bot_token, cfg.telegram_chat_id)

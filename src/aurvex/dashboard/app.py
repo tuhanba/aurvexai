@@ -28,6 +28,7 @@ from flask import Flask, jsonify, render_template
 log = logging.getLogger("aurvex.dashboard")
 
 from ..config import load_config
+from ..accounting import compute_accounting
 from ..metrics import compute_metrics
 from ..models import now_ms
 from ..shadow import ShadowLearner
@@ -35,10 +36,16 @@ from ..storage import Storage
 
 
 def _trade_dict(t) -> Dict[str, Any]:
+    stop_dist_pct = (abs(t.entry - t.stop_loss) / t.entry * 100.0) if t.entry else 0.0
     return {
         "id": t.id, "symbol": t.symbol, "side": t.side, "setup_type": t.setup_type,
         "entry": t.entry, "stop_loss": t.stop_loss, "current_stop": t.current_stop,
         "position_size": round(t.position_size, 2), "leverage": t.leverage,
+        "margin_used": round(t.margin_used, 2),
+        "liq_price": round(t.metadata.get("liq_price", 0.0), 8),
+        "risk_usdt": round(t.metadata.get("risk_amount", t.max_loss), 4),
+        "risk_pct": round(t.risk_pct, 4),
+        "stop_dist_pct": round(stop_dist_pct, 4),
         "score": t.score, "status": t.status, "mode": t.mode,
         "remaining_fraction": round(t.remaining_fraction, 3),
         "realized_pnl": round(t.realized_pnl, 4),
@@ -116,6 +123,30 @@ def create_app(cfg=None) -> Flask:
     @app.route("/api/balance")
     def balance():
         return jsonify({"balance": db.get_balance(), "ledger": db.get_ledger(limit=100)})
+
+    @app.route("/api/accounting")
+    def accounting():
+        marks_meta = db.get_meta("marks") or {}
+        marks = marks_meta.get("prices", {}) if isinstance(marks_meta, dict) else {}
+        acc = compute_accounting(
+            initial_balance=cfg.initial_paper_balance,
+            balance=db.get_balance(),
+            open_trades=db.get_open_trades(mode=cfg.mode),
+            closed_trades=db.get_closed_trades(limit=5000, mode=cfg.mode),
+            marks=marks,
+        )
+        acc["marks_ts"] = marks_meta.get("ts") if isinstance(marks_meta, dict) else None
+        return jsonify(acc)
+
+    @app.route("/api/telegram")
+    def telegram_health():
+        hb = db.get_heartbeat("telegram")
+        if not hb:
+            return jsonify({"configured": False, "healthy": None,
+                            "note": "no telegram heartbeat yet (engine not started?)"})
+        status = dict(hb.get("status") or {})
+        status["heartbeat_ts"] = hb.get("ts")
+        return jsonify(status)
 
     return app
 

@@ -7,6 +7,7 @@ Usage:
     python main.py dashboard   # run the Flask dashboard on DASHBOARD_PORT
     python main.py demo        # fast synthetic end-to-end run (offline, ~40 cycles)
     python main.py backtest    # offline seeded backtest, prints metrics JSON
+    python main.py telegram-test   # in-container Telegram diagnostic (getMe + send)
 
 All configuration comes from the environment / .env (see .env.example).
 No secrets are read from anywhere but the environment. Live trading is OFF.
@@ -59,9 +60,57 @@ def main(argv: list) -> int:
         print(json.dumps(metrics, indent=2, default=str))
         return 0
 
+    if cmd in ("telegram-test", "telegram_selftest"):
+        return _telegram_selftest(cfg)
+
     print(f"unknown command: {cmd}\n")
     _print_help()
     return 2
+
+
+def _telegram_selftest(cfg) -> int:
+    """In-container Telegram diagnostic. Prints status, runs getMe, sends one
+    test message. NEVER prints the token or chat id - only booleans + health.
+    """
+    from aurvex.telegram import build_notifier, TelegramNotifier
+
+    print("=== AurvexAI Telegram self-test ===")
+    print(f"TELEGRAM_ENABLED   : {cfg.telegram_enabled}")
+    print(f"bot token set      : {bool(cfg.telegram_bot_token)}")
+    print(f"chat id set        : {bool(cfg.telegram_chat_id)}")
+
+    notifier = build_notifier(cfg)
+    print(f"notifier selected  : {type(notifier).__name__}")
+    if not isinstance(notifier, TelegramNotifier):
+        print("RESULT             : Telegram NOT active.")
+        print(f"reason             : {notifier.health().get('note')}")
+        print("Fix: set TELEGRAM_ENABLED=true and provide TELEGRAM_BOT_TOKEN + "
+              "TELEGRAM_CHAT_ID in the container environment (.env / compose).")
+        return 1
+
+    print("\n-- getMe (token + DNS/HTTPS reachability) --")
+    ok = notifier.verify()
+    h = notifier.health()
+    print(f"getMe ok           : {ok}")
+    if h.get("bot_username"):
+        print(f"bot username       : @{h['bot_username']}")
+    if not ok:
+        print(f"last_error         : {h.get('last_error')}")
+        print("RESULT             : getMe FAILED (bad token or network). No message sent.")
+        return 2
+
+    print("\n-- sendMessage (test) --")
+    sent = notifier.send("✅ AurvexAI Telegram self-test OK")
+    h = notifier.health()
+    print(f"send ok            : {sent}")
+    print(f"sends_ok/failed    : {h.get('sends_ok')}/{h.get('sends_failed')}")
+    if not sent:
+        print(f"last_error         : {h.get('last_error')}")
+        print("RESULT             : getMe ok but sendMessage FAILED. Most likely the "
+              "chat id is wrong, or the bot was never /start-ed in that chat.")
+        return 3
+    print("RESULT             : Telegram fully healthy (getMe + sendMessage).")
+    return 0
 
 
 if __name__ == "__main__":

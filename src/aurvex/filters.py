@@ -30,6 +30,7 @@ class PortfolioView:
     last_trade_ms_by_symbol: Dict[str, int]
     daily_realized_pnl: float
     now_ms: int
+    open_margin: float = 0.0   # sum of initial margin committed to open trades
 
 
 @dataclass
