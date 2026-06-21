@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 
 from .config import Config
 from .models import (LONG, OPEN, MarketSnapshot, Signal, Decision, new_id, now_ms)
+from .risk import normalize_stop
 from .storage import Storage
 
 TP = "TP"
@@ -39,33 +40,60 @@ class ShadowLearner:
         self.db = storage
 
     # -- tracking ----------------------------------------------------------
-    def track_signal(self, signal: Signal, decision: Decision, source: str) -> Optional[str]:
-        """Register a signal for shadow tracking. Returns shadow id or None."""
+    def track_signal(self, signal: Signal, decision: Decision, source: str,
+                     signal_bar_ts: Optional[int] = None) -> Optional[str]:
+        """Register a signal for shadow tracking. Returns shadow id or None.
+
+        Deduped on (symbol, side, setup_type, signal_bar_ts): the same signalled
+        bar is tracked at most once no matter how many cycles re-see it.
+        """
         if signal.score < self.cfg.shadow_min_score:
             return None
         entry = decision.entry or signal.entry_hint
-        stop = decision.stop_loss or signal.stop_hint
+        raw_stop = decision.stop_loss or signal.stop_hint
+        if entry <= 0 or raw_stop <= 0:
+            return None
+        # Normalise the stop EXACTLY as the engine would (min/max guard) so the
+        # proxy R reflects the risk the engine actually trades, not the raw hint.
+        sn = normalize_stop(self.cfg, signal.side, entry, raw_stop)
+        if not sn.ok:
+            return None
+        stop = sn.stop
         tp1 = decision.tp1
         if not tp1:
-            # derive a 1.5R tp1 from entry/stop if decision didn't size it
             r = abs(entry - stop)
             sign = 1 if signal.side == LONG else -1
             tp1 = entry + sign * r * self.cfg.tp1_r
-        if entry <= 0 or stop <= 0 or entry == stop:
+        if entry == stop:
             return None
+        sig_ts = int(signal_bar_ts or 0)
         sid = new_id()
-        self.db.insert_shadow({
+        inserted = self.db.insert_shadow({
             "id": sid, "ts": now_ms(), "source": source, "symbol": signal.symbol,
             "side": signal.side, "setup_type": signal.setup_type, "score": signal.score,
             "entry": entry, "stop_loss": stop, "tp1": tp1, "outcome": OPEN, "bars": 0,
+            "signal_bar_ts": sig_ts, "last_bar_ts": sig_ts,
         })
-        return sid
+        return sid if inserted else None
 
     # -- resolution --------------------------------------------------------
+    def _cost_r(self, entry: float, stop: float) -> float:
+        """Round-trip cost expressed in R (risk = |entry-stop|).
+
+        rt_cost_frac = (taker_fee + slippage)/100 * 2 ; cost_R = rt / stop_frac.
+        This is what turns a gross -1.0R full stop into the honest ~-1.4R net at
+        a 0.30% stop, matching the engine's cost model.
+        """
+        rt = (self.cfg.taker_fee_pct + self.cfg.slippage_assumption_pct) / 100.0 * 2.0
+        stop_frac = abs(entry - stop) / entry if entry else 0.0
+        return rt / stop_frac if stop_frac > 0 else 0.0
+
     def update(self, snapshots: Dict[str, MarketSnapshot]) -> int:
         """
-        Resolve open shadows against the latest bar of each symbol. Pessimistic:
-        the stop is checked before TP1 within a bar. Returns count resolved.
+        Resolve open shadows against CLOSED bars only (T1), at most once per
+        closed bar (T2) and never on/before the signal's own bar (no lookahead).
+        Pessimistic: the stop is checked before TP1 within a bar. R is reported
+        NET of round-trip cost. Returns count resolved.
         """
         resolved = 0
         for sh in self.db.open_shadows():
@@ -76,6 +104,14 @@ class ShadowLearner:
             if not closed:
                 continue
             bar = closed[-1]
+            sig_ts = int(sh.get("signal_bar_ts") or 0)
+            last_ts = int(sh.get("last_bar_ts") or 0)
+            # No lookahead: only resolve on bars strictly AFTER the signal bar.
+            if sig_ts and bar.ts <= sig_ts:
+                continue
+            # One advance per closed bar.
+            if bar.ts <= last_ts:
+                continue
             high, low = bar.high, bar.low
             entry, stop, tp1 = sh["entry"], sh["stop_loss"], sh["tp1"]
             side = sh["side"]
@@ -99,15 +135,17 @@ class ShadowLearner:
                 outcome, exit_price = EXPIRED, bar.close
 
             if outcome is None:
-                # still open; just bump bar count
-                self.db.update_shadow(sh["id"], OPEN, None, None, bars)
+                # still open; bump bar count and remember this bar.
+                self.db.update_shadow(sh["id"], OPEN, None, None, bars, last_bar_ts=bar.ts)
                 continue
 
             if side == LONG:
-                r_mult = (exit_price - entry) / risk
+                gross_r = (exit_price - entry) / risk
             else:
-                r_mult = (entry - exit_price) / risk
-            self.db.update_shadow(sh["id"], outcome, now_ms(), round(r_mult, 4), bars)
+                gross_r = (entry - exit_price) / risk
+            net_r = gross_r - self._cost_r(entry, stop)
+            self.db.update_shadow(sh["id"], outcome, now_ms(), round(net_r, 4), bars,
+                                  last_bar_ts=bar.ts)
             resolved += 1
         return resolved
 
@@ -148,6 +186,11 @@ class ShadowLearner:
             "stage": stage,
             "by_setup": setup_summary,
             "raw_breakdown": self.db.shadow_stats()["breakdown"],
+            # Be explicit about what avg_r means: this is a closed-bar proxy, not
+            # the engine's real expectancy (no partial scale-out / BE / stop
+            # trail / TP2-3). Real expectancy comes from the Wave-2 replay.
+            "basis": ("TP1-first vs SL on closed bars, R net of round-trip cost — "
+                      "a proxy, NOT full-strategy expectancy."),
         }
 
     def _stage(self, total: int) -> str:

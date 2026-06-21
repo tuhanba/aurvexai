@@ -203,8 +203,12 @@ class Engine:
             funnel.record(d)
 
             # Shadow tracking: opened paper trades AND high-score rejects.
+            # signal_bar_ts (the last closed bar) dedups across cycles that
+            # re-see the same signalled bar.
             source = "paper" if d.decision == ALLOW else "rejected"
-            self.shadow.track_signal(signal, d, source=source)
+            closed_ltf = snap.closed_ltf(self.cfg.ltf)
+            sig_bar_ts = closed_ltf[-1].ts if closed_ltf else 0
+            self.shadow.track_signal(signal, d, source=source, signal_bar_ts=sig_bar_ts)
 
             if d.decision == ALLOW:
                 if sym in live_open_symbols:

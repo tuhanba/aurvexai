@@ -115,8 +115,11 @@
   </div>
   <div class="card span6"><h2>Shadow learner</h2>
     <div id="shadowStage" class="muted">stage —</div>
+    <div id="shadowBasis" class="muted" style="font-size:11px;margin-top:4px">
+      avgR = TP1-first vs SL on closed bars, net of round-trip cost — a proxy,
+      NOT full-strategy expectancy.</div>
     <div style="overflow:auto;max-height:260px;margin-top:8px"><table id="shadowTbl"><thead><tr>
-      <th>setup</th><th>n</th><th>win%</th><th>avgR</th><th>Δscore</th><th>risk×</th>
+      <th>setup</th><th>n</th><th>win%</th><th>net&nbsp;avgR</th><th>Δscore</th><th>risk×</th>
     </tr></thead><tbody></tbody></table></div>
   </div>
 
@@ -236,6 +239,7 @@ async function refresh(){
     // shadow
     document.getElementById('shadowStage').textContent=
       'stage: '+sh.stage+' · resolved '+sh.resolved_total+' · open '+sh.open_total;
+    if(sh.basis){document.getElementById('shadowBasis').textContent='avgR = '+sh.basis;}
     document.querySelector('#shadowTbl tbody').innerHTML=(sh.by_setup||[]).map(r=>
       `<tr><td>${r.setup}</td><td>${r.n}</td><td>${fmt(r.winrate,1)}</td>
        <td class="${cls(r.avg_r)}">${fmt(r.avg_r,2)}</td>

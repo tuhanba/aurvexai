@@ -63,9 +63,12 @@ CREATE TABLE IF NOT EXISTS shadows (
     id TEXT PRIMARY KEY,
     ts INTEGER, source TEXT, symbol TEXT, side TEXT, setup_type TEXT,
     score REAL, entry REAL, stop_loss REAL, tp1 REAL,
-    outcome TEXT, outcome_time INTEGER, r_multiple REAL, bars INTEGER
+    outcome TEXT, outcome_time INTEGER, r_multiple REAL, bars INTEGER,
+    signal_bar_ts INTEGER DEFAULT 0, last_bar_ts INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_shadow_outcome ON shadows(outcome);
+-- The dedup UNIQUE INDEX is created in Storage._migrate (after the columns are
+-- guaranteed to exist on legacy DBs); INSERT OR IGNORE relies on it.
 
 CREATE TABLE IF NOT EXISTS heartbeat (
     component TEXT PRIMARY KEY,
@@ -145,6 +148,28 @@ class Storage:
                 "UPDATE trades SET margin_used = position_size / leverage "
                 "WHERE (margin_used IS NULL OR margin_used = 0) AND leverage > 0")
             self.conn.commit()
+
+        # Shadow dedup columns + unique index (Wave 1 / T3). Additive only.
+        shadow_cols = {r["name"] for r in
+                       self.conn.execute("PRAGMA table_info(shadows)").fetchall()}
+        if "signal_bar_ts" not in shadow_cols:
+            self.conn.execute("ALTER TABLE shadows ADD COLUMN signal_bar_ts INTEGER DEFAULT 0")
+        if "last_bar_ts" not in shadow_cols:
+            self.conn.execute("ALTER TABLE shadows ADD COLUMN last_bar_ts INTEGER DEFAULT 0")
+        # The unique index dedups new-epoch rows. Legacy rows have signal_bar_ts=0
+        # but SQLite treats every NULL/0 group key independently only for NULLs;
+        # to avoid a build failure on a contaminated legacy table we create the
+        # index IF NOT EXISTS and tolerate failure (legacy duplicates predate it).
+        try:
+            self.conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_shadow_dedup "
+                "ON shadows(symbol, side, setup_type, signal_bar_ts)")
+        except sqlite3.Error:
+            # Pre-existing duplicate (legacy epoch) rows block a unique index.
+            # Leave them; a clean epoch (fresh DB) builds the index and dedups via
+            # INSERT OR IGNORE. History is never deleted.
+            pass
+        self.conn.commit()
 
     def close(self) -> None:
         try:
@@ -285,22 +310,35 @@ class Storage:
         return [dict(r) for r in rows]
 
     # -- shadows -----------------------------------------------------------
-    def insert_shadow(self, row: Dict[str, Any]) -> None:
-        self.conn.execute(
+    def insert_shadow(self, row: Dict[str, Any]) -> bool:
+        # INSERT OR IGNORE dedups on idx_shadow_dedup
+        # (symbol, side, setup_type, signal_bar_ts): a second row for the same
+        # signalled bar is silently dropped. Returns True iff a row was inserted.
+        cur = self.conn.execute(
             "INSERT OR IGNORE INTO shadows(id,ts,source,symbol,side,setup_type,score,"
-            "entry,stop_loss,tp1,outcome,outcome_time,r_multiple,bars) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "entry,stop_loss,tp1,outcome,outcome_time,r_multiple,bars,"
+            "signal_bar_ts,last_bar_ts) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (row["id"], row["ts"], row["source"], row["symbol"], row["side"],
              row["setup_type"], row["score"], row["entry"], row["stop_loss"],
              row["tp1"], row.get("outcome", OPEN), row.get("outcome_time"),
-             row.get("r_multiple"), row.get("bars", 0)))
+             row.get("r_multiple"), row.get("bars", 0),
+             row.get("signal_bar_ts", 0), row.get("last_bar_ts", 0)))
         self.conn.commit()
+        return cur.rowcount > 0
 
     def update_shadow(self, shadow_id: str, outcome: str, outcome_time: int,
-                      r_multiple: float, bars: int) -> None:
-        self.conn.execute(
-            "UPDATE shadows SET outcome=?,outcome_time=?,r_multiple=?,bars=? WHERE id=?",
-            (outcome, outcome_time, r_multiple, bars, shadow_id))
+                      r_multiple: float, bars: int,
+                      last_bar_ts: Optional[int] = None) -> None:
+        if last_bar_ts is None:
+            self.conn.execute(
+                "UPDATE shadows SET outcome=?,outcome_time=?,r_multiple=?,bars=? WHERE id=?",
+                (outcome, outcome_time, r_multiple, bars, shadow_id))
+        else:
+            self.conn.execute(
+                "UPDATE shadows SET outcome=?,outcome_time=?,r_multiple=?,bars=?,"
+                "last_bar_ts=? WHERE id=?",
+                (outcome, outcome_time, r_multiple, bars, last_bar_ts, shadow_id))
         self.conn.commit()
 
     def open_shadows(self) -> List[Dict[str, Any]]:

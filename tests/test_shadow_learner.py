@@ -48,7 +48,9 @@ def test_tp_resolution(cfg):
     assert resolved == 1
     rows = db.conn.execute("SELECT * FROM shadows").fetchall()
     assert rows[0]["outcome"] == TP
-    assert abs(rows[0]["r_multiple"] - 1.5) < 1e-6  # (101.5-100)/(100-99)
+    # NET R: gross (101.5-100)/(100-99)=1.5 minus round-trip cost
+    # ((0.045+0.02)/100*2)/0.01 = 0.13 -> 1.37.
+    assert abs(rows[0]["r_multiple"] - 1.37) < 1e-6
 
 
 def test_sl_resolution_pessimistic(cfg):
@@ -71,10 +73,15 @@ def test_expiry(cfg):
     sh = ShadowLearner(cfg, db)
     sig = make_signal(side=LONG, price=100.0, score=80.0)
     sh.track_signal(sig, _decision_from(sig, 100.0, 99.0, 101.5), "paper")
-    neutral = {sig.symbol: _snap_with_bar(sig.symbol, 100.0, high=100.2, low=99.8)}
-    sh.update(neutral)  # bar 1 -> still open
+    # Distinct closed-bar timestamps so each update advances one bar (the
+    # once-per-bar gate ignores a repeated bar ts).
+    base = now_ms() - 10 * 60_000
+    n1 = {sig.symbol: _snap_with_bar(sig.symbol, 100.0, high=100.2, low=99.8, ts=base)}
+    n2 = {sig.symbol: _snap_with_bar(sig.symbol, 100.0, high=100.2, low=99.8,
+                                     ts=base + 60_000)}
+    sh.update(n1)  # bar 1 -> still open
     assert db.open_shadows()
-    sh.update(neutral)  # bar 2 -> expires
+    sh.update(n2)  # bar 2 -> expires
     row = db.conn.execute("SELECT * FROM shadows").fetchone()
     assert row["outcome"] == "EXPIRED"
 

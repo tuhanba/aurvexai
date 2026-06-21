@@ -45,6 +45,44 @@ class RiskResult:
     max_loss: float = 0.0
 
 
+@dataclass
+class StopNorm:
+    """Result of the shared stop-distance guard band."""
+    ok: bool
+    reason: str = ""
+    stop: float = 0.0
+    stop_dist_pct: float = 0.0
+
+
+def normalize_stop(cfg: Config, side: str, entry: float, stop: float) -> StopNorm:
+    """Apply the engine's stop-distance guard band (the single source of truth).
+
+    Used by both the risk manager (sizing) and the shadow learner (so its proxy
+    R is measured against the SAME normalised stop the engine would trade, not
+    the raw structural hint — otherwise shadow and paper would diverge).
+
+    A too-tight stop is widened to ``min_stop_dist_pct``; a too-wide stop is
+    rejected. Returns the (possibly widened) stop and its distance in percent.
+    """
+    if entry <= 0:
+        return StopNorm(False, "invalid entry")
+    if side == LONG and stop >= entry:
+        return StopNorm(False, "long stop above entry")
+    if side == SHORT and stop <= entry:
+        return StopNorm(False, "short stop below entry")
+    stop_dist_pct = abs(entry - stop) / entry * 100.0
+    if stop_dist_pct < cfg.min_stop_dist_pct:
+        stop_dist_pct = cfg.min_stop_dist_pct
+        if side == LONG:
+            stop = entry * (1 - stop_dist_pct / 100.0)
+        else:
+            stop = entry * (1 + stop_dist_pct / 100.0)
+    if stop_dist_pct > cfg.max_stop_dist_pct:
+        return StopNorm(False,
+                        f"stop dist {stop_dist_pct:.2f}% > max {cfg.max_stop_dist_pct:.2f}%")
+    return StopNorm(True, "", stop, stop_dist_pct)
+
+
 class RiskManager:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -55,30 +93,14 @@ class RiskManager:
                  risk_pct_override: Optional[float] = None) -> RiskResult:
         cfg = self.cfg
         entry = float(signal.entry_hint)
-        stop = float(signal.stop_hint)
-        if entry <= 0:
-            return RiskResult(False, "invalid entry")
 
-        # Stop on the correct side of entry.
-        if signal.side == LONG and stop >= entry:
-            return RiskResult(False, "long stop above entry")
-        if signal.side == SHORT and stop <= entry:
-            return RiskResult(False, "short stop below entry")
-
-        stop_dist_pct = abs(entry - stop) / entry * 100.0
-
-        # Clamp stop distance into guard band. We *widen* a too-tight stop to the
-        # minimum (avoids being wicked out by noise) and *reject* a too-wide stop
-        # (scalp R/R would be poor).
-        if stop_dist_pct < cfg.min_stop_dist_pct:
-            stop_dist_pct = cfg.min_stop_dist_pct
-            if signal.side == LONG:
-                stop = entry * (1 - stop_dist_pct / 100.0)
-            else:
-                stop = entry * (1 + stop_dist_pct / 100.0)
-        if stop_dist_pct > cfg.max_stop_dist_pct:
-            return RiskResult(False,
-                              f"stop dist {stop_dist_pct:.2f}% > max {cfg.max_stop_dist_pct:.2f}%")
+        # Stop-distance guard band (shared with the shadow learner): widen a
+        # too-tight stop to the minimum, reject a too-wide one.
+        sn = normalize_stop(cfg, signal.side, entry, float(signal.stop_hint))
+        if not sn.ok:
+            return RiskResult(False, sn.reason)
+        stop = sn.stop
+        stop_dist_pct = sn.stop_dist_pct
 
         risk_pct = risk_pct_override if risk_pct_override is not None else cfg.risk_pct
         risk_amount = balance * (risk_pct / 100.0)
