@@ -1,0 +1,78 @@
+# CLAUDE.md — context for Claude Code
+
+This file orients an AI coding assistant working in this repository. Read it
+before making changes.
+
+## What this is
+
+AurvexAI is a **clean-core crypto-futures scalp engine** (Binance USDT-M perps).
+It is deliberately simple: one decision brain, explicit risk, paper/live parity,
+observe-first shadow learning, funnel observability, a basic Flask dashboard and
+Telegram alerts. It is the from-scratch replacement for an older, over-complex
+engine; do **not** reintroduce that complexity (see "Non-negotiables").
+
+## Non-negotiables (safety)
+
+1. **No real orders.** `LiveExecutor._send_order()` is a stub returning
+   `SIMULATED`. Never make it place a real exchange order without an explicit,
+   separate go-live decision and the Phase-4 plan in `ROADMAP.md`.
+2. **No secrets in code or git.** Binance keys and the Telegram token live only
+   in `.env` (gitignored). `.env.example` holds placeholders. Never commit `.env`
+   or a real key.
+3. **Paper/live parity is sacred.** `DecisionEngine.decide()` must stay
+   mode-agnostic. Paper, live and backtest share the same decision, threshold and
+   risk model. Only the executor differs. See `PAPER_LIVE_PARITY.md`.
+4. **Shadow learner never hard-vetoes.** It is advisory/observe-first only.
+5. **Keep it simple.** No Friday/CEO layer, no multi-AI consensus, no
+   macro/news/sentiment/regime/ML/Ghost/reputation hard vetoes, no Optuna
+   auto-apply. These were intentionally removed.
+
+## Architecture (one line)
+
+`market data → scanner → setups → scoring → filters → risk → DecisionEngine →
+PaperExecutor → journal/shadow/funnel → SQLite → dashboard/telegram`
+
+Full detail: `ARCHITECTURE.md`. Strategy detail: `SCALP_STRATEGY_SPEC.md`.
+Risk detail: `RISK_MODEL.md`.
+
+## Layout
+
+- `src/aurvex/` — all engine code (config, models, indicators, market_data,
+  scanner, setups, scoring, filters, risk, decision, executors, storage,
+  metrics, journal, funnel, shadow, telegram, backtest, engine, dashboard/).
+- `main.py` — CLI: `engine | dashboard | demo | backtest`.
+- `tests/` — pytest suite (must stay green).
+
+## Run
+
+- Tests: `pytest`
+- Offline demo (no network/keys): `python main.py demo`
+- Offline backtest: `python main.py backtest`
+- Paper engine (Binance public data, no key): `python main.py engine`
+- Dashboard (port 5000): `python main.py dashboard`
+- Docker: `docker compose up -d --build`
+
+## Config
+
+Everything is env-driven via `.env` (see `.env.example`). Paper defaults:
+balance 1000 USDT, risk 0.5%/trade, max 4 open, daily-loss kill switch 3%,
+trade threshold 60, LTF 1m / HTF 15m, `DATA_PROVIDER=ccxt`, `AX_MODE=paper`,
+`LIVE_ENABLED=false`.
+
+## Definition of done for any change
+
+1. `pytest` is green (48+ tests).
+2. Parity tests still pass (decision unchanged across executors).
+3. No secrets added; `.env` not committed.
+4. If you touched the decision path, update `PAPER_LIVE_PARITY.md` reasoning.
+5. Offline `python main.py demo` still completes end-to-end.
+
+## Operational note (Termius / mobile)
+
+When giving shell commands for the server, list them **one per line**. Do not
+chain with `&&` (Termius mobile paste breaks on chained commands).
+
+## Current status
+
+Paper-ready. Live OFF by design. See `INITIAL_BUILD_REPORT.md` for the readiness
+report and the exact conditions required before any live consideration.

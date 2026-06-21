@@ -1,0 +1,40 @@
+# AurvexAI clean-core. Two services share one SQLite WAL volume.
+# Engine writes; dashboard reads. SQLite is sufficient for this scale.
+services:
+  engine:
+    build: .
+    image: aurvexai:latest
+    container_name: aurvex-engine
+    restart: unless-stopped
+    env_file: .env
+    command: ["python", "main.py", "engine"]
+    volumes:
+      - aurvex-data:/app/data
+    environment:
+      - DB_PATH=/app/data/aurvex.db
+
+  dashboard:
+    build: .
+    image: aurvexai:latest
+    container_name: aurvex-dashboard
+    restart: unless-stopped
+    env_file: .env
+    command: ["python", "main.py", "dashboard"]
+    ports:
+      - "5000:5000"
+    volumes:
+      - aurvex-data:/app/data
+    environment:
+      - DB_PATH=/app/data/aurvex.db
+      - DASHBOARD_PORT=5000
+    depends_on:
+      - engine
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5000/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  aurvex-data:

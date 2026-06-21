@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""
+AurvexAI entrypoint.
+
+Usage:
+    python main.py engine      # run the live paper engine loop (uses DATA_PROVIDER)
+    python main.py dashboard   # run the Flask dashboard on DASHBOARD_PORT
+    python main.py demo        # fast synthetic end-to-end run (offline, ~40 cycles)
+    python main.py backtest    # offline seeded backtest, prints metrics JSON
+    python main.py telegram-test   # in-container Telegram diagnostic (getMe + send)
+
+All configuration comes from the environment / .env (see .env.example).
+No secrets are read from anywhere but the environment. Live trading is OFF.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+
+from aurvex.config import load_config  # noqa: E402
+
+
+def _print_help() -> None:
+    print(__doc__)
+
+
+def main(argv: list) -> int:
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        _print_help()
+        return 0
+    cmd = argv[0]
+    cfg = load_config()
+    cfg.validate()
+
+    if cmd == "engine":
+        from aurvex.engine import run_engine
+        run_engine(cfg)
+        return 0
+
+    if cmd == "dashboard":
+        from aurvex.dashboard.app import run_dashboard
+        run_dashboard(cfg)
+        return 0
+
+    if cmd == "demo":
+        # Force the synthetic provider so it runs with no network/keys.
+        cfg.data_provider = "synthetic"
+        from aurvex.engine import run_engine
+        cycles = int(os.environ.get("DEMO_CYCLES", "40"))
+        run_engine(cfg, max_cycles=cycles, sleep_override=0.0)
+        return 0
+
+    if cmd == "backtest":
+        from aurvex.backtest import run_backtest_offline
+        bars = int(os.environ.get("BACKTEST_BARS", "1500"))
+        metrics = run_backtest_offline(cfg, bars=bars)
+        print(json.dumps(metrics, indent=2, default=str))
+        return 0
+
+    if cmd in ("telegram-test", "telegram_selftest"):
+        return _telegram_selftest(cfg)
+
+    print(f"unknown command: {cmd}\n")
+    _print_help()
+    return 2
+
+
+def _telegram_selftest(cfg) -> int:
+    """In-container Telegram diagnostic. Prints status, runs getMe, sends one
+    test message. NEVER prints the token or chat id - only booleans + health.
+    """
+    from aurvex.telegram import build_notifier, TelegramNotifier
+
+    print("=== AurvexAI Telegram self-test ===")
+    print(f"TELEGRAM_ENABLED   : {cfg.telegram_enabled}")
+    print(f"bot token set      : {bool(cfg.telegram_bot_token)}")
+    print(f"chat id set        : {bool(cfg.telegram_chat_id)}")
+
+    notifier = build_notifier(cfg)
+    print(f"notifier selected  : {type(notifier).__name__}")
+    if not isinstance(notifier, TelegramNotifier):
+        print("RESULT             : Telegram NOT active.")
+        print(f"reason             : {notifier.health().get('note')}")
+        print("Fix: set TELEGRAM_ENABLED=true and provide TELEGRAM_BOT_TOKEN + "
+              "TELEGRAM_CHAT_ID in the container environment (.env / compose).")
+        return 1
+
+    print("\n-- getMe (token + DNS/HTTPS reachability) --")
+    ok = notifier.verify()
+    h = notifier.health()
+    print(f"getMe ok           : {ok}")
+    if h.get("bot_username"):
+        print(f"bot username       : @{h['bot_username']}")
+    if not ok:
+        print(f"last_error         : {h.get('last_error')}")
+        print("RESULT             : getMe FAILED (bad token or network). No message sent.")
+        return 2
+
+    print("\n-- sendMessage (test) --")
+    sent = notifier.send("✅ AurvexAI Telegram self-test OK")
+    h = notifier.health()
+    print(f"send ok            : {sent}")
+    print(f"sends_ok/failed    : {h.get('sends_ok')}/{h.get('sends_failed')}")
+    if not sent:
+        print(f"last_error         : {h.get('last_error')}")
+        print("RESULT             : getMe ok but sendMessage FAILED. Most likely the "
+              "chat id is wrong, or the bot was never /start-ed in that chat.")
+        return 3
+    print("RESULT             : Telegram fully healthy (getMe + sendMessage).")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
