@@ -269,10 +269,10 @@ class Engine:
                 except Exception as exc:
                     log.debug("manage snapshot failed %s: %s", trade.symbol, exc)
                     continue
-            ltf = snap.ltf(self.cfg.ltf)
-            if not ltf:
+            closed = snap.closed_ltf(self.cfg.ltf)
+            if not closed:
                 continue
-            bar = ltf[-1]
+            bar = closed[-1]
             marks[trade.symbol] = bar.close
             events = self.executor.simulate_fill(trade, bar.high, bar.low, bar.close)
             if not events:

@@ -58,6 +58,53 @@ class Candle:
                    float(row[3]), float(row[4]), float(row[5]))
 
 
+def interval_to_ms(tf: str) -> int:
+    """Parse a timeframe string ('1m','5m','15m','1h','4h','1d','1w') to ms.
+
+    Falls back to one minute for anything unrecognised so a bad config value can
+    never crash the closed-candle computation.
+    """
+    if not tf:
+        return 60_000
+    tf = tf.strip().lower()
+    units = {"m": 60_000, "h": 3_600_000, "d": 86_400_000, "w": 604_800_000}
+    unit = tf[-1]
+    if unit not in units:
+        return 60_000
+    try:
+        n = int(tf[:-1])
+    except ValueError:
+        n = 1
+    return max(1, n) * units[unit]
+
+
+def is_candle_closed(candle: "Candle", tf: str, now: Optional[int] = None) -> bool:
+    """True once wall-clock `now` has reached the candle's close boundary.
+
+    A candle with open time ``ts`` on timeframe ``tf`` closes at
+    ``ts + interval_to_ms(tf)``. Until then it is the in-progress / forming bar.
+    """
+    now = now_ms() if now is None else now
+    return now >= candle.ts + interval_to_ms(tf)
+
+
+def closed_view(candles: List["Candle"], tf: str,
+                now: Optional[int] = None) -> List["Candle"]:
+    """Return ``candles`` with a still-forming last bar removed.
+
+    The decision path (signals, scoring, open-trade management, shadow
+    resolution) must only ever see CLOSED candles: the last element an exchange
+    kline call returns is the in-progress bar, and acting on it causes repaint
+    plus intrabar lookahead. Derived purely from ``Candle.ts`` + the timeframe
+    interval, so it is identical for the ccxt and synthetic providers.
+    """
+    if not candles:
+        return candles
+    if is_candle_closed(candles[-1], tf, now):
+        return candles
+    return candles[:-1]
+
+
 @dataclass
 class OrderBook:
     bids: List[List[float]]  # [[price, qty], ...] descending
@@ -100,7 +147,16 @@ class MarketSnapshot:
     ts: int = field(default_factory=now_ms)
 
     def ltf(self, tf: str) -> List[Candle]:
+        """Raw candles for a timeframe (may include a still-forming last bar)."""
         return self.candles.get(tf, [])
+
+    def closed_ltf(self, tf: str, now: Optional[int] = None) -> List[Candle]:
+        """Closed-candle view of a timeframe (drops a still-forming last bar).
+
+        This is the ONLY view the decision path should consume. ``last_price``
+        may still reflect the live/forming tick for spread/slippage realism.
+        """
+        return closed_view(self.candles.get(tf, []), tf, now)
 
 
 # ---------------------------------------------------------------------------

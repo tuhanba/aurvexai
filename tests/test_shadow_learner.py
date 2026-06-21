@@ -14,8 +14,10 @@ def _decision_from(sig, entry, stop, tp1):
                     setup_type=sig.setup_type, entry=entry, stop_loss=stop, tp1=tp1)
 
 
-def _snap_with_bar(symbol, price, high, low, ltf="1m", htf="15m"):
-    bar = Candle(now_ms(), price, high, low, price, 1000.0)
+def _snap_with_bar(symbol, price, high, low, ltf="1m", htf="15m", ts=None):
+    # Closed bar (open time well in the past) so the closed-candle view keeps it.
+    ts = (now_ms() - 5 * 60_000) if ts is None else ts
+    bar = Candle(ts, price, high, low, price, 1000.0)
     return MarketSnapshot(symbol=symbol, candles={ltf: [bar], htf: [bar]},
                           orderbook=make_book(price), last_price=price,
                           quote_volume_24h=1e9)

@@ -72,10 +72,10 @@ class ShadowLearner:
             snap = snapshots.get(sh["symbol"])
             if snap is None:
                 continue
-            ltf = snap.ltf(self.cfg.ltf)
-            if not ltf:
+            closed = snap.closed_ltf(self.cfg.ltf)
+            if not closed:
                 continue
-            bar = ltf[-1]
+            bar = closed[-1]
             high, low = bar.high, bar.low
             entry, stop, tp1 = sh["entry"], sh["stop_loss"], sh["tp1"]
             side = sh["side"]

@@ -22,7 +22,7 @@ import random
 from typing import Dict, List, Optional
 
 from .config import Config
-from .models import Candle, MarketSnapshot, OrderBook
+from .models import Candle, MarketSnapshot, OrderBook, closed_view
 
 _log = logging.getLogger("aurvex.market_data")
 
@@ -108,7 +108,12 @@ class CCXTProvider(MarketDataProvider):
             self.cfg.htf: [Candle.from_ccxt(r) for r in htf],
         }
         orderbook = OrderBook(bids=ob.get("bids", []), asks=ob.get("asks", []))
+        # last_price = most recent (possibly forming) close: a realistic live
+        # tick for spread/slippage. The DECISION path consumes closed candles
+        # only (see MarketSnapshot.closed_ltf); we also drop the in-progress bar
+        # here so any consumer reading the raw candles directly is safe too.
         last_close = candles[self.cfg.ltf][-1].close
+        candles = {tf: closed_view(c, tf) for tf, c in candles.items()}
         return MarketSnapshot(
             symbol=symbol,
             candles=candles,

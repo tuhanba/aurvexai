@@ -81,13 +81,16 @@ class Context:
 
 
 def build_context(cfg: Config, snap: MarketSnapshot) -> Optional[Context]:
-    ltf_candles = snap.ltf(cfg.ltf)
-    htf_candles = snap.ltf(cfg.htf)
+    # Closed candles only: signals/scoring must never see the forming bar.
+    ltf_candles = snap.closed_ltf(cfg.ltf)
+    htf_candles = snap.closed_ltf(cfg.htf)
     if len(ltf_candles) < 40 or len(htf_candles) < 25:
         return None
     ltf = TFView.of(ltf_candles)
     htf = TFView.of(htf_candles)
-    ctx = Context(cfg=cfg, snap=snap, ltf=ltf, htf=htf, last=snap.last_price or ltf.closes[-1])
+    # Decision "last" is the last CLOSED close (not the live tick) so no detector
+    # can leak intrabar information; last_price stays live for execution realism.
+    ctx = Context(cfg=cfg, snap=snap, ltf=ltf, htf=htf, last=ltf.closes[-1])
     ctx.htf_ema_fast = ind.ema(htf.closes, 9)
     ctx.htf_ema_slow = ind.ema(htf.closes, 21)
     ctx.htf_adx = ind.adx(htf.highs, htf.lows, htf.closes, 14)
