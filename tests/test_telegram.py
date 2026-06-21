@@ -32,6 +32,30 @@ def test_build_notifier_selection():
     assert isinstance(build_notifier(_cfg()), TelegramNotifier)
 
 
+def test_configured_notifier_health_is_configured_and_secret_free():
+    """With token + chat set, build_notifier returns a REAL notifier whose health
+    reports configured (so the dashboard can show 'configured: yes') and never
+    leaks the secrets."""
+    n = build_notifier(_cfg())
+    assert not isinstance(n, NullNotifier)
+    h = n.health()
+    assert h["configured"] is True
+    assert h["token_set"] is True and h["chat_id_set"] is True
+    blob = json.dumps(h)
+    assert FAKE_TOKEN not in blob and FAKE_CHAT not in blob
+
+
+def test_unconfigured_notifier_names_the_missing_var():
+    """A missing token or chat id yields a NullNotifier whose note names exactly
+    what is missing (the T6 diagnosis surfaced on the dashboard)."""
+    no_token = build_notifier(_cfg(token="")).health()
+    assert no_token["configured"] is False
+    assert "TELEGRAM_BOT_TOKEN" in no_token["note"]
+    no_chat = build_notifier(_cfg(chat="")).health()
+    assert no_chat["configured"] is False
+    assert "TELEGRAM_CHAT_ID" in no_chat["note"]
+
+
 def test_null_notifier_reports_reason():
     h = build_notifier(_cfg(enabled=False)).health()
     assert h["configured"] is False
