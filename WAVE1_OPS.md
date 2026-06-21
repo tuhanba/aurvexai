@@ -141,7 +141,22 @@ present; balance reset to 1000; live still OFF.
 - [x] Full stop net loss ≈ risk_amount (−1.0R), not −1.43R.
 - [x] One tight-stop trade's margin ≤ slot budget; 4 slots can fill (baseline: 0 margin-rejected signals).
 - [x] Forming-candle / lookahead / double-count closed; shadow deduped + honestly labelled.
-- [ ] Telegram configured + healthy, no duplicate sends, no secret leak — **run T6 on the server.**
-- [x] Clean baseline recorded (`WAVE1_BASELINE.md`); `meta.epoch` stamp implemented (run T7 on the server to mark the live epoch).
-- [ ] `READY_FOR_PAPER: YES` — set once T6 + T7 are confirmed on the server.
-- [x] `READY_FOR_LIVE: NO` (unchanged by design).
+- [x] Telegram configured + healthy (getMe ok, test message delivered) — confirmed on server.
+- [x] Clean baseline recorded (`WAVE1_BASELINE.md`); live `meta.epoch=wave1` stamped on the server (balance reset to 1000).
+- [x] **`READY_FOR_PAPER: YES`** — deployed & confirmed on the server.
+- [x] `READY_FOR_LIVE: NO` (unchanged by design; `_send_order` still a stub).
+
+## Server deployment confirmed (2026-06-21)
+
+Wave 1 is live on the server (`/root/aurvexai`, `tuhanba/aurvexai` @ main):
+
+- Image rebuilt with Wave 1 code; `meta.epoch={"label":"wave1",...}` present
+  (the stamp only the new code writes) and `balance=1000.0` → clean epoch.
+- `DATA_PROVIDER=ccxt`, `AX_MODE=paper`: engine scans 40 real Binance symbols,
+  setups firing, paper trades opening end-to-end.
+- Telegram healthy; open/close alerts delivering.
+- Legacy DB preserved in `./backups/` and renamed aside inside the `aurvex-data`
+  volume (never deleted).
+
+Next: let the clean epoch accumulate, then **Wave 2 (exit/TP research)** compared
+against this baseline. Live stays OFF.
