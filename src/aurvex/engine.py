@@ -274,7 +274,8 @@ class Engine:
                 continue
             bar = closed[-1]
             marks[trade.symbol] = bar.close
-            events = self.executor.simulate_fill(trade, bar.high, bar.low, bar.close)
+            events = self.executor.simulate_fill(trade, bar.high, bar.low, bar.close,
+                                                 bar_ts=bar.ts)
             if not events:
                 continue
             self.journal.record_fills(trade, events)

@@ -110,4 +110,9 @@ class DecisionEngine:
         d.metadata["stop_dist_pct"] = rr.stop_dist_pct
         d.metadata["liq_price"] = rr.liq_price
         d.metadata["tp_fractions"] = [t.fraction for t in rr.tp_targets]
+        # Entry bar = the last CLOSED bar at decision time. The trade may only be
+        # filled from the first closed bar STRICTLY AFTER this one, so the entry
+        # bar's own pre-entry high/low can never (lookahead) stop or TP it.
+        closed = snap.closed_ltf(cfg.ltf)
+        d.metadata["entry_bar_ts"] = closed[-1].ts if closed else 0
         return d

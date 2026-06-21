@@ -58,6 +58,11 @@ class BaseExecutor:
         ]
         stop_dist_frac = abs(decision.entry - decision.stop_loss) / decision.entry
         risk_amount = decision.position_size * stop_dist_frac
+        # Entry bar timestamp travels on the decision (set by the decision
+        # engine). Seeding last_processed_bar_ts = entry_bar_ts means the entry
+        # bar itself is treated as already processed, so fills can only start on
+        # the next closed bar (no entry-bar lookahead, one fill per candle).
+        entry_bar_ts = int(decision.metadata.get("entry_bar_ts", 0) or 0)
         trade = Trade(
             symbol=decision.symbol,
             side=decision.side,
@@ -76,6 +81,8 @@ class BaseExecutor:
             metadata={"current_stop": decision.stop_loss,
                       "risk_amount": risk_amount,
                       "stop_dist_frac": stop_dist_frac,
+                      "entry_bar_ts": entry_bar_ts,
+                      "last_processed_bar_ts": entry_bar_ts,
                       "liq_price": decision.metadata.get("liq_price", 0.0)},
         )
         return trade
@@ -104,15 +111,33 @@ class BaseExecutor:
         return net
 
     def simulate_fill(self, trade: Trade, high: float, low: float,
-                      close: float) -> List[FillEvent]:
+                      close: float, bar_ts: Optional[int] = None) -> List[FillEvent]:
         """
         Advance an OPEN trade against one price bar. Pessimistic intrabar
         ordering: the stop is checked before take-profits, so if both are
         touched in the same bar we assume the stop filled first.
+
+        When ``bar_ts`` (the closed bar's open time) is supplied two guarantees
+        hold (no-ops when it is None, e.g. legacy unit tests):
+
+          * no entry-bar / pre-entry lookahead: a trade can only be filled from a
+            bar strictly AFTER the bar it entered on (``bar_ts > entry_bar_ts``);
+          * one fill per candle: the same (or an older) bar never advances a
+            trade twice (``bar_ts > last_processed_bar_ts``), so a 20s cycle that
+            re-sees the same 1m bar ~3x counts it once.
         """
         events: List[FillEvent] = []
         if trade.status == CLOSED or trade.remaining_fraction <= 0:
             return events
+
+        if bar_ts is not None:
+            entry_bar_ts = int(trade.metadata.get("entry_bar_ts", 0) or 0)
+            last_done = int(trade.metadata.get("last_processed_bar_ts", entry_bar_ts) or 0)
+            if bar_ts <= entry_bar_ts:
+                return events           # entry bar (or earlier): no fill
+            if bar_ts <= last_done:
+                return events           # already advanced on this bar
+            trade.metadata["last_processed_bar_ts"] = bar_ts
 
         cur_stop = trade.current_stop
 

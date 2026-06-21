@@ -138,7 +138,8 @@ class Backtester:
             # 1) manage existing position for this symbol on this bar
             tr = open_trades.get(sym)
             if tr is not None:
-                fills = self.executor.simulate_fill(tr, bar.high, bar.low, bar.close)
+                fills = self.executor.simulate_fill(tr, bar.high, bar.low, bar.close,
+                                                    bar_ts=bar.ts)
                 for ev in fills:
                     if ev.kind != "BE_MOVE":
                         balance += ev.pnl
