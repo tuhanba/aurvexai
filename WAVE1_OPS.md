@@ -28,10 +28,14 @@ checklist. Commands are **one per line** (Termius-safe, no `&&`).
 
 ## T0 — freeze the legacy DB (server, before deploying Wave 1)
 
-No history is deleted; this only makes a restore point.
+No history is deleted; this only makes a restore point. Stop the writer first so
+the SQLite WAL is checkpointed and the copy is consistent.
 
 ```
 mkdir -p backups
+```
+```
+docker compose stop engine dashboard
 ```
 ```
 docker compose cp engine:/app/data/aurvex.db ./backups/aurvex_legacy_$(date +%Y%m%d_%H%M).db
@@ -41,6 +45,7 @@ ls -la ./backups
 ```
 
 Acceptance: a timestamped `.db` file exists under `./backups/` with size > 0.
+(`docker compose cp` works on the stopped-but-present container.)
 
 ---
 
@@ -67,42 +72,57 @@ If `.env` has them but the container does not (stale container), recreate:
 docker compose up -d --force-recreate engine
 ```
 
-Verify the token and send one test message (token is in the URL only; the
-response carries no token):
+Verify the token and send one test message. The slim image has no `curl`, so use
+the bundled `requests`; these print only `True/False`, never the token/chat:
 
 ```
-docker compose exec engine sh -c 'curl -s "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getMe"'
+docker compose exec engine python -c "import os,requests; print('getMe ok:', requests.get('https://api.telegram.org/bot'+os.environ['TELEGRAM_BOT_TOKEN']+'/getMe').json().get('ok'))"
 ```
 ```
-docker compose exec engine sh -c 'curl -s "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" -d chat_id="$TELEGRAM_CHAT_ID" -d text="AurvexAI Wave1 test"'
+docker compose exec engine python -c "import os,requests; print('send ok:', requests.post('https://api.telegram.org/bot'+os.environ['TELEGRAM_BOT_TOKEN']+'/sendMessage', json={'chat_id': os.environ['TELEGRAM_CHAT_ID'], 'text': 'AurvexAI Wave1 test'}).json().get('ok'))"
 ```
 
-Acceptance: `CONTAINER_*_SET`; `getMe` returns `ok:true`; one message arrives;
-the dashboard shows Telegram **configured: yes / healthy: yes**; no duplicate
-sends; **no secret printed or committed.**
+Note: a correctly configured engine ALSO sends a "🟢 AurvexAI started" message and
+runs getMe automatically on boot, so the dashboard health populates without the
+manual step above.
+
+Acceptance: `CONTAINER_*_SET`; `getMe ok: True`; one message arrives; the
+dashboard shows Telegram **configured: yes / healthy: yes**; no duplicate sends;
+**no secret printed or committed.**
 
 ---
 
 ## T7 — clean paper epoch (server)
 
-The legacy DB is frozen by T0. Start the new epoch from a clean DB; the engine
-writes a `meta.epoch` stamp on first start. (Wave 2 compares against this epoch,
-never the legacy history.)
+The DB lives in the **named volume `aurvex-data`** (not a host folder), so move
+the legacy DB aside INSIDE the volume — it is renamed, never deleted, and T0
+already copied it to `./backups/`. Services must be stopped first (T0 stopped
+them). Then rebuild with the new code; the engine writes the `meta.epoch` stamp
+on first start. (Wave 2 compares against this epoch, never the legacy history.)
+
+Rename the legacy DB aside in the volume (one-off container; `-wal`/`-shm` are
+disposable WAL sidecars):
 
 ```
-docker compose stop engine
-```
-```
-mv ./data/aurvex.db ./backups/aurvex_preepoch_$(date +%Y%m%d_%H%M).db
-```
-```
-docker compose up -d engine
-```
-```
-docker compose exec engine sh -c 'python -c "import sqlite3,json;print(json.load(open(\"/dev/stdin\")) if False else sqlite3.connect(\"/app/data/aurvex.db\").execute(\"select value from meta where key=\x27epoch\x27\").fetchone())"'
+docker compose run --rm --no-deps engine sh -c 'cd /app/data && mv -f aurvex.db aurvex_legacy_epoch_$(date +%Y%m%d_%H%M).db; rm -f aurvex.db-wal aurvex.db-shm; ls -la'
 ```
 
-(Or just confirm `epoch` on the dashboard / via the API once running.)
+Pull the merged code and start the clean epoch:
+
+```
+git pull origin main
+```
+```
+docker compose up -d --build
+```
+
+Confirm the epoch stamp (prints every meta row; look for the `epoch` key):
+
+```
+docker compose exec engine python -c "import sqlite3; [print(r) for r in sqlite3.connect('/app/data/aurvex.db').execute('select key,value from meta')]"
+```
+
+Sanity-check the fresh epoch on the dashboard: balance back to 1000, 0 trades.
 
 Regenerate the deterministic baseline any time (offline, no server needed):
 
@@ -111,7 +131,7 @@ python scripts/wave1_baseline.py
 ```
 
 Acceptance: `pytest -q` green; `WAVE1_BASELINE.md` produced; `meta.epoch`
-present; live still OFF.
+present; balance reset to 1000; live still OFF.
 
 ---
 
