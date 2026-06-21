@@ -90,7 +90,8 @@ class RiskManager:
     def evaluate(self, signal: Signal, snap: MarketSnapshot,
                  balance: float, open_notional: float,
                  open_margin: float = 0.0,
-                 risk_pct_override: Optional[float] = None) -> RiskResult:
+                 risk_pct_override: Optional[float] = None,
+                 open_count: int = 0) -> RiskResult:
         cfg = self.cfg
         entry = float(signal.entry_hint)
 
@@ -126,10 +127,11 @@ class RiskManager:
 
         # (3) Dynamic, controlled leverage. See _solve_leverage for the model.
         lev_result = self._solve_leverage(position_notional, balance, open_margin,
-                                          stop_dist_frac)
+                                          stop_dist_frac, open_count)
         if lev_result is None:
             return RiskResult(False,
-                              f"no free margin (open margin {open_margin:.2f} >= balance {balance:.2f})")
+                              f"no free margin within reserve (open margin "
+                              f"{open_margin:.2f}, balance {balance:.2f})")
         position_notional, leverage, margin_used = lev_result
         if position_notional <= 0:
             return RiskResult(False, "position size collapses under margin/leverage constraints")
@@ -174,28 +176,39 @@ class RiskManager:
         )
 
     def _solve_leverage(self, notional: float, balance: float, open_margin: float,
-                        stop_dist_frac: float):
+                        stop_dist_frac: float, open_count: int):
         """
-        Pick a controlled leverage for an already-sized `notional`.
+        Pick a SLOT-AWARE controlled leverage for an already-sized `notional`.
 
         Returns (notional, leverage, margin_used) or None if there is no free
-        margin at all. The model enforces every constraint the spec requires:
+        margin within the reserve. The model enforces every constraint the spec
+        requires:
 
-          * available margin   = balance - margin already committed to open
-                                 trades. Total committed margin can never exceed
-                                 the balance (margin_used <= available).
+          * slot-aware target = the reserve-protected free margin spread across
+                                the still-open slots, so a single tight-stop trade
+                                cannot hog the book. Leverage is the smallest that
+                                fits the notional into THAT target margin.
           * liquidation safety = leverage is ceilinged so the modelled
                                  liquidation move is at least `liq_safety_buffer`
                                  times the stop distance away (stop fires first).
+                                 Choosing lower leverage than this ceiling adds NO
+                                 real safety (the stop fires first either way), it
+                                 only wastes capital — hence the slot target.
           * exchange cap       = leverage <= max_leverage.
-          * volatility-aware   = a wider stop (higher volatility / structure)
-                                 lowers the liquidation ceiling automatically.
+          * hard margin cap    = committed margin never exceeds actually-available
+                                 margin (balance - open_margin).
+          * volatility-aware   = a wider stop lowers the liquidation ceiling and
+                                 (via a smaller notional) needs less leverage.
 
-        Within those bounds we choose the LOWEST leverage that still fits the
-        notional into available margin, which maximises the liquidation buffer
-        for the trade. Leverage is never used to enlarge notional or risk.
+        Leverage is never used to enlarge notional or risk.
         """
         cfg = self.cfg
+        reserve = cfg.free_margin_reserve_pct / 100.0
+        slots_left = max(1, cfg.max_open_trades - open_count)
+        # Slot-aware target margin for this trade.
+        target_margin = (balance * (1.0 - reserve) - open_margin) / slots_left
+        if target_margin <= 0:
+            return None
         avail = balance - open_margin
         if avail <= 0:
             return None
@@ -206,23 +219,19 @@ class RiskManager:
         lev_liq_ceiling = int(math.floor(1.0 / denom)) if denom > 0 else cfg.max_leverage
         lev_ceiling = max(1, min(cfg.max_leverage, lev_liq_ceiling))
 
-        # Minimum leverage so the notional fits within available margin.
-        lev_floor = max(1, int(math.ceil(notional / avail)))
-
-        if lev_floor > lev_ceiling:
-            # Even at the safest allowable leverage the notional cannot fit in
-            # free margin: shrink notional to what the ceiling permits. Risk
-            # drops below target (acceptable: risk_pct is a maximum).
-            leverage = lev_ceiling
-            notional = avail * lev_ceiling
-        else:
-            leverage = lev_floor
+        # Smallest leverage that fits the notional into the slot's target margin,
+        # clamped to the liquidation-safe / exchange ceiling.
+        lev_target = max(1, int(math.ceil(notional / target_margin)))
+        leverage = min(lev_target, lev_ceiling)
 
         margin_used = notional / leverage
-        # Numerical guard: never let rounding push margin above available.
+        # Hard cap: if the liq-safe ceiling forced leverage below the slot target
+        # the notional may exceed available margin; shrink it (risk drops below
+        # target, acceptable). Also guards rounding.
         if margin_used > avail + 1e-9:
-            margin_used = avail
+            leverage = lev_ceiling
             notional = avail * leverage
+            margin_used = avail
         return notional, leverage, margin_used
 
     def _build_targets(self, side: str, entry: float, r: float) -> List[TPTarget]:

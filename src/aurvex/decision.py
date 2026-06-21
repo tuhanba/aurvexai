@@ -86,7 +86,7 @@ class DecisionEngine:
 
         # 3) Risk evaluation / sizing.
         rr = self.risk.evaluate(signal, snap, pf.balance, pf.open_notional,
-                                open_margin=pf.open_margin)
+                                open_margin=pf.open_margin, open_count=pf.open_count)
         if not rr.allowed:
             d.decision = REJECT
             d.failed_stage = "risk"

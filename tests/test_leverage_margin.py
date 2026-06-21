@@ -81,15 +81,19 @@ def test_wider_stop_lowers_leverage_ceiling(cfg):
 
 def test_less_free_margin_forces_higher_leverage(cfg):
     cfg.max_leverage = 10
+    cfg.free_margin_reserve_pct = 20.0
     rm = RiskManager(cfg)
-    sig = make_signal(side=LONG, price=100.0, stop_dist_pct=0.30)  # notional ~1666 on 1000
+    sig = make_signal(side=LONG, price=100.0, stop_dist_pct=0.30)
     plenty = rm.evaluate(sig, make_snapshot(), balance=1000.0, open_notional=0.0,
                          open_margin=0.0)
+    # Most of the reserve-protected budget already committed -> a tighter slot
+    # target margin -> higher leverage.
     scarce = rm.evaluate(sig, make_snapshot(), balance=1000.0, open_notional=0.0,
-                         open_margin=900.0)  # only 100 free margin
+                         open_margin=650.0)
     assert plenty.allowed and scarce.allowed
     assert scarce.leverage >= plenty.leverage
-    assert scarce.margin_used <= 100.0 + 1e-9
+    # Hard cap: committed margin never exceeds actually-available margin.
+    assert scarce.margin_used <= (1000.0 - 650.0) + 1e-9
 
 
 def test_no_free_margin_rejected(cfg):
@@ -103,11 +107,13 @@ def test_no_free_margin_rejected(cfg):
 
 def test_leverage_within_exchange_cap(cfg):
     cfg.max_leverage = 8
+    cfg.free_margin_reserve_pct = 20.0
     rm = RiskManager(cfg)
     sig = make_signal(side=LONG, price=100.0, stop_dist_pct=0.30)
-    # Force a high lev_floor via tiny free margin so the exchange cap binds.
+    # A tiny slot budget (most of the reserve already committed) forces a high
+    # target leverage so the exchange cap binds.
     res = rm.evaluate(sig, make_snapshot(), balance=1000.0, open_notional=0.0,
-                      open_margin=950.0)
+                      open_margin=790.0)
     assert 1 <= res.leverage <= cfg.max_leverage
 
 

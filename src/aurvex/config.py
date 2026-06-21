@@ -117,6 +117,12 @@ class Config:
     # distance away from entry. >= 1.0; 2.0 means "liquidation must be twice as
     # far as the stop". This is the hard guarantee that the stop fires first.
     liq_safety_buffer: float = field(default_factory=lambda: _float("LIQ_SAFETY_BUFFER", 2.0))
+    # Fraction of balance kept free (un-committed as margin) as a buffer. The
+    # remainder is spread across the still-open slots to pick a slot-aware target
+    # margin, so one tight-stop trade can't hog the whole book. 0-90.
+    free_margin_reserve_pct: float = field(
+        default_factory=lambda: _float("FREE_MARGIN_RESERVE_PCT", 20.0)
+    )
 
     # Stop-distance guards (as fraction of price).
     min_stop_dist_pct: float = field(default_factory=lambda: _float("MIN_STOP_DIST_PCT", 0.30))
@@ -193,6 +199,9 @@ class Config:
         assert self.maint_margin_rate >= 0, "maint_margin_rate must be >= 0"
         assert self.liq_safety_buffer >= 1.0, "liq_safety_buffer must be >= 1.0"
         assert self.max_leverage >= 1, "max_leverage must be >= 1"
+        assert 0.0 <= self.free_margin_reserve_pct <= 90.0, (
+            "free_margin_reserve_pct must be in [0, 90]"
+        )
 
     @property
     def is_live(self) -> bool:
