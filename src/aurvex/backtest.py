@@ -130,6 +130,8 @@ class Backtester:
         last_trade_ms: Dict[str, int] = {}
         signals_seen = 0
         allows = 0
+        reject_reasons: Dict[str, int] = {}
+        margin_rejected = 0
 
         for ts, sym, i in events:
             ltf = ltf_data[sym]
@@ -184,6 +186,10 @@ class Backtester:
             )
             d = self.engine.decide(signal, snap, pf)
             if d.decision != ALLOW:
+                key = d.failed_stage or d.reject_reason or "other"
+                reject_reasons[key] = reject_reasons.get(key, 0) + 1
+                if "margin" in (d.reject_reason or "").lower():
+                    margin_rejected += 1
                 continue
             allows += 1
             trade = self.executor.open(d)
@@ -207,7 +213,44 @@ class Backtester:
         metrics["allows"] = allows
         metrics["symbols"] = list(ltf_data.keys())
         metrics["bars_per_symbol"] = {s: len(c) for s, c in ltf_data.items()}
+        metrics.update(self._baseline_extras(closed, reject_reasons, margin_rejected))
         return metrics
+
+    @staticmethod
+    def _baseline_extras(closed, reject_reasons: Dict[str, int],
+                         margin_rejected: int) -> Dict:
+        """Extra baseline aggregates (Wave 1 / T7): TP-ladder transitions, leverage
+        and margin distribution, fee share, trades/day and reject reasons."""
+        n = len(closed)
+        tp1 = sum(1 for t in closed if len(t.tp_targets) > 0 and t.tp_targets[0].hit)
+        tp2 = sum(1 for t in closed if len(t.tp_targets) > 1 and t.tp_targets[1].hit)
+        tp3 = sum(1 for t in closed if len(t.tp_targets) > 2 and t.tp_targets[2].hit)
+        lev_dist: Dict[int, int] = {}
+        for t in closed:
+            lev_dist[t.leverage] = lev_dist.get(t.leverage, 0) + 1
+        margins = [t.margin_used for t in closed if t.margin_used]
+        fees = sum(t.fees_paid for t in closed)
+        turnover = sum(t.position_size for t in closed)
+        opens = [t.open_time for t in closed if t.open_time]
+        closes = [t.close_time for t in closed if t.close_time]
+        span_ms = (max(closes) - min(opens)) if opens and closes else 0
+        days = span_ms / 86_400_000 if span_ms else 0
+        return {
+            "tp1_hits": tp1, "tp2_hits": tp2, "tp3_hits": tp3,
+            "tp1_to_tp2_rate": round(tp2 / tp1 * 100, 1) if tp1 else 0.0,
+            "tp2_to_tp3_rate": round(tp3 / tp2 * 100, 1) if tp2 else 0.0,
+            "leverage_dist": {str(k): v for k, v in sorted(lev_dist.items())},
+            "avg_margin_used": round(sum(margins) / len(margins), 2) if margins else 0.0,
+            "max_margin_used": round(max(margins), 2) if margins else 0.0,
+            "fees_total": round(fees, 4),
+            "fee_share_of_turnover_pct": round(fees / turnover * 100, 4) if turnover else 0.0,
+            "trades_per_day": round(n / days, 2) if days else 0.0,
+            "margin_rejected_signals": margin_rejected,
+            "reject_reasons": dict(sorted(reject_reasons.items(), key=lambda x: -x[1])),
+            # MAE/MFE per-trade excursion is deferred to the Wave 2 replay
+            # (requires per-bar excursion capture, out of scope for this gate).
+            "mae_mfe": "deferred_to_wave2_replay",
+        }
 
 
 def run_backtest_offline(cfg: Config, symbols: Optional[List[str]] = None,

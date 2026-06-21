@@ -61,6 +61,16 @@ def test_storage_balance_ledger(tmp_path):
     assert len(db.get_ledger()) == 2  # initial ensure_balance row + adjust
 
 
+def test_ensure_epoch_stamps_once(tmp_path):
+    db = Storage(str(tmp_path / "e.db"))
+    e1 = db.ensure_epoch("wave1")
+    assert e1["label"] == "wave1" and e1["id"] and e1["started_ms"] > 0
+    # Stamped once; a second call must NOT overwrite (history is never reset).
+    e2 = db.ensure_epoch("wave9")
+    assert e2 == e1
+    assert db.get_meta("epoch")["id"] == e1["id"]
+
+
 def test_storage_funnel_and_signals(tmp_path):
     from aurvex.models import Decision, FunnelStats
     db = Storage(str(tmp_path / "f.db"))

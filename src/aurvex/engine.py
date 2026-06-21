@@ -65,6 +65,9 @@ class Engine:
         self._cycles = 0
         self._last_summary_day = -1
         self.db.ensure_balance(cfg.initial_paper_balance)
+        # Stamp the epoch so Wave 2 compares against THIS clean run, never the
+        # contaminated legacy history (written once; never deletes history).
+        self.db.ensure_epoch("wave1")
 
     # -- lifecycle ---------------------------------------------------------
     def request_stop(self, *_: object) -> None:

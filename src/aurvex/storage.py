@@ -24,7 +24,7 @@ import sqlite3
 import time
 from typing import Any, Dict, List, Optional
 
-from .models import (CLOSED, OPEN, Trade, TPTarget, FunnelStats, Decision)
+from .models import (CLOSED, OPEN, Trade, TPTarget, FunnelStats, Decision, new_id)
 
 
 SCHEMA = """
@@ -197,6 +197,20 @@ class Storage:
                                reason="init", trade_id=None)
             return initial
         return float(bal)
+
+    def ensure_epoch(self, label: str = "wave1") -> Dict[str, Any]:
+        """Stamp this DB with an epoch marker the first time it is opened.
+
+        A clean paper run after the Wave 1 integrity fixes is a NEW epoch: Wave 2
+        comparisons must be made against it, never the contaminated legacy
+        history. The stamp is written once and never overwritten (history is
+        never deleted)."""
+        epoch = self.get_meta("epoch")
+        if epoch is None:
+            epoch = {"label": label, "started_ms": int(time.time() * 1000),
+                     "id": new_id()}
+            self.set_meta("epoch", epoch)
+        return epoch
 
     def get_balance(self, default: float = 0.0) -> float:
         bal = self.get_meta("balance")
