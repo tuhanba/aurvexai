@@ -23,6 +23,28 @@ There is exactly **one** `DecisionEngine`, **one** `trade_threshold`, **one**
 `RiskManager`. No live-only scoring, no live-only veto chain, no live-only
 threshold. The backtester uses the same `decide()` too.
 
+### Wave 1 integrity changes (still on the shared path)
+
+These fixes harden the shared decision/fill path; none introduces a paper-only
+or live-only branch, so parity is preserved:
+
+- **Closed-candle view (T1).** Signals, scoring, open-trade management and shadow
+  resolution consume `MarketSnapshot.closed_ltf()` — closed bars only — so no
+  mode can act on the forming bar. `last_price` stays live for execution realism.
+- **Entry-bar / one-fill timing (T2).** `entry_bar_ts` travels on the `Decision`;
+  `simulate_fill(bar_ts=...)` (shared) fills only on closed bars strictly after
+  entry, once per bar. Same code for paper, live-mock and backtest.
+- **Cost-inclusive sizing (T4).** `RiskManager` sizes notional on
+  `stop_dist + round-trip cost`, so 1R is the net budget and a full stop is
+  ~-1.0R. Computed once in the shared risk model.
+- **Slot-aware leverage (T5).** Leverage is chosen from a slot-aware target
+  margin in the shared `RiskManager`; it changes only margin/liquidation
+  distance, never notional, risk, or the decision. Canary still scales live
+  notional and margin in the same ratio.
+- **Shadow stop normalisation (T3).** The shadow learner reuses the engine's
+  `normalize_stop()` so its proxy is measured against the exact stop the engine
+  would trade — advisory only, never a veto.
+
 ## What differs (executor only)
 
 | | Paper | Live (this build) |

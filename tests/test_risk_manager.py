@@ -11,8 +11,12 @@ def test_position_sizing_matches_risk(cfg):
     sig = make_signal(side=LONG, price=100.0, stop_dist_pct=1.0)  # 1% stop
     res = rm.evaluate(sig, make_snapshot(price=100.0), balance=1000.0, open_notional=0.0)
     assert res.allowed
-    # risk_amount = 1000 * 0.5% = 5 ; notional = 5 / 0.01 = 500
-    assert math.isclose(res.position_size, 500.0, rel_tol=1e-6)
+    # Cost-inclusive sizing: notional = risk_amount / (stop_frac + rt_cost_frac).
+    # risk_amount = 1000 * 0.5% = 5 ; rt_cost = (0.045+0.02)/100*2 = 0.0013.
+    rt = (cfg.taker_fee_pct + cfg.slippage_assumption_pct) / 100.0 * 2.0
+    assert math.isclose(res.position_size, 5.0 / (0.01 + rt), rel_tol=1e-6)
+    # The real invariant: the NET max loss equals the risk budget (5 USDT).
+    assert math.isclose(res.max_loss, 5.0, rel_tol=1e-6)
     assert math.isclose(res.risk_pct, cfg.risk_pct)
 
 

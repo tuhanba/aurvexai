@@ -32,15 +32,17 @@ def test_margin_equals_notional_over_leverage(cfg):
 
 
 def test_leverage_does_not_change_notional(cfg):
-    """Notional is sized by risk%/stop only; changing max_leverage must not move it."""
+    """Notional is sized by net risk only; changing max_leverage must not move it."""
     sig = make_signal(side=LONG, price=100.0, stop_dist_pct=1.0)
     cfg.max_leverage = 5
     a = RiskManager(cfg).evaluate(sig, make_snapshot(), 1000.0, 0.0)
     cfg.max_leverage = 20
     b = RiskManager(cfg).evaluate(sig, make_snapshot(), 1000.0, 0.0)
     assert math.isclose(a.position_size, b.position_size, rel_tol=1e-9)
-    # risk_amount = 1000 * 0.5% = 5 ; notional = 5 / 0.01 = 500
-    assert math.isclose(a.position_size, 500.0, rel_tol=1e-9)
+    # The invariant that matters: the NET max loss equals the risk budget,
+    # independent of leverage (cost-inclusive sizing => ~442 notional, not 500).
+    assert math.isclose(a.max_loss, 5.0, rel_tol=1e-6)
+    assert math.isclose(b.max_loss, 5.0, rel_tol=1e-6)
 
 
 def test_stop_is_inside_estimated_liquidation(cfg):

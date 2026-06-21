@@ -108,9 +108,13 @@ class RiskManager:
         if stop_dist_frac <= 0:
             return RiskResult(False, "zero stop distance")
 
-        # (1) SIZE FIRST on fixed fractional risk: a full stop-out loses ~risk_amount.
-        #     Leverage is NEVER used to grow this notional or the trade's risk.
-        position_notional = risk_amount / stop_dist_frac
+        # (1) SIZE FIRST on fixed fractional NET risk. A full stop-out costs the
+        #     price move to the stop PLUS round-trip fees + slippage; sizing on
+        #     (stop_dist + round-trip cost) makes the WHOLE net loss ~= risk_amount.
+        #     So 1R is the configured net budget and a min-stop full stop reads
+        #     -1.0R, not the old -1.43R. Leverage never grows this notional/risk.
+        rt_cost_frac = (cfg.taker_fee_pct + cfg.slippage_assumption_pct) / 100.0 * 2.0
+        position_notional = risk_amount / (stop_dist_frac + rt_cost_frac)
 
         # (2) Portfolio NOTIONAL exposure cap.
         max_total = balance * (cfg.max_portfolio_exposure_pct / 100.0)
@@ -148,10 +152,11 @@ class RiskManager:
         r = abs(entry - stop)
         targets = self._build_targets(signal.side, entry, r)
 
-        # Actual risk reflects the (possibly capped) notional, not the target.
+        # Actual NET risk reflects the (possibly capped) notional. With the
+        # cost-inclusive sizing above this equals risk_amount when uncapped, and
+        # scales down with the notional after the exposure cap.
         actual_risk = position_notional * stop_dist_frac
-        fee_frac = (cfg.taker_fee_pct + cfg.slippage_assumption_pct) / 100.0 * 2.0
-        est_fee = position_notional * fee_frac
+        est_fee = position_notional * rt_cost_frac
         max_loss = actual_risk + est_fee
 
         return RiskResult(

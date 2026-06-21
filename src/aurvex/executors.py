@@ -57,7 +57,10 @@ class BaseExecutor:
             TPTarget(price=decision.tp3, fraction=fractions[2]),
         ]
         stop_dist_frac = abs(decision.entry - decision.stop_loss) / decision.entry
-        risk_amount = decision.position_size * stop_dist_frac
+        # 1R is the NET budget (price risk + round-trip cost), carried as
+        # decision.max_loss, so a full stop realises ~-1.0R (not -1.43R). Fall
+        # back to price-only risk for manually-built decisions without max_loss.
+        risk_amount = decision.max_loss or (decision.position_size * stop_dist_frac)
         # Entry bar timestamp travels on the decision (set by the decision
         # engine). Seeding last_processed_bar_ts = entry_bar_ts means the entry
         # bar itself is treated as already processed, so fills can only start on
