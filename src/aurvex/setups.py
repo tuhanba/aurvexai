@@ -272,6 +272,12 @@ def detect_trend_continuation(ctx: Context) -> Optional[Signal]:
     cfg, ltf = ctx.cfg, ctx.ltf
     if len(ltf) < 30 or ctx.ltf_atr is None or ctx.htf_bias == 0:
         return None
+    # CE-5 (Wave 2): optional HTF ADX trend-strength gate.  Default 0 = disabled.
+    # When enabled, chop-day signals (HTF ADX below threshold) are suppressed
+    # before they can be detected, scored, or waste a slot.
+    if cfg.min_htf_adx_trend > 0 and (
+            ctx.htf_adx is None or ctx.htf_adx < cfg.min_htf_adx_trend):
+        return None
 
     ema20 = ind.ema(ltf.closes, 20)
     ema50 = ind.ema(ltf.closes, 50)
