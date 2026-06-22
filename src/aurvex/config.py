@@ -161,6 +161,20 @@ class Config:
     # Observe-first: when False the learner only watches and reports; advisory
     # score nudges are NOT fed back into scoring. Never enables a hard veto.
     shadow_apply: bool = field(default_factory=lambda: _bool("SHADOW_APPLY", False))
+    # CE-1: setups restricted to shadow observation only (never traded).
+    # Comma-separated setup_type names, e.g. "momentum_breakout,volume_expansion".
+    # These setups still score and track in shadow — only execution is blocked.
+    shadow_only_setups: List[str] = field(
+        default_factory=lambda: _list("SHADOW_ONLY_SETUPS", [])
+    )
+
+    # -- Risk model (IF-2) -------------------------------------------------
+    # Minimum position notional in quote currency. Trades sized below this
+    # threshold (e.g. stub trades from tight exposure-cap room) are rejected
+    # rather than wasting a slot on a micro position.
+    min_position_notional: float = field(
+        default_factory=lambda: _float("MIN_POSITION_NOTIONAL", 5.0)
+    )
 
     # -- Storage -----------------------------------------------------------
     db_path: str = field(default_factory=lambda: _str("DB_PATH", "data/aurvex.db"))

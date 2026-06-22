@@ -149,6 +149,156 @@ class ShadowLearner:
             resolved += 1
         return resolved
 
+    # -- CE-3: full-ladder offline replay (research / keystone) -----------
+    def ladder_replay(self, candles_by_symbol: Dict[str, List[Any]]) -> List[Dict[str, Any]]:
+        """
+        Full-ladder offline replay for Wave 2 research (CE-3 / keystone).
+
+        Simulates the actual engine exit logic—TP1 → BE-move → TP2 → TP3,
+        with pessimistic stop priority—against closed OHLCV bars.  Unlike
+        ``update()`` (TP1-or-SL proxy only), this models the real paper
+        executor expectancy including runner fractions and the BE stop move.
+
+        Args:
+            candles_by_symbol: {symbol: [Candle, ...]} oldest-first.  Candles
+                are iterated strictly after each row's signal_bar_ts so there
+                is no lookahead.
+
+        Returns a list of result dicts (one per shadow row):
+            id, symbol, setup_type, side, source, score, signal_bar_ts,
+            tp1_hit, tp2_hit, tp3_hit, be_moved,
+            final_outcome (SL | BE | TP1 | TP2 | TP3 | EXPIRED),
+            net_r, bars_to_close
+
+        Only call offline — O(rows × bars).  Never modifies the DB.
+        """
+        cfg = self.cfg
+        rows = self.db.conn.execute("SELECT * FROM shadows").fetchall()
+        results: List[Dict[str, Any]] = []
+
+        for sh in rows:
+            sh = dict(sh)
+            symbol = sh["symbol"]
+            candles = candles_by_symbol.get(symbol)
+            if not candles:
+                continue
+            entry: float = sh["entry"]
+            stop: float = sh["stop_loss"]
+            tp1_price: float = sh["tp1"]
+            side: str = sh["side"]
+            sig_ts: int = int(sh.get("signal_bar_ts") or 0)
+
+            r = abs(entry - stop)
+            if entry <= 0 or stop <= 0 or r <= 0:
+                continue
+
+            sign = 1 if side == LONG else -1
+            tp2_price = entry + sign * r * cfg.tp2_r
+            tp3_price = entry + sign * r * cfg.tp3_r
+
+            # Round-trip cost in R (same formula as _cost_r, for consistency
+            # with existing shadow stats so replay vs proxy comparisons are fair).
+            stop_frac = r / entry
+            rt = (cfg.taker_fee_pct + cfg.slippage_assumption_pct) / 100.0 * 2.0
+            cost_r = rt / stop_frac if stop_frac > 0 else 0.0
+
+            f1, f2, f3 = cfg.tp1_frac, cfg.tp2_frac, cfg.tp3_frac
+            remaining = 1.0
+            gross_r = 0.0
+            tp1_hit = tp2_hit = tp3_hit = be_moved = False
+            cur_stop = stop
+            final_outcome = "EXPIRED"
+            bars_to_close = 0
+            last_close = entry  # fallback for EXPIRED exit price
+
+            for c in candles:
+                if c.ts <= sig_ts:
+                    continue
+                bars_to_close += 1
+                last_close = c.close
+                h, l = c.high, c.low
+
+                # Pessimistic: stop before TPs within the same bar.
+                stop_hit = (l <= cur_stop) if side == LONG else (h >= cur_stop)
+                if stop_hit:
+                    # BE stop → 0R price move; original stop → -1R.
+                    exit_r_per_1 = 0.0 if be_moved else -1.0
+                    gross_r += exit_r_per_1 * remaining
+                    final_outcome = "BE" if be_moved else "SL"
+                    remaining = 0.0
+                    break
+
+                # TP1
+                if not tp1_hit:
+                    reached = (h >= tp1_price) if side == LONG else (l <= tp1_price)
+                    if reached:
+                        tp1_r = abs(tp1_price - entry) / r  # = cfg.tp1_r
+                        gross_r += tp1_r * f1
+                        remaining -= f1
+                        tp1_hit = True
+                        if cfg.move_sl_to_be_after_tp1:
+                            cur_stop = entry
+                            be_moved = True
+
+                # TP2 (only after TP1)
+                if tp1_hit and not tp2_hit:
+                    reached = (h >= tp2_price) if side == LONG else (l <= tp2_price)
+                    if reached:
+                        tp2_r = abs(tp2_price - entry) / r  # = cfg.tp2_r
+                        gross_r += tp2_r * f2
+                        remaining -= f2
+                        tp2_hit = True
+
+                # TP3 (only after TP2)
+                if tp2_hit and not tp3_hit:
+                    reached = (h >= tp3_price) if side == LONG else (l <= tp3_price)
+                    if reached:
+                        tp3_r = abs(tp3_price - entry) / r  # = cfg.tp3_r
+                        gross_r += tp3_r * f3
+                        remaining -= f3
+                        tp3_hit = True
+                        final_outcome = "TP3"
+                        break
+
+                if remaining <= 1e-9:
+                    final_outcome = "TP3"
+                    break
+            else:
+                # Loop exhausted without a terminal outcome: mark EXPIRED and
+                # close the remaining fraction at the last bar's close price.
+                if remaining > 1e-9:
+                    if side == LONG:
+                        exit_r_per_1 = (last_close - entry) / r
+                    else:
+                        exit_r_per_1 = (entry - last_close) / r
+                    gross_r += exit_r_per_1 * remaining
+
+            # Final outcome label for partial TP situations
+            if final_outcome == "EXPIRED" and tp2_hit:
+                final_outcome = "TP2_PARTIAL"
+            elif final_outcome == "EXPIRED" and tp1_hit:
+                final_outcome = "TP1_PARTIAL"
+
+            net_r = round(gross_r - cost_r, 4)
+            results.append({
+                "id": sh["id"],
+                "symbol": symbol,
+                "setup_type": sh["setup_type"],
+                "side": side,
+                "source": sh["source"],
+                "score": sh["score"],
+                "signal_bar_ts": sig_ts,
+                "tp1_hit": tp1_hit,
+                "tp2_hit": tp2_hit,
+                "tp3_hit": tp3_hit,
+                "be_moved": be_moved,
+                "final_outcome": final_outcome,
+                "net_r": net_r,
+                "bars_to_close": bars_to_close,
+            })
+
+        return results
+
     # -- stats & advisory outputs -----------------------------------------
     def _resolved_rows(self) -> List[Dict[str, Any]]:
         rows = self.db.conn.execute(

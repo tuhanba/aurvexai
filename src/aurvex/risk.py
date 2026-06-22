@@ -125,6 +125,15 @@ class RiskManager:
         if position_notional > room:
             position_notional = room
 
+        # (2b) Minimum notional floor — reject stub/micro trades that waste a
+        #      slot. Triggered when the exposure-cap room is nearly full and the
+        #      remaining capacity is too small to be meaningful.
+        if position_notional < cfg.min_position_notional:
+            return RiskResult(
+                False,
+                f"notional {position_notional:.2f} < min {cfg.min_position_notional:.2f}"
+            )
+
         # (3) Dynamic, controlled leverage. See _solve_leverage for the model.
         lev_result = self._solve_leverage(position_notional, balance, open_margin,
                                           stop_dist_frac, open_count)

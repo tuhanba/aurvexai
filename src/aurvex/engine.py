@@ -32,7 +32,7 @@ from .filters import PortfolioView
 from .funnel import FunnelLogger
 from .journal import TradeJournal
 from .market_data import build_provider
-from .models import ALLOW, OPEN, MarketSnapshot, now_ms
+from .models import ALLOW, OPEN, REJECT, Decision, MarketSnapshot, now_ms
 from .scanner import UniverseScanner
 from .setups import SetupDetector, build_context
 from .shadow import ShadowLearner
@@ -181,17 +181,21 @@ class Engine:
                 continue
             candidates += 1
 
-            signal = self.detector.detect(snap)
-            if signal is None:
+            # CE-2: detect all setups, score each, pick the highest-scored one.
+            # This removes the first-match-wins priority-order bias and lets the
+            # score decide which detected setup is most promising this cycle.
+            all_signals = self.detector.detect_all(snap)
+            if not all_signals:
                 continue
             funnel.note_setup_detected()
 
-            # Score now so we can optionally apply a soft shadow nudge.
-            self.engine.scorer.build(signal, snap)
-            if self.cfg.shadow_apply:
-                delta = self.shadow.score_delta(signal.setup_type)
-                if delta:
-                    signal.score = max(0.0, min(100.0, signal.score + delta))
+            for s in all_signals:
+                self.engine.scorer.build(s, snap)
+                if self.cfg.shadow_apply:
+                    delta = self.shadow.score_delta(s.setup_type)
+                    if delta:
+                        s.score = max(0.0, min(100.0, s.score + delta))
+            signal = max(all_signals, key=lambda s: s.score)
 
             # Refresh portfolio view counters locally for same-cycle gating. The
             # exposure/margin running totals MUST be kept current here: otherwise
@@ -208,10 +212,25 @@ class Engine:
             # Shadow tracking: opened paper trades AND high-score rejects.
             # signal_bar_ts (the last closed bar) dedups across cycles that
             # re-see the same signalled bar.
-            source = "paper" if d.decision == ALLOW else "rejected"
             closed_ltf = snap.closed_ltf(self.cfg.ltf)
             sig_bar_ts = closed_ltf[-1].ts if closed_ltf else 0
+            source = "paper" if d.decision == ALLOW else "rejected"
             self.shadow.track_signal(signal, d, source=source, signal_bar_ts=sig_bar_ts)
+
+            # Shadow-track alternative signals (non-chosen by score) as rejected.
+            # Each is a different setup_type, so dedup never conflicts with the
+            # primary. This gives the shadow learner visibility into all detected
+            # setups, not just the one that won the score race.
+            for alt in all_signals:
+                if alt is signal:
+                    continue
+                alt_d = Decision(
+                    symbol=alt.symbol, side=alt.side, setup_type=alt.setup_type,
+                    score=alt.score, decision=REJECT,
+                    failed_stage="not_selected",
+                    reject_reason="lower score than selected setup this cycle")
+                self.shadow.track_signal(alt, alt_d, source="rejected",
+                                         signal_bar_ts=sig_bar_ts)
 
             if d.decision == ALLOW:
                 if sym in live_open_symbols:

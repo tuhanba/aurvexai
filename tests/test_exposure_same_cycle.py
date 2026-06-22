@@ -29,12 +29,14 @@ def _force_allow_engine(cfg):
     cfg.min_stop_dist_pct = 0.30
     eng = Engine(cfg)
 
-    def fake_detect(snap):
+    # CE-2: engine now calls detect_all() (not detect()); patch accordingly.
+    def fake_detect_all(snap):
         price = snap.last_price
-        return Signal(symbol=snap.symbol, side=LONG, setup_type="momentum_breakout",
-                      entry_hint=price, stop_hint=price * (1 - 0.0030), base_confidence=0.9)
+        return [Signal(symbol=snap.symbol, side=LONG, setup_type="momentum_breakout",
+                       entry_hint=price, stop_hint=price * (1 - 0.0030),
+                       base_confidence=0.9)]
 
-    eng.detector.detect = fake_detect
+    eng.detector.detect_all = fake_detect_all
     eng.engine.scorer.build = lambda sig, snap: setattr(sig, "score", 90.0)
 
     async def _noop(_snaps):
