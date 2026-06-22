@@ -59,6 +59,21 @@ def _list(key: str, default: List[str]) -> List[str]:
     return [x.strip() for x in v.split(",") if x.strip()]
 
 
+def _int_list(key: str, default: List[int]) -> List[int]:
+    v = os.getenv(key)
+    if not v:
+        return list(default)
+    result = []
+    for x in v.split(","):
+        x = x.strip()
+        if x:
+            try:
+                result.append(int(x))
+            except ValueError:
+                pass
+    return result
+
+
 @dataclass
 class Config:
     # -- Mode --------------------------------------------------------------
@@ -168,6 +183,20 @@ class Config:
         default_factory=lambda: _list("SHADOW_ONLY_SETUPS", [])
     )
 
+    # CE-2 (Wave 2): allowed UTC trade hours, e.g. "10,11,12,13".
+    # Empty list = all hours allowed (default). Filters out dead / toksik sessions
+    # (Asya gece saatleri, ABD cash-open whipsaw). Forward-test before enabling.
+    trade_hours_utc: List[int] = field(
+        default_factory=lambda: _int_list("TRADE_HOURS_UTC", [])
+    )
+
+    # CE-5 (Wave 2): minimum HTF ADX required for trend_continuation setup.
+    # 0.0 = gate disabled (default, backward-compatible). Set e.g. 20.0 to gate
+    # out chop-days where trend_continuation signal quality is lowest.
+    min_htf_adx_trend: float = field(
+        default_factory=lambda: _float("MIN_HTF_ADX_TREND", 0.0)
+    )
+
     # -- Risk model (IF-2) -------------------------------------------------
     # Minimum position notional in quote currency. Trades sized below this
     # threshold (e.g. stub trades from tight exposure-cap room) are rejected
@@ -180,7 +209,9 @@ class Config:
     db_path: str = field(default_factory=lambda: _str("DB_PATH", "data/aurvex.db"))
 
     # -- Dashboard ---------------------------------------------------------
-    dashboard_host: str = field(default_factory=lambda: _str("DASHBOARD_HOST", "0.0.0.0"))
+    # IF-1: bind to localhost by default; use SSH tunnel or a reverse proxy for
+    # remote access. Keeps the full account state off the public internet.
+    dashboard_host: str = field(default_factory=lambda: _str("DASHBOARD_HOST", "127.0.0.1"))
     dashboard_port: int = field(default_factory=lambda: _int("DASHBOARD_PORT", 5000))
 
     # -- Telegram (secrets via env only) -----------------------------------

@@ -13,6 +13,7 @@ lightweight read-only view (see PortfolioView) the decision engine builds.
 """
 from __future__ import annotations
 
+import datetime as _dt
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 
@@ -123,6 +124,23 @@ def f_max_open(cfg, signal, snap, pf) -> FilterResult:
     return FilterResult(True)
 
 
+def f_trade_hours(cfg, signal, snap, pf) -> FilterResult:
+    """CE-2 (Wave 2): reject signals outside the configured UTC trade hours.
+
+    Empty ``cfg.trade_hours_utc`` (default) = all hours allowed, so existing
+    behaviour is fully preserved. When set, only hours in the list are traded;
+    the rest surface as a quality reject so the funnel can show the gate.
+    """
+    if not cfg.trade_hours_utc:
+        return FilterResult(True)
+    hour = _dt.datetime.utcfromtimestamp(pf.now_ms / 1000.0).hour
+    if hour not in cfg.trade_hours_utc:
+        allowed = ",".join(str(h) for h in sorted(cfg.trade_hours_utc))
+        return FilterResult(False, "trade_hours",
+                            f"UTC hour {hour} outside allowed [{allowed}]")
+    return FilterResult(True)
+
+
 def f_daily_loss(cfg, signal, snap, pf) -> FilterResult:
     limit = pf.balance * (cfg.max_daily_loss_pct / 100.0)
     if pf.daily_realized_pnl <= -abs(limit):
@@ -137,6 +155,7 @@ FILTERS: List[FilterFn] = [
     f_max_open,
     f_duplicate,
     f_cooldown,
+    f_trade_hours,   # CE-2: session quality gate (cheap, before market data filters)
     f_liquidity,
     f_spread,
     f_slippage,

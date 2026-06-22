@@ -138,6 +138,76 @@ def create_app(cfg=None) -> Flask:
         acc["marks_ts"] = marks_meta.get("ts") if isinstance(marks_meta, dict) else None
         return jsonify(acc)
 
+    @app.route("/api/portfolio_metrics")
+    def portfolio_metrics():
+        """IF-4 (Wave 2): observe-only slot/risk/turnover metrics.
+
+        Surfaces capital-efficiency visibility without touching the decision path:
+        slot utilisation, open risk %, margin utilisation, effective leverage,
+        liq-safety ratio, slot occupancy time, and missed-opportunity count
+        (resolved shadow rows that were rejected rather than traded).
+        """
+        opens = db.get_open_trades(mode=cfg.mode)
+        balance = db.get_balance()
+
+        open_notional = sum(t.position_size * t.remaining_fraction for t in opens)
+        open_margin = sum(
+            (t.margin_used * t.remaining_fraction if t.margin_used
+             else t.position_size * t.remaining_fraction / (t.leverage or 1))
+            for t in opens
+        )
+        # max_loss already includes estimated fees; scale by remaining fraction.
+        open_risk = sum(t.max_loss * t.remaining_fraction for t in opens)
+
+        slot_util_pct = len(opens) / cfg.max_open_trades * 100.0 if cfg.max_open_trades else 0.0
+        margin_util_pct = open_margin / balance * 100.0 if balance else 0.0
+        open_risk_pct = open_risk / balance * 100.0 if balance else 0.0
+        eff_leverage = open_notional / open_margin if open_margin > 0 else 0.0
+
+        # Average slot occupancy (minutes) for currently open trades.
+        ts_now = now_ms()
+        slot_occ_avg_min = (
+            sum((ts_now - t.open_time) / 60_000.0 for t in opens) / len(opens)
+            if opens else 0.0
+        )
+
+        # Missed-opportunity count: shadow rows from rejected signals that have
+        # since resolved (TP or SL) — the universe the engine turned down.
+        row = db.conn.execute(
+            "SELECT COUNT(*) AS n FROM shadows "
+            "WHERE source='rejected' AND outcome != 'OPEN'"
+        ).fetchone()
+        missed_opp_n = int(row["n"]) if row else 0
+
+        # Liq-safety summary: min safety ratio across open trades (stop / liq dist).
+        liq_safety_min = None
+        for t in opens:
+            liq_price = t.metadata.get("liq_price")
+            if liq_price and t.entry and t.current_stop:
+                stop_dist = abs(t.entry - t.current_stop)
+                liq_dist = abs(t.entry - liq_price)
+                if stop_dist > 0:
+                    ratio = liq_dist / stop_dist
+                    liq_safety_min = min(liq_safety_min, ratio) if liq_safety_min is not None else ratio
+
+        return jsonify({
+            "open_count": len(opens),
+            "max_open_trades": cfg.max_open_trades,
+            "slot_util_pct": round(slot_util_pct, 1),
+            "open_risk_usdt": round(open_risk, 4),
+            "open_risk_pct": round(open_risk_pct, 2),
+            "open_notional": round(open_notional, 4),
+            "open_margin": round(open_margin, 4),
+            "margin_util_pct": round(margin_util_pct, 2),
+            "effective_leverage": round(eff_leverage, 2),
+            "free_margin": round(balance - open_margin, 4),
+            "free_margin_reserve_pct": cfg.free_margin_reserve_pct,
+            "slot_occupancy_avg_min": round(slot_occ_avg_min, 1),
+            "liq_safety_min": round(liq_safety_min, 2) if liq_safety_min is not None else None,
+            "missed_opportunity_resolved_n": missed_opp_n,
+            "balance": round(balance, 4),
+        })
+
     @app.route("/api/telegram")
     def telegram_health():
         hb = db.get_heartbeat("telegram")
