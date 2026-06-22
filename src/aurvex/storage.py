@@ -209,6 +209,38 @@ class Storage:
             return initial
         return float(bal)
 
+    def reset_for_new_epoch(self, initial_balance: float,
+                            label: str = "wave2") -> Dict[str, Any]:
+        """Reset trading data for a clean forward-test, preserving shadow rows.
+
+        Keeps  : shadows (resolved learning history — most valuable data)
+        Clears : trades, signal_events, funnel, balance_ledger, heartbeat, meta
+        Seeds  : new balance + new epoch stamp.
+
+        Engine must be stopped before calling; restart it after.
+        """
+        shadow_count = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM shadows").fetchone()["n"]
+        for table in ("trades", "signal_events", "funnel",
+                      "balance_ledger", "heartbeat", "meta"):
+            self.conn.execute(f"DELETE FROM {table}")
+        self.conn.commit()
+
+        self.set_meta("balance", initial_balance)
+        self.append_ledger(mode="paper", balance=initial_balance, change=0.0,
+                           reason="reset_init", trade_id=None)
+        epoch = {"label": label, "started_ms": int(time.time() * 1000),
+                 "id": new_id()}
+        self.set_meta("epoch", epoch)
+
+        return {
+            "shadows_kept": shadow_count,
+            "tables_cleared": ["trades", "signal_events", "funnel",
+                                "balance_ledger", "heartbeat"],
+            "new_balance": initial_balance,
+            "new_epoch": epoch,
+        }
+
     def ensure_epoch(self, label: str = "wave1") -> Dict[str, Any]:
         """Stamp this DB with an epoch marker the first time it is opened.
 

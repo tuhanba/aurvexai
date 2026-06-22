@@ -7,6 +7,7 @@ Usage:
     python main.py dashboard   # run the Flask dashboard on DASHBOARD_PORT
     python main.py demo        # fast synthetic end-to-end run (offline, ~40 cycles)
     python main.py backtest    # offline seeded backtest, prints metrics JSON
+    python main.py reset       # clear trades/funnel/signals, keep shadow data, new epoch
     python main.py telegram-test   # in-container Telegram diagnostic (getMe + send)
 
 All configuration comes from the environment / .env (see .env.example).
@@ -60,12 +61,41 @@ def main(argv: list) -> int:
         print(json.dumps(metrics, indent=2, default=str))
         return 0
 
+    if cmd == "reset":
+        return _run_reset(cfg)
+
     if cmd in ("telegram-test", "telegram_selftest"):
         return _telegram_selftest(cfg)
 
     print(f"unknown command: {cmd}\n")
     _print_help()
     return 2
+
+
+def _run_reset(cfg) -> int:
+    """Clear trading data, preserve shadow learner rows, seed a new epoch."""
+    from aurvex.storage import Storage
+
+    print("=== AurvexAI Epoch Reset ===")
+    print(f"DB             : {cfg.db_path}")
+    print(f"Shadows        : KEPT (learning history preserved)")
+    print(f"Trades / funnel / signals / ledger : CLEARED")
+    print(f"New balance    : {cfg.initial_paper_balance} USDT")
+    print()
+
+    db = Storage(cfg.db_path)
+    result = db.reset_for_new_epoch(cfg.initial_paper_balance, label="wave2")
+    db.close()
+
+    print(f"✓ Shadows preserved : {result['shadows_kept']} rows")
+    print(f"✓ Tables cleared    : {', '.join(result['tables_cleared'])}")
+    print(f"✓ New balance       : {result['new_balance']} USDT")
+    print(f"✓ New epoch         : {result['new_epoch']['label']} "
+          f"({result['new_epoch']['id']})")
+    print()
+    print("Done. Restart the engine:")
+    print("  docker compose restart engine")
+    return 0
 
 
 def _telegram_selftest(cfg) -> int:
