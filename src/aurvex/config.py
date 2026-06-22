@@ -209,9 +209,10 @@ class Config:
     db_path: str = field(default_factory=lambda: _str("DB_PATH", "data/aurvex.db"))
 
     # -- Dashboard ---------------------------------------------------------
-    # IF-1: bind to localhost by default; use SSH tunnel or a reverse proxy for
-    # remote access. Keeps the full account state off the public internet.
-    dashboard_host: str = field(default_factory=lambda: _str("DASHBOARD_HOST", "127.0.0.1"))
+    # IF-1: default 0.0.0.0 (all interfaces). For production security bind
+    # to 127.0.0.1 via DASHBOARD_HOST env var and access through SSH tunnel
+    # or a reverse proxy with auth/HTTPS.
+    dashboard_host: str = field(default_factory=lambda: _str("DASHBOARD_HOST", "0.0.0.0"))
     dashboard_port: int = field(default_factory=lambda: _int("DASHBOARD_PORT", 5000))
 
     # -- Telegram (secrets via env only) -----------------------------------
