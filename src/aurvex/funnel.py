@@ -14,6 +14,15 @@ from typing import Optional
 
 from .models import ALLOW, REJECT, WATCH, Decision, FunnelStats
 
+# IF-3: capacity gates block execution regardless of signal quality.
+# Any stage name NOT in this set is treated as a quality/strategy reject.
+CAPACITY_STAGES = frozenset({
+    "daily_loss_kill_switch",
+    "max_open_trades",
+    "duplicate",
+    "cooldown",
+})
+
 
 class FunnelLogger:
     def __init__(self):
@@ -38,16 +47,24 @@ class FunnelLogger:
             self.stats.watch_count += 1
             # Watch means score >= watchlist but < trade threshold.
             return
-        # REJECT - attribute to a stage.
+        # REJECT - attribute to a stage and a quality/capacity bucket.
         if d.failed_stage == "score_threshold":
+            self.stats.quality_reject_count += 1
             self.stats.add_reject(f"score_threshold:{d.reject_reason}")
         elif d.failed_stage == "risk":
             # Reached risk stage => passed score.
             self.stats.score_pass_count += 1
+            self.stats.quality_reject_count += 1
             self.stats.add_reject(f"risk:{d.reject_reason}")
         elif d.failed_stage:
+            if d.failed_stage in CAPACITY_STAGES:
+                self.stats.capacity_reject_count += 1
+            else:
+                # shadow_only, liquidity, spread, slippage, unknown → quality
+                self.stats.quality_reject_count += 1
             self.stats.add_reject(d.failed_stage)
         else:
+            self.stats.quality_reject_count += 1
             self.stats.add_reject("unknown")
 
     def mark_executed(self) -> None:

@@ -70,6 +70,18 @@ class DecisionEngine:
             return d
 
         # 2) Score threshold.
+        # 2a) Shadow-only setups: pass quality check but are observation-only.
+        #     They still score, track in shadow, and appear in the funnel —
+        #     only the execution step is blocked. Gated here so the shadow
+        #     learner can measure them against the full rejected population.
+        if signal.setup_type in cfg.shadow_only_setups:
+            d.decision = REJECT
+            d.failed_stage = "shadow_only"
+            d.reject_reason = (f"{signal.setup_type} is shadow-only "
+                               f"(Wave 2 observation — not traded)")
+            d.reason = "shadow_only"
+            return d
+
         if signal.score < cfg.trade_threshold:
             if signal.score >= cfg.watchlist_threshold:
                 d.decision = WATCH

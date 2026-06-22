@@ -149,6 +149,17 @@ class Storage:
                 "WHERE (margin_used IS NULL OR margin_used = 0) AND leverage > 0")
             self.conn.commit()
 
+        # IF-3: quality/capacity reject split columns in funnel table.
+        funnel_cols = {r["name"] for r in
+                       self.conn.execute("PRAGMA table_info(funnel)").fetchall()}
+        if "quality_reject" not in funnel_cols:
+            self.conn.execute(
+                "ALTER TABLE funnel ADD COLUMN quality_reject INTEGER DEFAULT 0")
+        if "capacity_reject" not in funnel_cols:
+            self.conn.execute(
+                "ALTER TABLE funnel ADD COLUMN capacity_reject INTEGER DEFAULT 0")
+        self.conn.commit()
+
         # Shadow dedup columns + unique index (Wave 1 / T3). Additive only.
         shadow_cols = {r["name"] for r in
                        self.conn.execute("PRAGMA table_info(shadows)").fetchall()}
@@ -307,11 +318,13 @@ class Storage:
         self.conn.execute(
             "INSERT INTO funnel(ts,scanned,candidates,setups_detected,score_pass,"
             "risk_pass,decision_allow,executed,rejected,watch,top_reject_reasons,"
-            "last_trade_minutes_ago,cycle_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "last_trade_minutes_ago,cycle_ms,quality_reject,capacity_reject) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (f.ts, f.scanned_count, f.candidate_count, f.setup_detected_count,
              f.score_pass_count, f.risk_pass_count, f.decision_allow_count,
              f.executed_count, f.rejected_count, f.watch_count,
-             json.dumps(f.top_reject_reasons()), f.last_trade_minutes_ago, f.cycle_ms))
+             json.dumps(f.top_reject_reasons()), f.last_trade_minutes_ago, f.cycle_ms,
+             f.quality_reject_count, f.capacity_reject_count))
         self.conn.commit()
 
     def latest_funnel(self) -> Optional[Dict[str, Any]]:

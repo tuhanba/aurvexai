@@ -276,6 +276,11 @@ class FunnelStats:
     reject_reasons: Dict[str, int] = field(default_factory=dict)
     last_trade_minutes_ago: Optional[float] = None
     cycle_ms: float = 0.0
+    # IF-3: split rejects into capacity gates (slot/cooldown/duplicate/kill-switch)
+    # vs quality gates (liquidity/spread/slippage/score/risk/shadow-only).
+    # Separates "dull market / bad signal" from "full portfolio / no room".
+    quality_reject_count: int = 0
+    capacity_reject_count: int = 0
 
     def add_reject(self, reason: str) -> None:
         self.rejected_count += 1
