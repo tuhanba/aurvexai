@@ -330,6 +330,28 @@ class Storage:
             "new_epoch": epoch,
         }
 
+    def reset_balance_only(self, initial_balance: float) -> Dict[str, Any]:
+        """Reset only the paper balance. Keeps ALL trade, shadow, and funnel data.
+
+        Use this when you want a clean balance without losing historical trade
+        records. Engine should be stopped before calling; restart after.
+        """
+        old_balance = self.get_balance()
+        self.set_meta("balance", initial_balance)
+        self.append_ledger(mode="paper", balance=initial_balance,
+                           change=initial_balance - old_balance,
+                           reason="balance_reset_only", trade_id=None)
+        trade_count = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM trades").fetchone()["n"]
+        shadow_count = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM shadows").fetchone()["n"]
+        return {
+            "old_balance": old_balance,
+            "new_balance": initial_balance,
+            "trades_kept": trade_count,
+            "shadows_kept": shadow_count,
+        }
+
     def ensure_epoch(self, label: str = "wave1") -> Dict[str, Any]:
         """Stamp this DB with an epoch marker the first time it is opened.
 

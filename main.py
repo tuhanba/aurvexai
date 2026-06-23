@@ -64,6 +64,9 @@ def main(argv: list) -> int:
     if cmd == "reset":
         return _run_reset(cfg)
 
+    if cmd == "balance-reset":
+        return _run_balance_reset(cfg)
+
     if cmd in ("telegram-test", "telegram_selftest"):
         return _telegram_selftest(cfg)
 
@@ -92,6 +95,30 @@ def _run_reset(cfg) -> int:
     print(f"✓ New balance       : {result['new_balance']} USDT")
     print(f"✓ New epoch         : {result['new_epoch']['label']} "
           f"({result['new_epoch']['id']})")
+    print()
+    print("Done. Restart the engine:")
+    print("  docker compose restart engine")
+    return 0
+
+
+def _run_balance_reset(cfg) -> int:
+    """Reset only the paper balance, keep all trades and shadow data."""
+    from aurvex.storage import Storage
+
+    print("=== AurvexAI Balance Reset ===")
+    print(f"DB             : {cfg.db_path}")
+    print(f"Trades / shadows / funnel : KEPT")
+    print(f"Balance only   : reset to {cfg.initial_paper_balance} USDT")
+    print()
+
+    db = Storage(cfg.db_path)
+    result = db.reset_balance_only(cfg.initial_paper_balance)
+    db.close()
+
+    print(f"✓ Old balance   : {result['old_balance']:.4f} USDT")
+    print(f"✓ New balance   : {result['new_balance']} USDT")
+    print(f"✓ Trades kept   : {result['trades_kept']} rows")
+    print(f"✓ Shadows kept  : {result['shadows_kept']} rows")
     print()
     print("Done. Restart the engine:")
     print("  docker compose restart engine")
