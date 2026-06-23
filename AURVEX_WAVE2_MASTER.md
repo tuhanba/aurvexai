@@ -111,9 +111,28 @@ Branch: `claude/wave3-integrity-first-nv0f9k`
 
 ---
 
-## Block B — Cohorts + Shadow integrity
+## Block B — Cohorts + Shadow integrity (minimal)
 
-*(to be filled after Block A gate)*
+Branch: `w3-blockB-cohorts`
+
+### W3-T2 — Shadow cohort ayrımı (minimal)
+- [x] `shadows` tablosuna `epoch TEXT DEFAULT 'legacy'` kolonu eklendi
+- [x] `_migrate()`: mevcut satırlar `ts >= epoch['started_ms']` ise current epoch label'ı, aksi 'legacy'
+- [x] `track_signal`: yeni satırlar `epoch = current_epoch` ile tag'lenir
+- [x] `stats(epoch=...)`: epoch filtresi + default = current epoch (legacy ayrı gösterilir)
+- [x] `effective_independent_episodes`: distinct `(symbol|side|setup_type|signal_bar_ts)` count — 15k satır ≠ 15k bağımsız sinyal
+
+### W3-T3 — Shadow observe-only güvencesi + A/B recorder
+- [x] Guard test: `SHADOW_APPLY=true` olsa bile `position_size/leverage/max_loss` değişmiyor (RiskManager shadow'dan izole)
+- [x] `SHADOW_APPLY=false` default — `.env.example`'da zaten mevcut, confirm edildi
+- [x] `shadow_ab` tablosu: her resolved episode'da `risk_multiplier_would_be`, `score_delta_would_be`, `actual_outcome`, `actual_net_r` log'lanır (sizing etkisi sıfır)
+- [x] `storage.insert_shadow_ab()` metodu eklendi
+
+### Gate B ✅
+- [x] Cohort'lar ayrılabilir (legacy ≠ wave epoch)
+- [x] Shadow'un sizing üzerinde sıfır yetkisi test ile kanıtlandı
+- [x] A/B ledger birikmeye başladı
+- [x] **179 test yeşil** (171 → 179)
 
 ---
 
