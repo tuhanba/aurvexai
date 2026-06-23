@@ -29,6 +29,7 @@ def _base_cfg(**kwargs) -> Config:
     cfg.min_quote_volume_24h = 0.0
     cfg.trade_threshold = 60.0
     cfg.watchlist_threshold = 50.0
+    cfg.trade_hours_utc = []
     for k, v in kwargs.items():
         setattr(cfg, k, v)
     return cfg

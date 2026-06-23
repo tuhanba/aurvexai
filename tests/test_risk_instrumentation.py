@@ -22,6 +22,7 @@ def _cfg(**kwargs) -> Config:
     cfg.telegram_enabled = False
     cfg.initial_paper_balance = 1000.0
     cfg.min_quote_volume_24h = 0.0
+    cfg.trade_hours_utc = []
     for k, v in kwargs.items():
         setattr(cfg, k, v)
     return cfg

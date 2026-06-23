@@ -22,6 +22,8 @@ def cfg(tmp_path):
     c.watchlist_threshold = 50.0
     # Keep guards permissive so unit tests exercise the intended branch.
     c.min_quote_volume_24h = 0.0
+    # Disable time-based filters so tests are not affected by server clock / .env
+    c.trade_hours_utc = []
     return c
 
 
