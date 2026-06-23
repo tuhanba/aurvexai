@@ -27,6 +27,7 @@ def _cfg(tmp_path, **kwargs) -> Config:
     cfg.trade_threshold = 60.0
     cfg.watchlist_threshold = 50.0
     cfg.shadow_min_score = 45.0
+    cfg.trade_hours_utc = []   # disable hours filter regardless of server .env
     for k, v in kwargs.items():
         setattr(cfg, k, v)
     return cfg
