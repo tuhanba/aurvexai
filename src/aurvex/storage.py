@@ -37,7 +37,9 @@ CREATE TABLE IF NOT EXISTS trades (
     max_loss REAL, status TEXT,
     open_time INTEGER, close_time INTEGER, close_price REAL, close_reason TEXT,
     remaining_fraction REAL, realized_pnl REAL, realized_pnl_pct REAL,
-    fees_paid REAL, metadata TEXT, margin_used REAL DEFAULT 0
+    fees_paid REAL, metadata TEXT, margin_used REAL DEFAULT 0,
+    target_risk_amount REAL DEFAULT 0, actual_risk_amount REAL DEFAULT 0,
+    risk_utilisation_pct REAL DEFAULT 0, clip_reason TEXT DEFAULT 'none'
 );
 CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);
 CREATE INDEX IF NOT EXISTS idx_trades_open_time ON trades(open_time);
@@ -88,6 +90,7 @@ CREATE TABLE IF NOT EXISTS meta (
 
 
 def _trade_to_row(t: Trade) -> tuple:
+    meta = t.metadata
     return (
         t.id, t.mode, t.symbol, t.side, t.setup_type, t.score, t.threshold,
         t.entry, t.stop_loss,
@@ -95,7 +98,11 @@ def _trade_to_row(t: Trade) -> tuple:
         t.position_size, t.risk_pct, t.leverage, t.max_loss, t.status,
         t.open_time, t.close_time, t.close_price, t.close_reason,
         t.remaining_fraction, t.realized_pnl, t.realized_pnl_pct,
-        t.fees_paid, json.dumps(t.metadata), t.margin_used,
+        t.fees_paid, json.dumps(meta), t.margin_used,
+        meta.get("target_risk_amount", 0.0),
+        meta.get("actual_risk_amount", 0.0),
+        meta.get("risk_utilisation_pct", 0.0),
+        meta.get("clip_reason", "none"),
     )
 
 
@@ -104,6 +111,17 @@ def _row_to_trade(r: sqlite3.Row) -> Trade:
                for p, f, h in json.loads(r["tp_targets"])]
     keys = r.keys()
     margin_used = r["margin_used"] if "margin_used" in keys and r["margin_used"] is not None else 0.0
+    metadata = json.loads(r["metadata"])
+    # W3-T1: backfill instrumentation fields from dedicated columns into metadata
+    # so callers can read them uniformly from trade.metadata.
+    if "target_risk_amount" in keys and r["target_risk_amount"] is not None:
+        metadata.setdefault("target_risk_amount", r["target_risk_amount"])
+    if "actual_risk_amount" in keys and r["actual_risk_amount"] is not None:
+        metadata.setdefault("actual_risk_amount", r["actual_risk_amount"])
+    if "risk_utilisation_pct" in keys and r["risk_utilisation_pct"] is not None:
+        metadata.setdefault("risk_utilisation_pct", r["risk_utilisation_pct"])
+    if "clip_reason" in keys and r["clip_reason"] is not None:
+        metadata.setdefault("clip_reason", r["clip_reason"])
     return Trade(
         id=r["id"], mode=r["mode"], symbol=r["symbol"], side=r["side"],
         setup_type=r["setup_type"], score=r["score"], threshold=r["threshold"],
@@ -114,7 +132,7 @@ def _row_to_trade(r: sqlite3.Row) -> Trade:
         close_price=r["close_price"], close_reason=r["close_reason"],
         remaining_fraction=r["remaining_fraction"], realized_pnl=r["realized_pnl"],
         realized_pnl_pct=r["realized_pnl_pct"], fees_paid=r["fees_paid"],
-        metadata=json.loads(r["metadata"]), margin_used=margin_used,
+        metadata=metadata, margin_used=margin_used,
     )
 
 
@@ -148,6 +166,24 @@ class Storage:
                 "UPDATE trades SET margin_used = position_size / leverage "
                 "WHERE (margin_used IS NULL OR margin_used = 0) AND leverage > 0")
             self.conn.commit()
+
+        # W3-T1: sizing instrumentation columns.
+        if "target_risk_amount" not in cols:
+            self.conn.execute(
+                "ALTER TABLE trades ADD COLUMN target_risk_amount REAL DEFAULT 0")
+        if "actual_risk_amount" not in cols:
+            self.conn.execute(
+                "ALTER TABLE trades ADD COLUMN actual_risk_amount REAL DEFAULT 0")
+        if "risk_utilisation_pct" not in cols:
+            self.conn.execute(
+                "ALTER TABLE trades ADD COLUMN risk_utilisation_pct REAL DEFAULT 0")
+        if "clip_reason" not in cols:
+            self.conn.execute(
+                "ALTER TABLE trades ADD COLUMN clip_reason TEXT DEFAULT 'none'")
+            # Backfill pre-T1 rows so they are distinguishable from post-T1 rows.
+            self.conn.execute(
+                "UPDATE trades SET clip_reason='legacy' WHERE clip_reason IS NULL OR clip_reason='none'")
+        self.conn.commit()
 
         # IF-3: quality/capacity reject split columns in funnel table.
         funnel_cols = {r["name"] for r in
@@ -285,8 +321,9 @@ class Storage:
         cols = ("id,mode,symbol,side,setup_type,score,threshold,entry,stop_loss,"
                 "tp_targets,position_size,risk_pct,leverage,max_loss,status,"
                 "open_time,close_time,close_price,close_reason,remaining_fraction,"
-                "realized_pnl,realized_pnl_pct,fees_paid,metadata,margin_used")
-        placeholders = ",".join(["?"] * 25)
+                "realized_pnl,realized_pnl_pct,fees_paid,metadata,margin_used,"
+                "target_risk_amount,actual_risk_amount,risk_utilisation_pct,clip_reason")
+        placeholders = ",".join(["?"] * 29)
         update = ",".join(f"{c}=excluded.{c}" for c in cols.split(","))
         self.conn.execute(
             f"INSERT INTO trades({cols}) VALUES({placeholders}) "

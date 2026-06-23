@@ -99,6 +99,12 @@ class DecisionEngine:
         # 3) Risk evaluation / sizing.
         rr = self.risk.evaluate(signal, snap, pf.balance, pf.open_notional,
                                 open_margin=pf.open_margin, open_count=pf.open_count)
+        # W3-T1: stash instrumentation fields regardless of allowed/rejected so
+        # REJECTED signals also carry them into signal_events.metadata.
+        d.metadata["target_risk_amount"] = rr.target_risk_amount
+        d.metadata["actual_risk_amount"] = rr.actual_risk_amount
+        d.metadata["risk_utilisation_pct"] = rr.risk_utilisation_pct
+        d.metadata["clip_reason"] = rr.clip_reason
         if not rr.allowed:
             d.decision = REJECT
             d.failed_stage = "risk"

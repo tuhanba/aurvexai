@@ -73,16 +73,29 @@ class BaseNotifier:
     def system_stopped(self, reason: str = "") -> None:
         self.send(f"\U0001F534 AurvexAI stopped\n{reason}".rstrip())
 
-    def trade_opened(self, t) -> None:
-        risk_usdt = t.metadata.get("risk_amount", t.max_loss)
-        liq = t.metadata.get("liq_price", 0.0)
-        stop_dist = abs(t.entry - t.stop_loss) / t.entry * 100.0 if t.entry else 0.0
-        liq_line = f"  liq~: {liq:.6g}" if liq else ""
+    def trade_opened(self, t, balance: float = 0.0) -> None:
+        """Send trade-opened alert with six distinct leverage-concept numbers (T1b)."""
+        liq = t.metadata.get("liq_price", 0.0) or 0.0
+        entry = t.entry or 0.0
+        stop_dist_pct = abs(entry - t.stop_loss) / entry * 100.0 if entry else 0.0
+        liq_dist_pct = abs(entry - liq) / entry * 100.0 if (entry and liq) else 0.0
+        actual_risk = t.metadata.get("actual_risk_amount", t.max_loss) or t.max_loss
+        margin_used = t.margin_used or (t.position_size / (t.leverage or 1))
+        account_risk_pct = (actual_risk / balance * 100.0) if balance else t.risk_pct
+        margin_roe_pct = (actual_risk / margin_used * 100.0) if margin_used else 0.0
         self.send(
-            f"\U0001F4C8 OPEN {t.side} {t.symbol}\nsetup: {t.setup_type}  score: {t.score:.0f}\n"
-            f"entry: {t.entry:.6g}  stop: {t.stop_loss:.6g}{liq_line}\n"
-            f"notional: {t.position_size:.2f} USDT  lev: {t.leverage}x  margin: {t.margin_used:.2f} USDT\n"
-            f"risk: {risk_usdt:.2f} USDT ({t.risk_pct:.2f}%)  stop dist: {stop_dist:.2f}%")
+            f"\U0001F4C8 OPEN {t.side} {t.symbol}\n"
+            f"setup: {t.setup_type}  score: {t.score:.0f}\n"
+            f"entry: {entry:.6g}  stop: {t.stop_loss:.6g}\n"
+            f"notional: {t.position_size:.2f} USDT  lev: {t.leverage}x  "
+            f"margin: {margin_used:.2f} USDT\n"
+            f"--- leverage concepts (distinct) ---\n"
+            f"  stop dist (price move): {stop_dist_pct:.2f}%\n"
+            f"  acct risk:              {account_risk_pct:.3f}% of equity "
+            f"({actual_risk:.3f} USDT)\n"
+            f"  margin roe at stop:     {margin_roe_pct:.2f}%\n"
+            f"  liq dist:               {liq_dist_pct:.2f}% from entry"
+        )
 
     def trade_event(self, t, kind: str, price: float, pnl: float) -> None:
         emoji = "✅" if pnl >= 0 else "❌"

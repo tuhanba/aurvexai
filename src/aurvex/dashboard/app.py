@@ -35,17 +35,40 @@ from ..shadow import ShadowLearner
 from ..storage import Storage
 
 
-def _trade_dict(t) -> Dict[str, Any]:
-    stop_dist_pct = (abs(t.entry - t.stop_loss) / t.entry * 100.0) if t.entry else 0.0
+def _trade_dict(t, balance: float = 0.0) -> Dict[str, Any]:
+    """Serialize a Trade to a dict, including the six distinct leverage-concept numbers.
+
+    T1b: price_move_to_stop_pct, account_risk_pct, margin_roe_at_stop_pct,
+    notional (position_size), leverage, liq_distance_pct are shown as DISTINCT
+    numbers so the dashboard never conflates them.
+    """
+    entry = t.entry or 0.0
+    stop_dist_pct = (abs(entry - t.stop_loss) / entry * 100.0) if entry else 0.0
+    liq_price = t.metadata.get("liq_price", 0.0) or 0.0
+    liq_dist_pct = (abs(entry - liq_price) / entry * 100.0) if (entry and liq_price) else 0.0
+    actual_risk = t.metadata.get("actual_risk_amount", t.max_loss) or t.max_loss
+    margin_used = t.margin_used or (t.position_size / (t.leverage or 1))
+    account_risk_pct = (actual_risk / balance * 100.0) if balance else t.risk_pct
+    margin_roe_pct = (actual_risk / margin_used * 100.0) if margin_used else 0.0
     return {
         "id": t.id, "symbol": t.symbol, "side": t.side, "setup_type": t.setup_type,
-        "entry": t.entry, "stop_loss": t.stop_loss, "current_stop": t.current_stop,
+        "entry": entry, "stop_loss": t.stop_loss, "current_stop": t.current_stop,
         "position_size": round(t.position_size, 2), "leverage": t.leverage,
-        "margin_used": round(t.margin_used, 2),
-        "liq_price": round(t.metadata.get("liq_price", 0.0), 8),
+        "margin_used": round(margin_used, 2),
+        "liq_price": round(liq_price, 8),
         "risk_usdt": round(t.metadata.get("risk_amount", t.max_loss), 4),
         "risk_pct": round(t.risk_pct, 4),
         "stop_dist_pct": round(stop_dist_pct, 4),
+        # T1b — six distinct leverage-concept numbers (never conflated)
+        "price_move_to_stop_pct": round(stop_dist_pct, 4),
+        "account_risk_pct": round(account_risk_pct, 4),
+        "margin_roe_at_stop_pct": round(margin_roe_pct, 4),
+        "liq_distance_pct": round(liq_dist_pct, 4),
+        # T1 instrumentation
+        "clip_reason": t.metadata.get("clip_reason", "none"),
+        "risk_utilisation_pct": round(t.metadata.get("risk_utilisation_pct", 0.0), 2),
+        "target_risk_amount": round(t.metadata.get("target_risk_amount", 0.0), 4),
+        "actual_risk_amount": round(actual_risk, 4),
         "score": t.score, "status": t.status, "mode": t.mode,
         "remaining_fraction": round(t.remaining_fraction, 3),
         "realized_pnl": round(t.realized_pnl, 4),
@@ -105,11 +128,14 @@ def create_app(cfg=None) -> Flask:
 
     @app.route("/api/trades/open")
     def trades_open():
-        return jsonify({"trades": [_trade_dict(t) for t in db.get_open_trades(mode=cfg.mode)]})
+        balance = db.get_balance()
+        return jsonify({"trades": [_trade_dict(t, balance=balance)
+                                   for t in db.get_open_trades(mode=cfg.mode)]})
 
     @app.route("/api/trades/closed")
     def trades_closed():
-        return jsonify({"trades": [_trade_dict(t)
+        balance = db.get_balance()
+        return jsonify({"trades": [_trade_dict(t, balance=balance)
                                    for t in db.get_closed_trades(limit=100, mode=cfg.mode)]})
 
     @app.route("/api/metrics")
@@ -190,6 +216,22 @@ def create_app(cfg=None) -> Flask:
                     ratio = liq_dist / stop_dist
                     liq_safety_min = min(liq_safety_min, ratio) if liq_safety_min is not None else ratio
 
+        # T1 portfolio-level instrumentation: risk utilisation + clip breakdown.
+        sum_actual = sum(t.metadata.get("actual_risk_amount", t.max_loss) for t in opens)
+        sum_target = sum(t.metadata.get("target_risk_amount", t.max_loss) for t in opens)
+        portfolio_risk_util_pct = (sum_actual / sum_target * 100.0) if sum_target > 0 else 0.0
+        exposure_pct = (open_notional / balance * 100.0) if balance else 0.0
+        clip_breakdown: Dict[str, int] = {}
+        for t in opens:
+            reason = t.metadata.get("clip_reason", "none")
+            clip_breakdown[reason] = clip_breakdown.get(reason, 0) + 1
+        # Session-level clip breakdown (all trades this epoch, not just open)
+        session_clip_rows = db.conn.execute(
+            "SELECT clip_reason, COUNT(*) AS n FROM trades GROUP BY clip_reason"
+        ).fetchall()
+        session_clip_breakdown = {r["clip_reason"] or "none": r["n"]
+                                  for r in session_clip_rows}
+
         return jsonify({
             "open_count": len(opens),
             "max_open_trades": cfg.max_open_trades,
@@ -206,6 +248,11 @@ def create_app(cfg=None) -> Flask:
             "liq_safety_min": round(liq_safety_min, 2) if liq_safety_min is not None else None,
             "missed_opportunity_resolved_n": missed_opp_n,
             "balance": round(balance, 4),
+            # T1b portfolio instrumentation
+            "exposure_pct": round(exposure_pct, 2),
+            "portfolio_risk_util_pct": round(portfolio_risk_util_pct, 2),
+            "open_clip_breakdown": clip_breakdown,
+            "session_clip_breakdown": session_clip_breakdown,
         })
 
     @app.route("/api/telegram")
