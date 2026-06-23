@@ -12,6 +12,7 @@ Tables:
   signal_events  - every decision the engine made (ALLOW/REJECT/WATCH)
   funnel         - per-cycle observability counts
   shadows        - shadow-learner tracked outcomes (paper + rejected-high-score)
+  shadow_ab      - champion/challenger A/B ledger (W3-T3, never applied)
   heartbeat      - component liveness (engine/scanner) + last status
   balance_ledger - balance changes over time
   meta           - small key/value store (current paper balance, etc.)
@@ -66,11 +67,29 @@ CREATE TABLE IF NOT EXISTS shadows (
     ts INTEGER, source TEXT, symbol TEXT, side TEXT, setup_type TEXT,
     score REAL, entry REAL, stop_loss REAL, tp1 REAL,
     outcome TEXT, outcome_time INTEGER, r_multiple REAL, bars INTEGER,
-    signal_bar_ts INTEGER DEFAULT 0, last_bar_ts INTEGER DEFAULT 0
+    signal_bar_ts INTEGER DEFAULT 0, last_bar_ts INTEGER DEFAULT 0,
+    epoch TEXT DEFAULT 'legacy'
 );
 CREATE INDEX IF NOT EXISTS idx_shadow_outcome ON shadows(outcome);
+-- idx_shadow_epoch is created in _migrate() after the epoch column is guaranteed
+-- to exist on legacy DBs.
 -- The dedup UNIQUE INDEX is created in Storage._migrate (after the columns are
 -- guaranteed to exist on legacy DBs); INSERT OR IGNORE relies on it.
+
+CREATE TABLE IF NOT EXISTS shadow_ab (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shadow_id TEXT NOT NULL,
+    resolved_ts INTEGER,
+    epoch TEXT DEFAULT 'legacy',
+    setup_type TEXT,
+    source TEXT,
+    score REAL,
+    risk_multiplier_would_be REAL,
+    score_delta_would_be REAL,
+    actual_outcome TEXT,
+    actual_net_r REAL
+);
+CREATE INDEX IF NOT EXISTS idx_shadow_ab_shadow_id ON shadow_ab(shadow_id);
 
 CREATE TABLE IF NOT EXISTS heartbeat (
     component TEXT PRIMARY KEY,
@@ -203,6 +222,40 @@ class Storage:
             self.conn.execute("ALTER TABLE shadows ADD COLUMN signal_bar_ts INTEGER DEFAULT 0")
         if "last_bar_ts" not in shadow_cols:
             self.conn.execute("ALTER TABLE shadows ADD COLUMN last_bar_ts INTEGER DEFAULT 0")
+        # W3-T2: epoch column. Backfill: rows at/after current epoch start → epoch
+        # label; rows before → 'legacy'. New rows are tagged at insert.
+        if "epoch" not in shadow_cols:
+            self.conn.execute("ALTER TABLE shadows ADD COLUMN epoch TEXT DEFAULT 'legacy'")
+            epoch_meta = self.get_meta("epoch")
+            if epoch_meta and epoch_meta.get("started_ms") and epoch_meta.get("label"):
+                label = epoch_meta["label"]
+                started = int(epoch_meta["started_ms"])
+                self.conn.execute(
+                    "UPDATE shadows SET epoch=? WHERE ts >= ?", (label, started))
+            # Index can only be created after the column exists.
+            try:
+                self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_shadow_epoch ON shadows(epoch)")
+            except sqlite3.Error:
+                pass
+            self.conn.commit()
+        # W3-T3: champion/challenger A/B table (always additive — create if not exists).
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS shadow_ab (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                shadow_id TEXT NOT NULL,
+                resolved_ts INTEGER,
+                epoch TEXT DEFAULT 'legacy',
+                setup_type TEXT,
+                source TEXT,
+                score REAL,
+                risk_multiplier_would_be REAL,
+                score_delta_would_be REAL,
+                actual_outcome TEXT,
+                actual_net_r REAL
+            );
+            CREATE INDEX IF NOT EXISTS idx_shadow_ab_shadow_id ON shadow_ab(shadow_id);
+        """)
         # The unique index dedups new-epoch rows. Legacy rows have signal_bar_ts=0
         # but SQLite treats every NULL/0 group key independently only for NULLs;
         # to avoid a build failure on a contaminated legacy table we create the
@@ -413,15 +466,28 @@ class Storage:
         cur = self.conn.execute(
             "INSERT OR IGNORE INTO shadows(id,ts,source,symbol,side,setup_type,score,"
             "entry,stop_loss,tp1,outcome,outcome_time,r_multiple,bars,"
-            "signal_bar_ts,last_bar_ts) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "signal_bar_ts,last_bar_ts,epoch) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (row["id"], row["ts"], row["source"], row["symbol"], row["side"],
              row["setup_type"], row["score"], row["entry"], row["stop_loss"],
              row["tp1"], row.get("outcome", OPEN), row.get("outcome_time"),
              row.get("r_multiple"), row.get("bars", 0),
-             row.get("signal_bar_ts", 0), row.get("last_bar_ts", 0)))
+             row.get("signal_bar_ts", 0), row.get("last_bar_ts", 0),
+             row.get("epoch", "legacy")))
         self.conn.commit()
         return cur.rowcount > 0
+
+    def insert_shadow_ab(self, row: Dict[str, Any]) -> None:
+        """Log a champion/challenger A/B entry for a resolved shadow episode."""
+        self.conn.execute(
+            "INSERT INTO shadow_ab(shadow_id,resolved_ts,epoch,setup_type,source,"
+            "score,risk_multiplier_would_be,score_delta_would_be,"
+            "actual_outcome,actual_net_r) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (row["shadow_id"], row.get("resolved_ts"), row.get("epoch", "legacy"),
+             row.get("setup_type"), row.get("source"), row.get("score"),
+             row.get("risk_multiplier_would_be"), row.get("score_delta_would_be"),
+             row.get("actual_outcome"), row.get("actual_net_r")))
+        self.conn.commit()
 
     def update_shadow(self, shadow_id: str, outcome: str, outcome_time: int,
                       r_multiple: float, bars: int,

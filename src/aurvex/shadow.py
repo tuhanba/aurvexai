@@ -40,6 +40,13 @@ class ShadowLearner:
         self.db = storage
 
     # -- tracking ----------------------------------------------------------
+    def _current_epoch(self) -> str:
+        """Return the current epoch label from meta, fallback 'legacy'."""
+        epoch_meta = self.db.get_meta("epoch")
+        if epoch_meta and epoch_meta.get("label"):
+            return epoch_meta["label"]
+        return "legacy"
+
     def track_signal(self, signal: Signal, decision: Decision, source: str,
                      signal_bar_ts: Optional[int] = None) -> Optional[str]:
         """Register a signal for shadow tracking. Returns shadow id or None.
@@ -73,6 +80,7 @@ class ShadowLearner:
             "side": signal.side, "setup_type": signal.setup_type, "score": signal.score,
             "entry": entry, "stop_loss": stop, "tp1": tp1, "outcome": OPEN, "bars": 0,
             "signal_bar_ts": sig_ts, "last_bar_ts": sig_ts,
+            "epoch": self._current_epoch(),
         })
         return sid if inserted else None
 
@@ -144,8 +152,24 @@ class ShadowLearner:
             else:
                 gross_r = (entry - exit_price) / risk
             net_r = gross_r - self._cost_r(entry, stop)
-            self.db.update_shadow(sh["id"], outcome, now_ms(), round(net_r, 4), bars,
+            resolve_ts = now_ms()
+            self.db.update_shadow(sh["id"], outcome, resolve_ts, round(net_r, 4), bars,
                                   last_bar_ts=bar.ts)
+
+            # W3-T3: champion/challenger A/B log — what WOULD have happened if
+            # shadow advisory had been applied. Never influences sizing here.
+            self.db.insert_shadow_ab({
+                "shadow_id": sh["id"],
+                "resolved_ts": resolve_ts,
+                "epoch": sh.get("epoch", "legacy"),
+                "setup_type": sh["setup_type"],
+                "source": sh["source"],
+                "score": sh["score"],
+                "risk_multiplier_would_be": self.risk_multiplier(sh["setup_type"]),
+                "score_delta_would_be": self.score_delta(sh["setup_type"]),
+                "actual_outcome": outcome,
+                "actual_net_r": round(net_r, 4),
+            })
             resolved += 1
         return resolved
 
@@ -300,13 +324,26 @@ class ShadowLearner:
         return results
 
     # -- stats & advisory outputs -----------------------------------------
-    def _resolved_rows(self) -> List[Dict[str, Any]]:
-        rows = self.db.conn.execute(
-            "SELECT * FROM shadows WHERE outcome != ?", (OPEN,)).fetchall()
+    def _resolved_rows(self, epoch: Optional[str] = None) -> List[Dict[str, Any]]:
+        if epoch:
+            rows = self.db.conn.execute(
+                "SELECT * FROM shadows WHERE outcome != ? AND epoch=?",
+                (OPEN, epoch)).fetchall()
+        else:
+            rows = self.db.conn.execute(
+                "SELECT * FROM shadows WHERE outcome != ?", (OPEN,)).fetchall()
         return [dict(r) for r in rows]
 
-    def stats(self) -> Dict[str, Any]:
-        rows = self._resolved_rows()
+    def stats(self, epoch: Optional[str] = None) -> Dict[str, Any]:
+        """Return shadow statistics, optionally filtered by epoch.
+
+        Default (epoch=None): returns current epoch stats so the dashboard
+        shows the clean forward-test data, not the legacy 15k rows.
+        Legacy rows are shown separately when epoch='legacy'.
+        """
+        current_epoch = self._current_epoch()
+        effective_epoch = epoch if epoch is not None else current_epoch
+        rows = self._resolved_rows(epoch=effective_epoch)
         total = len(rows)
         stage = self._stage(total)
         by_setup: Dict[str, Dict[str, Any]] = {}
@@ -330,15 +367,35 @@ class ShadowLearner:
                 "risk_multiplier": self.risk_multiplier(s),
             })
         setup_summary.sort(key=lambda x: x["avg_r"], reverse=True)
+
+        # Episode-independence: distinct (symbol, side, setup_type, signal_bar_ts)
+        # 15k satır ≠ 15k bağımsız sinyal — rescan'lar aynı bar_ts'i tekrar görür.
+        if effective_epoch:
+            ep_row = self.db.conn.execute(
+                "SELECT COUNT(DISTINCT symbol || '|' || side || '|' || "
+                "setup_type || '|' || signal_bar_ts) AS n "
+                "FROM shadows WHERE epoch=?", (effective_epoch,)).fetchone()
+        else:
+            ep_row = self.db.conn.execute(
+                "SELECT COUNT(DISTINCT symbol || '|' || side || '|' || "
+                "setup_type || '|' || signal_bar_ts) AS n FROM shadows").fetchone()
+        independent_episodes = int(ep_row["n"]) if ep_row else 0
+
+        # Legacy cohort summary (shown separately, labelled as not comparable)
+        legacy_row = self.db.conn.execute(
+            "SELECT COUNT(*) AS n FROM shadows WHERE epoch='legacy'").fetchone()
+        legacy_total = int(legacy_row["n"]) if legacy_row else 0
+
         return {
+            "epoch": effective_epoch,
             "resolved_total": total,
+            "effective_independent_episodes": independent_episodes,
             "open_total": len(self.db.open_shadows()),
             "stage": stage,
             "by_setup": setup_summary,
             "raw_breakdown": self.db.shadow_stats()["breakdown"],
-            # Be explicit about what avg_r means: this is a closed-bar proxy, not
-            # the engine's real expectancy (no partial scale-out / BE / stop
-            # trail / TP2-3). Real expectancy comes from the Wave-2 replay.
+            "legacy_total": legacy_total,
+            "legacy_note": "legacy rows pre-date current epoch — not comparable to forward-test",
             "basis": ("TP1-first vs SL on closed bars, R net of round-trip cost — "
                       "a proxy, NOT full-strategy expectancy."),
         }
