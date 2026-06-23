@@ -10,6 +10,34 @@ from aurvex.config import Config
 from aurvex.models import (LONG, SHORT, Candle, MarketSnapshot, OrderBook,
                            Signal, now_ms)
 
+# ---------------------------------------------------------------------------
+# Isolate the test-suite from the operator's runtime .env.
+#
+# config.py calls load_dotenv() at import (already triggered by the Config
+# import above), so any *optional gate* the operator sets in the live server's
+# .env would leak into every Config() a test builds — silently flipping
+# ALLOW/WATCH decisions to REJECT and breaking unrelated tests. (This already
+# bit us once with TRADE_HOURS_UTC, and again with SHADOW_ONLY_SETUPS: a server
+# .env of SHADOW_ONLY_SETUPS=momentum_breakout turns every make_signal() into a
+# shadow_only REJECT.)
+#
+# These knobs all default to OFF / a fixed value in code, and tests assume that
+# default (tests that exercise a gate set it explicitly or via monkeypatch).
+# Strip them here, once, after load_dotenv() and before any Config() is built,
+# so the suite is reproducible regardless of where it runs.
+_ENV_GATES_DEFAULT_OFF = (
+    "SHADOW_ONLY_SETUPS",       # -> shadow_only REJECT gate (default [])
+    "TRADE_HOURS_UTC",          # -> trading-hours filter    (default [])
+    "MIN_HTF_ADX_TREND",        # -> ADX trend gate          (default 0.0 = off)
+    "GLOBAL_RANKING",           # -> two-pass ranking        (default False)
+    "RANK_KEY",                 # -> ranking key             (default "composite")
+    "MAX_PER_CLUSTER",          # -> cluster slot cap        (default 0 = off)
+    "MAX_CLUSTER_EXPOSURE_PCT",  # -> cluster exposure cap    (default 0.0 = off)
+    "MAX_SAME_SIDE",            # -> per-side open cap        (default 0 = off)
+)
+for _k in _ENV_GATES_DEFAULT_OFF:
+    os.environ.pop(_k, None)
+
 
 @pytest.fixture
 def cfg(tmp_path):
@@ -22,8 +50,10 @@ def cfg(tmp_path):
     c.watchlist_threshold = 50.0
     # Keep guards permissive so unit tests exercise the intended branch.
     c.min_quote_volume_24h = 0.0
-    # Disable time-based filters so tests are not affected by server clock / .env
+    # Keep optional gates off so tests are not affected by server clock / .env.
+    # (Belt-and-suspenders with the env strip above — also self-documents intent.)
     c.trade_hours_utc = []
+    c.shadow_only_setups = []
     return c
 
 
