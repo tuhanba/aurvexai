@@ -86,7 +86,12 @@ class BaseExecutor:
                       "stop_dist_frac": stop_dist_frac,
                       "entry_bar_ts": entry_bar_ts,
                       "last_processed_bar_ts": entry_bar_ts,
-                      "liq_price": decision.metadata.get("liq_price", 0.0)},
+                      "liq_price": decision.metadata.get("liq_price", 0.0),
+                      # W3-T1: instrumentation fields (observational only)
+                      "target_risk_amount": decision.metadata.get("target_risk_amount", 0.0),
+                      "actual_risk_amount": decision.metadata.get("actual_risk_amount", 0.0),
+                      "risk_utilisation_pct": decision.metadata.get("risk_utilisation_pct", 0.0),
+                      "clip_reason": decision.metadata.get("clip_reason", "none")},
         )
         return trade
 

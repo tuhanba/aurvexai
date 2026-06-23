@@ -43,6 +43,12 @@ class RiskResult:
     liq_price: float = 0.0       # estimated liquidation price (isolated approx)
     risk_pct: float = 0.0
     max_loss: float = 0.0
+    # W3-T1 observational fields (never affect sizing)
+    target_notional: float = 0.0          # notional pre-cap (pure risk formula)
+    target_risk_amount: float = 0.0       # balance * risk_pct/100 (the budget)
+    actual_risk_amount: float = 0.0       # final max_loss (fee-inclusive)
+    risk_utilisation_pct: float = 0.0     # actual / target * 100
+    clip_reason: str = "none"             # none | exposure_cap | min_notional | margin_cap
 
 
 @dataclass
@@ -116,14 +122,22 @@ class RiskManager:
         #     -1.0R, not the old -1.43R. Leverage never grows this notional/risk.
         rt_cost_frac = (cfg.taker_fee_pct + cfg.slippage_assumption_pct) / 100.0 * 2.0
         position_notional = risk_amount / (stop_dist_frac + rt_cost_frac)
+        target_notional = position_notional   # pre-cap, pure risk formula
+
+        # W3-T1: track clip reason at the exact branch that bounds the size.
+        clip_reason = "none"
 
         # (2) Portfolio NOTIONAL exposure cap.
         max_total = balance * (cfg.max_portfolio_exposure_pct / 100.0)
         room = max_total - open_notional
         if room <= 0:
-            return RiskResult(False, "portfolio exposure cap reached")
+            return RiskResult(False, "portfolio exposure cap reached",
+                              target_notional=target_notional,
+                              target_risk_amount=risk_amount,
+                              clip_reason="exposure_cap")
         if position_notional > room:
             position_notional = room
+            clip_reason = "exposure_cap"
 
         # (2b) Minimum notional floor — reject stub/micro trades that waste a
         #      slot. Triggered when the exposure-cap room is nearly full and the
@@ -131,19 +145,32 @@ class RiskManager:
         if position_notional < cfg.min_position_notional:
             return RiskResult(
                 False,
-                f"notional {position_notional:.2f} < min {cfg.min_position_notional:.2f}"
+                f"notional {position_notional:.2f} < min {cfg.min_position_notional:.2f}",
+                target_notional=target_notional,
+                target_risk_amount=risk_amount,
+                clip_reason="min_notional",
             )
 
         # (3) Dynamic, controlled leverage. See _solve_leverage for the model.
+        pre_lev_notional = position_notional
         lev_result = self._solve_leverage(position_notional, balance, open_margin,
                                           stop_dist_frac, open_count)
         if lev_result is None:
             return RiskResult(False,
                               f"no free margin within reserve (open margin "
-                              f"{open_margin:.2f}, balance {balance:.2f})")
+                              f"{open_margin:.2f}, balance {balance:.2f})",
+                              target_notional=target_notional,
+                              target_risk_amount=risk_amount,
+                              clip_reason=clip_reason)
         position_notional, leverage, margin_used = lev_result
         if position_notional <= 0:
-            return RiskResult(False, "position size collapses under margin/leverage constraints")
+            return RiskResult(False, "position size collapses under margin/leverage constraints",
+                              target_notional=target_notional,
+                              target_risk_amount=risk_amount,
+                              clip_reason=clip_reason)
+        # Detect if _solve_leverage shrunk notional (margin cap fired)
+        if clip_reason == "none" and position_notional < pre_lev_notional - 1e-9:
+            clip_reason = "margin_cap"
 
         # (4) Estimated liquidation price (isolated-margin approximation) and the
         #     liquidation-safety invariant: the stop must trigger before it.
@@ -170,6 +197,9 @@ class RiskManager:
         est_fee = position_notional * rt_cost_frac
         max_loss = actual_risk + est_fee
 
+        # W3-T1: observational fields (do not affect any sizing output above)
+        risk_util_pct = (max_loss / risk_amount * 100.0) if risk_amount > 0 else 0.0
+
         return RiskResult(
             allowed=True,
             entry=entry,
@@ -182,6 +212,11 @@ class RiskManager:
             liq_price=liq_price,
             risk_pct=risk_pct,
             max_loss=max_loss,
+            target_notional=target_notional,
+            target_risk_amount=risk_amount,
+            actual_risk_amount=max_loss,
+            risk_utilisation_pct=risk_util_pct,
+            clip_reason=clip_reason,
         )
 
     def _solve_leverage(self, notional: float, balance: float, open_margin: float,
