@@ -60,12 +60,68 @@ def main(argv: list) -> int:
         print(json.dumps(metrics, indent=2, default=str))
         return 0
 
+    if cmd == "reset":
+        return _run_reset(cfg)
+
+    if cmd == "balance-reset":
+        return _run_balance_reset(cfg)
+
     if cmd in ("telegram-test", "telegram_selftest"):
         return _telegram_selftest(cfg)
 
     print(f"unknown command: {cmd}\n")
     _print_help()
     return 2
+
+
+def _run_reset(cfg) -> int:
+    """Clear trading data, preserve shadow learner rows, seed a new epoch."""
+    from aurvex.storage import Storage
+
+    print("=== AurvexAI Epoch Reset ===")
+    print(f"DB             : {cfg.db_path}")
+    print(f"Shadows        : KEPT (learning history preserved)")
+    print(f"Trades / funnel / signals / ledger : CLEARED")
+    print(f"New balance    : {cfg.initial_paper_balance} USDT")
+    print()
+
+    db = Storage(cfg.db_path)
+    result = db.reset_for_new_epoch(cfg.initial_paper_balance, label="wave2")
+    db.close()
+
+    print(f"✓ Shadows preserved : {result['shadows_kept']} rows")
+    print(f"✓ Tables cleared    : {', '.join(result['tables_cleared'])}")
+    print(f"✓ New balance       : {result['new_balance']} USDT")
+    print(f"✓ New epoch         : {result['new_epoch']['label']} "
+          f"({result['new_epoch']['id']})")
+    print()
+    print("Done. Restart the engine:")
+    print("  docker compose restart engine")
+    return 0
+
+
+def _run_balance_reset(cfg) -> int:
+    """Reset only the paper balance, keep all trades and shadow data."""
+    from aurvex.storage import Storage
+
+    print("=== AurvexAI Balance Reset ===")
+    print(f"DB             : {cfg.db_path}")
+    print(f"Trades / shadows / funnel : KEPT")
+    print(f"Balance only   : reset to {cfg.initial_paper_balance} USDT")
+    print()
+
+    db = Storage(cfg.db_path)
+    result = db.reset_balance_only(cfg.initial_paper_balance)
+    db.close()
+
+    print(f"✓ Old balance   : {result['old_balance']:.4f} USDT")
+    print(f"✓ New balance   : {result['new_balance']} USDT")
+    print(f"✓ Trades kept   : {result['trades_kept']} rows")
+    print(f"✓ Shadows kept  : {result['shadows_kept']} rows")
+    print()
+    print("Done. Restart the engine:")
+    print("  docker compose restart engine")
+    return 0
 
 
 def _telegram_selftest(cfg) -> int:
