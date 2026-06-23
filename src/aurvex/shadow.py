@@ -400,6 +400,59 @@ class ShadowLearner:
                       "a proxy, NOT full-strategy expectancy."),
         }
 
+    def score_bucket_stats(self, epoch: Optional[str] = None) -> Dict[str, Any]:
+        """Bucket resolved shadows by score range; return win% and avg_r per bucket.
+
+        Buckets: 45-55, 55-65, 65-75, 75+.  Entries below 45 (below shadow_min_score
+        default) are excluded — they are not tracked.  When ``monotone_expected`` is
+        True the win% increases monotonically across buckets (ideal predictivity).
+        ``sufficient_data`` is True only at N≥100 (the risk-multiplier stage).
+        """
+        current_epoch = self._current_epoch()
+        effective_epoch = epoch if epoch is not None else current_epoch
+        rows = self._resolved_rows(epoch=effective_epoch)
+
+        bucket_defs = [("45-55", 45.0, 55.0), ("55-65", 55.0, 65.0),
+                       ("65-75", 65.0, 75.0), ("75+", 75.0, 200.0)]
+        buckets: Dict[str, Dict[str, Any]] = {
+            k: {"n": 0, "wins": 0, "sum_r": 0.0} for k, _, _ in bucket_defs}
+
+        for r in rows:
+            s = float(r.get("score") or 0.0)
+            for key, lo, hi in bucket_defs:
+                if lo <= s < hi:
+                    b = buckets[key]
+                    b["n"] += 1
+                    b["sum_r"] += r["r_multiple"] or 0.0
+                    if r["outcome"] == TP:
+                        b["wins"] += 1
+                    break
+
+        result_buckets: Dict[str, Any] = {}
+        for key, lo, hi in bucket_defs:
+            b = buckets[key]
+            n = b["n"]
+            result_buckets[key] = {
+                "n": n,
+                "win_pct": round(b["wins"] / n * 100.0, 1) if n else None,
+                "avg_r": round(b["sum_r"] / n, 3) if n else None,
+            }
+
+        total = sum(buckets[k]["n"] for k, _, _ in bucket_defs)
+        win_pcts = [result_buckets[k]["win_pct"] for k, _, _ in bucket_defs
+                    if result_buckets[k]["win_pct"] is not None]
+        monotone: Optional[bool] = (
+            all(win_pcts[i] <= win_pcts[i + 1] for i in range(len(win_pcts) - 1))
+            if len(win_pcts) >= 2 else None
+        )
+        return {
+            "epoch": effective_epoch,
+            "buckets": result_buckets,
+            "total": total,
+            "monotone_expected": monotone,
+            "sufficient_data": total >= 100,
+        }
+
     def _stage(self, total: int) -> str:
         if total < 50:
             return "observe"
