@@ -23,7 +23,7 @@ import asyncio
 import datetime as dt
 import logging
 import signal as os_signal
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from .config import Config
 from .decision import DecisionEngine
@@ -169,74 +169,107 @@ class Engine:
         scanned = symbols[: self.cfg.max_symbols_per_cycle]
         candidates = 0
 
-        for sym in scanned:
-            try:
-                snap = self.provider.get_snapshot(sym)
-            except Exception as exc:
-                log.debug("snapshot failed %s: %s", sym, exc)
-                continue
-            snapshots[sym] = snap
-            ctx = build_context(self.cfg, snap)
-            if ctx is None:
-                continue
-            candidates += 1
+        if self.cfg.global_ranking:
+            # ------------------------------------------------------------------
+            # W3-T5 two-pass: Pass 1 = scan + rank, Pass 2 = allocate in rank
+            # order. Only active when GLOBAL_RANKING=true (default False).
+            # ------------------------------------------------------------------
+            from .allocation import CandidateSlot, apply_caps, cluster_for, rank_signal
 
-            # CE-2: detect all setups, score each, pick the highest-scored one.
-            # This removes the first-match-wins priority-order bias and lets the
-            # score decide which detected setup is most promising this cycle.
-            all_signals = self.detector.detect_all(snap)
-            if not all_signals:
-                continue
-            funnel.note_setup_detected()
+            ranked_candidates: List[CandidateSlot] = []
 
-            for s in all_signals:
-                self.engine.scorer.build(s, snap)
-                if self.cfg.shadow_apply:
-                    delta = self.shadow.score_delta(s.setup_type)
-                    if delta:
-                        s.score = max(0.0, min(100.0, s.score + delta))
-            signal = max(all_signals, key=lambda s: s.score)
-
-            # Refresh portfolio view counters locally for same-cycle gating. The
-            # exposure/margin running totals MUST be kept current here: otherwise
-            # every ALLOW in the same cycle sees the stale cycle-start exposure
-            # and the portfolio cap can be blown past in a single cycle.
-            pf.open_count = open_count
-            pf.open_symbols = list(live_open_symbols)
-            pf.open_notional = open_notional
-            pf.open_margin = open_margin
-            d = self.engine.decide(signal, snap, pf)
-            self.db.insert_signal_event(d)
-            funnel.record(d)
-
-            # Shadow tracking: opened paper trades AND high-score rejects.
-            # signal_bar_ts (the last closed bar) dedups across cycles that
-            # re-see the same signalled bar.
-            closed_ltf = snap.closed_ltf(self.cfg.ltf)
-            sig_bar_ts = closed_ltf[-1].ts if closed_ltf else 0
-            source = "paper" if d.decision == ALLOW else "rejected"
-            self.shadow.track_signal(signal, d, source=source, signal_bar_ts=sig_bar_ts)
-
-            # Shadow-track alternative signals (non-chosen by score) as rejected.
-            # Each is a different setup_type, so dedup never conflicts with the
-            # primary. This gives the shadow learner visibility into all detected
-            # setups, not just the one that won the score race.
-            for alt in all_signals:
-                if alt is signal:
+            # Pass 1: collect + score all candidates.
+            for sym in scanned:
+                try:
+                    snap = self.provider.get_snapshot(sym)
+                except Exception as exc:
+                    log.debug("snapshot failed %s: %s", sym, exc)
                     continue
-                alt_d = Decision(
-                    symbol=alt.symbol, side=alt.side, setup_type=alt.setup_type,
-                    score=alt.score, decision=REJECT,
-                    failed_stage="not_selected",
-                    reject_reason="lower score than selected setup this cycle")
-                self.shadow.track_signal(alt, alt_d, source="rejected",
-                                         signal_bar_ts=sig_bar_ts)
+                snapshots[sym] = snap
+                ctx = build_context(self.cfg, snap)
+                if ctx is None:
+                    continue
+                candidates += 1
 
-            if d.decision == ALLOW:
+                all_signals = self.detector.detect_all(snap)
+                if not all_signals:
+                    continue
+                funnel.note_setup_detected()
+
+                for s in all_signals:
+                    self.engine.scorer.build(s, snap)
+                    if self.cfg.shadow_apply:
+                        delta = self.shadow.score_delta(s.setup_type)
+                        if delta:
+                            s.score = max(0.0, min(100.0, s.score + delta))
+                signal = max(all_signals, key=lambda s: s.score)
+
+                closed_ltf = snap.closed_ltf(self.cfg.ltf)
+                sig_bar_ts = closed_ltf[-1].ts if closed_ltf else 0
+                shadow_delta = (self.shadow.score_delta(signal.setup_type)
+                                if self.cfg.shadow_apply else 0.0)
+                ranked_candidates.append(CandidateSlot(
+                    signal=signal, snap=snap,
+                    alt_signals=[s for s in all_signals if s is not signal],
+                    sig_bar_ts=sig_bar_ts,
+                    rank=rank_signal(self.cfg, signal, shadow_delta),
+                ))
+
+            # Sort highest rank first.
+            ranked_candidates.sort(key=lambda c: c.rank, reverse=True)
+
+            # Build side-count map for max_same_side cap.
+            _open_sides: Dict[str, int] = {}
+            if self.cfg.max_same_side > 0:
+                for t in self.db.get_open_trades(mode=self.cfg.mode):
+                    _open_sides[t.side] = _open_sides.get(t.side, 0) + 1
+
+            _opened_ranks: List[float] = []
+            _rejected_ranks: List[float] = []
+
+            # Pass 2: decide + allocate in rank order.
+            for cand in ranked_candidates:
+                sym = cand.signal.symbol
+
+                pf.open_count = open_count
+                pf.open_symbols = list(live_open_symbols)
+                pf.open_notional = open_notional
+                pf.open_margin = open_margin
+                d = self.engine.decide(cand.signal, cand.snap, pf)
+                self.db.insert_signal_event(d)
+                funnel.record(d)
+
+                source = "paper" if d.decision == ALLOW else "rejected"
+                self.shadow.track_signal(cand.signal, d, source=source,
+                                         signal_bar_ts=cand.sig_bar_ts)
+                for alt in cand.alt_signals:
+                    alt_d = Decision(
+                        symbol=alt.symbol, side=alt.side, setup_type=alt.setup_type,
+                        score=alt.score, decision=REJECT,
+                        failed_stage="not_selected",
+                        reject_reason="lower score than selected setup this cycle")
+                    self.shadow.track_signal(alt, alt_d, source="rejected",
+                                             signal_bar_ts=cand.sig_bar_ts)
+
+                if d.decision != ALLOW:
+                    _rejected_ranks.append(cand.rank)
+                    continue
                 if sym in live_open_symbols:
-                    continue  # one position per symbol
-                if open_count >= self.cfg.max_open_trades:
                     continue
+                if open_count >= self.cfg.max_open_trades:
+                    _rejected_ranks.append(cand.rank)
+                    continue
+                if self.cfg.max_per_cluster > 0:
+                    cl = cluster_for(sym)
+                    if cl and (sum(1 for s in live_open_symbols
+                                   if cluster_for(s) == cl) >= self.cfg.max_per_cluster):
+                        _rejected_ranks.append(cand.rank)
+                        continue
+                if self.cfg.max_same_side > 0:
+                    if _open_sides.get(cand.signal.side, 0) >= self.cfg.max_same_side:
+                        _rejected_ranks.append(cand.rank)
+                        continue
+
                 trade = self.executor.open(d)
                 self.journal.record_open(trade)
                 self.notifier.trade_opened(trade)
@@ -245,6 +278,98 @@ class Engine:
                 open_count += 1
                 open_notional += trade.position_size * trade.remaining_fraction
                 open_margin += self._trade_margin(trade)
+                _open_sides[cand.signal.side] = _open_sides.get(cand.signal.side, 0) + 1
+                _opened_ranks.append(cand.rank)
+
+            # Opportunity-cost metric: log when a better-ranked signal was
+            # displaced by a worse-ranked incumbent (slot exhausted in rank order).
+            if _opened_ranks and _rejected_ranks:
+                best_rej = max(_rejected_ranks)
+                worst_open = min(_opened_ranks)
+                if best_rej > worst_open:
+                    log.debug("opp_cost cycle=%d best_rejected=%.1f worst_open=%.1f gap=%.1f",
+                              self._cycles, best_rej, worst_open, best_rej - worst_open)
+
+        else:
+            # ------------------------------------------------------------------
+            # Original first-come inline loop (unchanged — default path).
+            # ------------------------------------------------------------------
+            for sym in scanned:
+                try:
+                    snap = self.provider.get_snapshot(sym)
+                except Exception as exc:
+                    log.debug("snapshot failed %s: %s", sym, exc)
+                    continue
+                snapshots[sym] = snap
+                ctx = build_context(self.cfg, snap)
+                if ctx is None:
+                    continue
+                candidates += 1
+
+                # CE-2: detect all setups, score each, pick the highest-scored one.
+                # This removes the first-match-wins priority-order bias and lets the
+                # score decide which detected setup is most promising this cycle.
+                all_signals = self.detector.detect_all(snap)
+                if not all_signals:
+                    continue
+                funnel.note_setup_detected()
+
+                for s in all_signals:
+                    self.engine.scorer.build(s, snap)
+                    if self.cfg.shadow_apply:
+                        delta = self.shadow.score_delta(s.setup_type)
+                        if delta:
+                            s.score = max(0.0, min(100.0, s.score + delta))
+                signal = max(all_signals, key=lambda s: s.score)
+
+                # Refresh portfolio view counters locally for same-cycle gating. The
+                # exposure/margin running totals MUST be kept current here: otherwise
+                # every ALLOW in the same cycle sees the stale cycle-start exposure
+                # and the portfolio cap can be blown past in a single cycle.
+                pf.open_count = open_count
+                pf.open_symbols = list(live_open_symbols)
+                pf.open_notional = open_notional
+                pf.open_margin = open_margin
+                d = self.engine.decide(signal, snap, pf)
+                self.db.insert_signal_event(d)
+                funnel.record(d)
+
+                # Shadow tracking: opened paper trades AND high-score rejects.
+                # signal_bar_ts (the last closed bar) dedups across cycles that
+                # re-see the same signalled bar.
+                closed_ltf = snap.closed_ltf(self.cfg.ltf)
+                sig_bar_ts = closed_ltf[-1].ts if closed_ltf else 0
+                source = "paper" if d.decision == ALLOW else "rejected"
+                self.shadow.track_signal(signal, d, source=source, signal_bar_ts=sig_bar_ts)
+
+                # Shadow-track alternative signals (non-chosen by score) as rejected.
+                # Each is a different setup_type, so dedup never conflicts with the
+                # primary. This gives the shadow learner visibility into all detected
+                # setups, not just the one that won the score race.
+                for alt in all_signals:
+                    if alt is signal:
+                        continue
+                    alt_d = Decision(
+                        symbol=alt.symbol, side=alt.side, setup_type=alt.setup_type,
+                        score=alt.score, decision=REJECT,
+                        failed_stage="not_selected",
+                        reject_reason="lower score than selected setup this cycle")
+                    self.shadow.track_signal(alt, alt_d, source="rejected",
+                                             signal_bar_ts=sig_bar_ts)
+
+                if d.decision == ALLOW:
+                    if sym in live_open_symbols:
+                        continue  # one position per symbol
+                    if open_count >= self.cfg.max_open_trades:
+                        continue
+                    trade = self.executor.open(d)
+                    self.journal.record_open(trade)
+                    self.notifier.trade_opened(trade)
+                    funnel.mark_executed()
+                    live_open_symbols.add(sym)
+                    open_count += 1
+                    open_notional += trade.position_size * trade.remaining_fraction
+                    open_margin += self._trade_margin(trade)
 
         # Manage open trades (including symbols not scanned this cycle).
         await self._manage_open_trades(snapshots)

@@ -82,7 +82,7 @@ class DecisionEngine:
             d.reason = "shadow_only"
             return d
 
-        if signal.score < cfg.trade_threshold:
+        if cfg.score_as_gate and signal.score < cfg.trade_threshold:
             if signal.score >= cfg.watchlist_threshold:
                 d.decision = WATCH
                 d.failed_stage = "score_threshold"
