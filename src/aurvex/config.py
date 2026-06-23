@@ -190,6 +190,27 @@ class Config:
         default_factory=lambda: _int_list("TRADE_HOURS_UTC", [])
     )
 
+    # -- W3-T4: Score validity gate ----------------------------------------
+    # When True (default), score < trade_threshold is a hard REJECT gate (current
+    # behaviour). When False, score is advisory; signals proceed to risk/ranking.
+    # T4 decision: N too thin at measurement time → keep True.
+    score_as_gate: bool = field(default_factory=lambda: _bool("SCORE_AS_GATE", True))
+
+    # -- W3-T5: Global two-pass ranking + allocation -----------------------
+    # When False (default), the engine's inline first-come allocation runs
+    # byte-identical to pre-T5. Set True to activate rank-order allocation.
+    global_ranking: bool = field(default_factory=lambda: _bool("GLOBAL_RANKING", False))
+    # Rank key: "score" (raw score) | "composite" (score + shadow advisory delta).
+    rank_key: str = field(default_factory=lambda: _str("RANK_KEY", "composite"))
+    # Max concurrent slots in one correlation cluster. 0 = disabled.
+    max_per_cluster: int = field(default_factory=lambda: _int("MAX_PER_CLUSTER", 0))
+    # Max concurrent cluster notional as % of equity. 0 = disabled.
+    max_cluster_exposure_pct: float = field(
+        default_factory=lambda: _float("MAX_CLUSTER_EXPOSURE_PCT", 0.0)
+    )
+    # Max concurrent open trades per side (LONG or SHORT). 0 = disabled.
+    max_same_side: int = field(default_factory=lambda: _int("MAX_SAME_SIDE", 0))
+
     # CE-5 (Wave 2): minimum HTF ADX required for trend_continuation setup.
     # 0.0 = gate disabled (default, backward-compatible). Set e.g. 20.0 to gate
     # out chop-days where trend_continuation signal quality is lowest.

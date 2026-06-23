@@ -111,15 +111,63 @@ Branch: `claude/wave3-integrity-first-nv0f9k`
 
 ---
 
-## Block B — Cohorts + Shadow integrity
+## Block B — Cohorts + Shadow integrity (minimal)
 
-*(to be filled after Block A gate)*
+Branch: `w3-blockB-cohorts`
+
+### W3-T2 — Shadow cohort ayrımı (minimal)
+- [x] `shadows` tablosuna `epoch TEXT DEFAULT 'legacy'` kolonu eklendi
+- [x] `_migrate()`: mevcut satırlar `ts >= epoch['started_ms']` ise current epoch label'ı, aksi 'legacy'
+- [x] `track_signal`: yeni satırlar `epoch = current_epoch` ile tag'lenir
+- [x] `stats(epoch=...)`: epoch filtresi + default = current epoch (legacy ayrı gösterilir)
+- [x] `effective_independent_episodes`: distinct `(symbol|side|setup_type|signal_bar_ts)` count — 15k satır ≠ 15k bağımsız sinyal
+
+### W3-T3 — Shadow observe-only güvencesi + A/B recorder
+- [x] Guard test: `SHADOW_APPLY=true` olsa bile `position_size/leverage/max_loss` değişmiyor (RiskManager shadow'dan izole)
+- [x] `SHADOW_APPLY=false` default — `.env.example`'da zaten mevcut, confirm edildi
+- [x] `shadow_ab` tablosu: her resolved episode'da `risk_multiplier_would_be`, `score_delta_would_be`, `actual_outcome`, `actual_net_r` log'lanır (sizing etkisi sıfır)
+- [x] `storage.insert_shadow_ab()` metodu eklendi
+
+### Gate B ✅
+- [x] Cohort'lar ayrılabilir (legacy ≠ wave epoch)
+- [x] Shadow'un sizing üzerinde sıfır yetkisi test ile kanıtlandı
+- [x] A/B ledger birikmeye başladı
+- [x] **179 test yeşil** (171 → 179)
 
 ---
 
 ## Block C — Selection integrity
 
-*(to be filled after Block B gate)*
+Branch: `w3-blockC-selection`
+
+### W3-T4 — Score validity harness
+
+- [x] `SCORE_AS_GATE` flag added to `Config` (default=`true`, env: `SCORE_AS_GATE`)
+- [x] `cfg.score_as_gate` gates the `score < trade_threshold → REJECT/WATCH` branch in `DecisionEngine.decide()`; `True` preserves byte-identical pre-T4 behaviour
+- [x] `ShadowLearner.score_bucket_stats(epoch=None)`: buckets resolved shadows into 45-55 / 55-65 / 65-75 / 75+; returns `win_pct`, `avg_r`, `n` per bucket + `monotone_expected` + `sufficient_data` (N≥100) + epoch label
+- [x] **T4 Decision recorded**: current epoch N≈34 at freeze — insufficient to prove or disprove score monotonicity. Conservative decision: keep `SCORE_AS_GATE=true`. Gate will be revisited in Block D when N≥100 per bucket is achievable.
+- [x] Tests: `tests/test_score_validity_T4.py` (7 tests) — all green
+
+### W3-T5 — Global ranking + correlation-aware allocation
+
+- [x] Config flags added (all default to current behaviour):
+  - `GLOBAL_RANKING=false` — two-pass path off by default
+  - `RANK_KEY=composite` — rank = score + shadow advisory delta (capped ±5)
+  - `MAX_PER_CLUSTER=0` — correlation-cluster cap, 0 = disabled
+  - `MAX_CLUSTER_EXPOSURE_PCT=0.0` — cluster notional cap, 0 = disabled
+  - `MAX_SAME_SIDE=0` — directional cap, 0 = disabled
+- [x] `src/aurvex/allocation.py` (new): `CORRELATION_CLUSTERS` static map, `cluster_for()`, `rank_signal()`, `CandidateSlot` dataclass, `apply_caps()` pure function
+- [x] `engine._cycle()`: `if cfg.global_ranking` → two-pass (Pass 1 scan+rank, Pass 2 allocate in rank order); `else` → original first-come loop byte-identical (the else branch is the unchanged original code)
+- [x] Opportunity-cost metric: when `GLOBAL_RANKING=true`, logs `opp_cost` DEBUG line when best-rejected rank > worst-open rank
+- [x] Golden invariant: `GLOBAL_RANKING=false` (default) → original `else` branch runs — cannot diverge from pre-T5 behaviour by construction
+- [x] Tests: `tests/test_global_ranking_T5.py` (22 tests) — all green
+
+### Gate C ✅
+- [x] Score predictivity measured (T4 decision: gate stays True, N insufficient)
+- [x] Global ranking available behind flag (default off, safe to turn on)
+- [x] Cluster + directional caps implemented and test-proven
+- [x] First-come behaviour provably unchanged at default flags
+- [x] **208 tests green** (179 → 208, +29 new)
 
 ---
 
