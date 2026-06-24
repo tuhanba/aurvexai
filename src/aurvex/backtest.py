@@ -37,6 +37,12 @@ from .setups import SetupDetector, build_context
 
 log = logging.getLogger("aurvex.backtest")
 
+# ms per bar for each supported timeframe (used by funding calculation)
+_TF_MS: Dict[str, int] = {
+    "1m": 60_000, "3m": 180_000, "5m": 300_000,
+    "15m": 900_000, "30m": 1_800_000, "1h": 3_600_000,
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -261,3 +267,19 @@ def run_backtest_offline(cfg: Config, symbols: Optional[List[str]] = None,
                                 start_price=100.0 * (idx + 1), tf=cfg.ltf)
             for idx, s in enumerate(symbols)}
     return Backtester(cfg).run(data)
+
+
+def load_real_candles(symbol: str, timeframe: str = "1m",
+                      limit: int = 2000,
+                      cache_dir: str = "data/cache",
+                      exchange_id: str = "binanceusdm") -> List[Candle]:
+    """
+    Load OHLCV candles for ``symbol`` from local CSV cache or live ccxt fetch.
+
+    Falls back to an empty list when offline (no network, test environments).
+    Converts raw rows to ``Candle`` objects.
+    """
+    from .walkforward import load_or_fetch_candles
+    rows = load_or_fetch_candles(symbol, timeframe, limit=limit,
+                                 cache_dir=cache_dir, exchange_id=exchange_id)
+    return [Candle.from_ccxt(r) for r in rows if len(r) >= 6]
