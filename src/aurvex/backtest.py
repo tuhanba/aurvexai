@@ -34,6 +34,7 @@ from .filters import PortfolioView
 from .metrics import compute_metrics
 from .models import (ALLOW, OPEN, Candle, MarketSnapshot, OrderBook, now_ms)
 from .setups import SetupDetector, build_context
+from .walkforward import funding_cost
 
 log = logging.getLogger("aurvex.backtest")
 
@@ -118,10 +119,33 @@ class Backtester:
         self.engine = DecisionEngine(cfg)
         self.executor = PaperExecutor(cfg)
 
+    def _apply_funding(self, trade, close_ts: int, tf_ms: int) -> float:
+        """Deduct estimated 8h funding for the holding period (Block 6).
+
+        Modelled as a conservative cost on the initial notional over the bars
+        held, charged to both the trade PnL (so metrics are net-of-funding) and
+        the running balance (so end_balance stays coherent with net_pnl).
+        Returns the funding amount (0.0 when disabled, keeping the default
+        synthetic backtest byte-identical to pre-Block-6 behaviour).
+        """
+        rate = self.cfg.funding_rate_8h
+        if not rate or not tf_ms:
+            return 0.0
+        holding_ms = max(0, int(close_ts) - int(trade.open_time or close_ts))
+        holding_bars = int(round(holding_ms / tf_ms))
+        fund = funding_cost(trade.position_size, rate, holding_bars, tf_ms)
+        if fund:
+            trade.realized_pnl -= fund
+            risk_amount = trade.metadata.get("risk_amount", trade.max_loss) or 1e-9
+            trade.realized_pnl_pct = trade.realized_pnl / risk_amount
+        return fund
+
     def run(self, ltf_data: Dict[str, List[Candle]]) -> Dict:
         cfg = self.cfg
         htf_data = {s: resample(c, cfg.ltf, cfg.htf) for s, c in ltf_data.items()}
         warmup = max(45, cfg.htf_limit)
+        tf_ms = _tf_ms(cfg.ltf)
+        funding_total = 0.0
 
         # Build a global, time-ordered event stream across all symbols.
         events = []
@@ -152,6 +176,9 @@ class Backtester:
                     if ev.kind != "BE_MOVE":
                         balance += ev.pnl
                 if tr.status != OPEN:
+                    fund = self._apply_funding(tr, ts, tf_ms)
+                    balance -= fund
+                    funding_total += fund
                     closed.append(tr)
                     last_trade_ms[sym] = ts
                     open_trades.pop(sym, None)
@@ -208,6 +235,9 @@ class Backtester:
             ev = self.executor.force_close(tr, last.close, reason="MANUAL")
             balance += ev.pnl
             tr.close_time = last.ts
+            fund = self._apply_funding(tr, last.ts, tf_ms)
+            balance -= fund
+            funding_total += fund
             closed.append(tr)
 
         metrics = compute_metrics(closed)
@@ -217,6 +247,7 @@ class Backtester:
             (balance - cfg.initial_paper_balance) / cfg.initial_paper_balance * 100.0, 3)
         metrics["signals_seen"] = signals_seen
         metrics["allows"] = allows
+        metrics["funding_total"] = round(funding_total, 4)
         metrics["symbols"] = list(ltf_data.keys())
         metrics["bars_per_symbol"] = {s: len(c) for s, c in ltf_data.items()}
         metrics.update(self._baseline_extras(closed, reject_reasons, margin_rejected))

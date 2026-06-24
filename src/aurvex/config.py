@@ -164,6 +164,11 @@ class Config:
     slippage_assumption_pct: float = field(
         default_factory=lambda: _float("SLIPPAGE_ASSUMPTION_PCT", 0.02)
     )
+    # 8-hour perpetual funding rate applied as a holding cost in the backtester
+    # so OOS expectancy is net of fee+slippage+funding (Block 6). 0.0 = disabled
+    # (default; offline synthetic data carries no real funding). Real-data runs
+    # set this to the observed/typical rate, e.g. 0.0001 (0.01% per 8h).
+    funding_rate_8h: float = field(default_factory=lambda: _float("FUNDING_RATE_8H", 0.0))
 
     # -- Paper account -----------------------------------------------------
     initial_paper_balance: float = field(

@@ -38,6 +38,28 @@ def test_backtest_reports_baseline_extras(cfg):
     assert m["tp1_hits"] >= m["tp2_hits"] >= m["tp3_hits"]
 
 
+def test_funding_disabled_by_default(cfg):
+    """Block 6: funding defaults to 0.0 → no funding cost, byte-identical PnL."""
+    cfg.funding_rate_8h = 0.0
+    m = run_backtest_offline(cfg, symbols=["BTCUSDT", "ETHUSDT"], bars=800, seed=3)
+    assert m["funding_total"] == 0.0
+
+
+def test_funding_reduces_pnl_when_enabled(cfg):
+    """Block 6: a positive funding rate is charged as a holding cost and lowers
+    the ending balance relative to the funding-free run (same trades/seed)."""
+    cfg.funding_rate_8h = 0.0
+    base = run_backtest_offline(cfg, symbols=["BTCUSDT", "ETHUSDT"], bars=800, seed=3)
+    cfg.funding_rate_8h = 0.01  # exaggerated rate so the effect is unambiguous
+    funded = run_backtest_offline(cfg, symbols=["BTCUSDT", "ETHUSDT"], bars=800, seed=3)
+    if base["total_trades"] > 0:
+        assert funded["funding_total"] > 0.0
+        assert funded["end_balance"] < base["end_balance"]
+        # net_pnl and end_balance stay coherent (both net of funding)
+        assert abs((funded["end_balance"] - funded["start_balance"])
+                   - funded["net_pnl"]) < 1e-6
+
+
 def test_backtest_no_position_overlap_same_symbol(cfg):
     # The backtester holds at most one position per symbol at a time; this is
     # enforced structurally. We assert it completes and closes everything.
