@@ -176,3 +176,46 @@ def test_synthetic_backtest_terminates():
     assert isinstance(result, dict)
     assert "return_pct" in result
     assert "signals_seen" in result
+
+
+# ---------------------------------------------------------------------------
+# 8. End-to-end orchestrator: per-profile OOS decision table
+# ---------------------------------------------------------------------------
+
+def test_walkforward_analysis_runs_per_profile(cfg):
+    from aurvex.backtest import generate_candles
+    from aurvex.walkforward import run_walkforward_analysis, print_report
+
+    data = {s: generate_candles(s, 900, seed=i + 1,
+                                start_price=100.0 * (i + 1), tf="1m")
+            for i, s in enumerate(["AAA", "BBB"])}
+    wf = WalkForwardConfig(warmup_bars=300, oos_bars=200, step_bars=200, mc_sims=50)
+    results, source, used = run_walkforward_analysis(
+        cfg, profiles=["aurvex_enhanced", "bugra_replica"],
+        timeframe="1m", wf_cfg=wf, data_override=data)
+
+    assert source == "override"
+    assert {r.profile for r in results} == {"aurvex_enhanced", "bugra_replica"}
+    for r in results:
+        assert r.decision                      # non-empty decision string
+        assert isinstance(r.oos_stats, dict)
+        assert r.windows >= 1                   # at least one OOS window evaluated
+    report = print_report(results)
+    assert "WALK-FORWARD DECISION TABLE" in report
+
+
+def test_walkforward_analysis_synthetic_fallback(cfg, monkeypatch):
+    """When no real candles are available the loader falls back to synthetic
+    data and labels the source accordingly (NOT live evidence)."""
+    import aurvex.backtest as bt
+    from aurvex.walkforward import run_walkforward_analysis
+
+    # Force the real-data loader to return nothing (offline behaviour).
+    monkeypatch.setattr(bt, "load_real_candles", lambda *a, **k: [])
+    wf = WalkForwardConfig(warmup_bars=300, oos_bars=200, step_bars=200, mc_sims=20)
+    results, source, used = run_walkforward_analysis(
+        cfg, symbols=["BTC/USDT:USDT"], timeframe="1m", limit=700, wf_cfg=wf)
+
+    assert source == "synthetic"
+    assert used                                  # synthetic data was generated
+    assert len(results) == 2

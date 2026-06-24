@@ -7,6 +7,8 @@ Usage:
     python main.py dashboard   # run the Flask dashboard on DASHBOARD_PORT
     python main.py demo        # fast synthetic end-to-end run (offline, ~40 cycles)
     python main.py backtest    # offline seeded backtest, prints metrics JSON
+    python main.py walkforward # Block 6: real-data (or synthetic) OOS walk-forward
+                               # decision table per profile, net-of-cost (+funding)
     python main.py reset       # clear trades/funnel/signals, keep shadow data, new epoch
     python main.py telegram-test   # in-container Telegram diagnostic (getMe + send)
 
@@ -61,6 +63,9 @@ def main(argv: list) -> int:
         print(json.dumps(metrics, indent=2, default=str))
         return 0
 
+    if cmd == "walkforward":
+        return _run_walkforward(cfg)
+
     if cmd == "reset":
         return _run_reset(cfg)
 
@@ -73,6 +78,45 @@ def main(argv: list) -> int:
     print(f"unknown command: {cmd}\n")
     _print_help()
     return 2
+
+
+def _run_walkforward(cfg) -> int:
+    """Block 6: real-data (or synthetic-fallback) out-of-sample walk-forward.
+
+    All knobs are env-driven (no hard-coding). On a host without Binance access
+    it falls back to synthetic data and loudly marks the output as NOT live
+    evidence. Live remains OFF regardless of the result.
+    """
+    from aurvex.walkforward import (WalkForwardConfig, print_report,
+                                    run_walkforward_analysis)
+
+    wf = WalkForwardConfig(
+        oos_bars=int(os.environ.get("WF_OOS_BARS", "1000")),
+        step_bars=int(os.environ.get("WF_STEP_BARS", "1000")),
+        warmup_bars=int(os.environ.get("WF_WARMUP_BARS", "400")),
+        funding_rate_8h=float(os.environ.get("WF_FUNDING_8H",
+                                             str(cfg.funding_rate_8h or 0.0001))),
+        mc_sims=int(os.environ.get("WF_MC_SIMS", "500")),
+    )
+    syms = os.environ.get("WF_SYMBOLS")
+    symbols = [s.strip() for s in syms.split(",") if s.strip()] if syms else None
+    limit = int(os.environ.get("WF_LIMIT", "3000"))
+    timeframe = os.environ.get("WF_TIMEFRAME", cfg.ltf)
+
+    print("=== AurvexAI Block 6 — walk-forward analysis ===")
+    print(f"timeframe={timeframe}  limit={limit}  "
+          f"oos={wf.oos_bars} step={wf.step_bars} warmup={wf.warmup_bars}")
+    results, source, data = run_walkforward_analysis(
+        cfg, symbols=symbols, timeframe=timeframe, limit=limit, wf_cfg=wf)
+    print(f"data source: {source}  symbols: {list(data.keys())}")
+    if source == "synthetic":
+        bar = "!" * 72
+        print(f"\n{bar}\nSYNTHETIC DATA — NOT LIVE EVIDENCE (Binance unreachable / "
+              f"no cache).\nRun on a Binance-reachable host for the real decision "
+              f"table.\n{bar}")
+    print()
+    print(print_report(results))
+    return 0
 
 
 def _run_reset(cfg) -> int:

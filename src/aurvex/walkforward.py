@@ -115,7 +115,7 @@ class TradeResult:
     win: bool
 
 
-def _compute_stats(trades: List[TradeResult]) -> Dict[str, float]:
+def _compute_stats(trades: List[TradeResult], base_equity: float = 0.0) -> Dict[str, float]:
     if not trades:
         return {
             "n": 0, "win_rate": 0.0, "expectancy_r": 0.0,
@@ -133,15 +133,19 @@ def _compute_stats(trades: List[TradeResult]) -> Dict[str, float]:
     gross_loss = abs(sum(t.pnl_net for t in losses)) or 1e-9
     profit_factor = gross_profit / gross_loss
 
-    # Running equity drawdown
-    equity = 0.0
-    peak = 0.0
+    # Running equity drawdown, relative to a capital base. A from-zero cumulative
+    # curve drives peak≈0 and makes the ratio explode; seeding equity at the
+    # capital base keeps peak > 0 so max_drawdown_pct stays a meaningful % of
+    # capital. base_equity=0.0 preserves the legacy behaviour for direct callers.
+    equity = base_equity
+    peak = base_equity
     max_dd = 0.0
     for t in trades:
         equity += t.pnl_net
         if equity > peak:
             peak = equity
-        dd = (peak - equity) / (abs(peak) + 1e-9)
+        denom = peak if peak > 1e-9 else 1e-9
+        dd = (peak - equity) / denom
         if dd > max_dd:
             max_dd = dd
 
@@ -226,10 +230,14 @@ def _inv_normal_approx(p: float) -> float:
 
 def monte_carlo_drawdown(trades: List[TradeResult],
                          n_sims: int = 1000,
-                         seed: int = 42) -> Dict[str, float]:
+                         seed: int = 42,
+                         base_equity: float = 0.0) -> Dict[str, float]:
     """
     Bootstrap the trade sequence ``n_sims`` times and return the drawdown
     distribution.
+
+    ``base_equity`` seeds each simulated equity curve so drawdown is a % of
+    capital (ruin_prob = P[dd > 50% of capital]); 0.0 keeps legacy behaviour.
 
     Returns:
       median_max_dd_pct, p95_max_dd_pct, ruin_prob (dd > 50%)
@@ -242,14 +250,15 @@ def monte_carlo_drawdown(trades: List[TradeResult],
     results = []
     for _ in range(n_sims):
         sample = [rng.choice(trades) for _ in range(n)]
-        equity = 0.0
-        peak = 0.0
+        equity = base_equity
+        peak = base_equity
         max_dd = 0.0
         for t in sample:
             equity += t.pnl_net
             if equity > peak:
                 peak = equity
-            dd = (peak - equity) / (abs(peak) + 1e-9)
+            denom = peak if peak > 1e-9 else 1e-9
+            dd = (peak - equity) / denom
             if dd > max_dd:
                 max_dd = dd
         results.append(max_dd)
@@ -275,9 +284,15 @@ class WalkForwardConfig:
     train_bars: int = 5000
     oos_bars: int = 1000
     step_bars: int = 1000
+    # Context bars prepended to each OOS window so indicators (incl. the 78-bar
+    # Ichimoku and the ≥20-bar HTF resample) are warm before any OOS entry.
+    # Entries are structurally blocked during this context region, so every
+    # trade collected from a window is out-of-sample by construction.
+    warmup_bars: int = 400
     funding_rate_8h: float = 0.0001   # 0.01% per 8h (typical Binance)
     n_trials: int = 1                  # number of parameter sets tested
     mc_sims: int = 500
+    base_equity: float = 1000.0        # capital base for drawdown %% (== paper balance)
     verbose: bool = False
 
 
@@ -315,8 +330,9 @@ def run_walk_forward(
         result.decision = "REJECTED (no OOS trades)"
         return result
 
-    result.oos_stats = _compute_stats(all_oos)
-    result.monte_carlo = monte_carlo_drawdown(all_oos, n_sims=wf_cfg.mc_sims)
+    result.oos_stats = _compute_stats(all_oos, base_equity=wf_cfg.base_equity)
+    result.monte_carlo = monte_carlo_drawdown(all_oos, n_sims=wf_cfg.mc_sims,
+                                              base_equity=wf_cfg.base_equity)
 
     n_obs = len(all_oos)
     raw_sharpe = result.oos_stats.get("sharpe", 0.0)
@@ -341,7 +357,7 @@ def print_report(results: List[WalkForwardResult]) -> str:
         "=" * 72,
         "WALK-FORWARD DECISION TABLE",
         "=" * 72,
-        f"{'Profile':<20} {'Exp-R':>7} {'PF':>7} {'MaxDD%':>8} {'Tr/d':>6} "
+        f"{'Profile':<20} {'Exp-R':>7} {'PF':>7} {'MaxDD%':>8} {'AvgBars':>8} "
         f"{'DSR':>7} {'Decision'}",
         "-" * 72,
     ]
@@ -352,7 +368,7 @@ def print_report(results: List[WalkForwardResult]) -> str:
             f"{s.get('expectancy_r', 0.0):>7.4f} "
             f"{s.get('profit_factor', 0.0):>7.3f} "
             f"{s.get('max_drawdown_pct', 0.0):>8.2f} "
-            f"{s.get('avg_bars', 0.0) / 60.0:>6.2f} "  # rough trades/day at 1m
+            f"{s.get('avg_bars', 0.0):>8.1f} "  # avg holding bars per trade
             f"{r.deflated_sharpe:>7.4f} "
             f"{r.decision}"
         )
@@ -388,3 +404,106 @@ def plateau_check(grid: Dict[Tuple, float],
             if drop > neighbour_tol:
                 return False  # a cliff: not a plateau
     return True
+
+
+# ---------------------------------------------------------------------------
+# End-to-end orchestrator: real data -> per-profile OOS decision table
+# ---------------------------------------------------------------------------
+
+def _trade_to_result(trade, tf_ms: int) -> TradeResult:
+    """Convert a closed backtest Trade into a TradeResult (net of fees+funding)."""
+    pnl_net = float(getattr(trade, "realized_pnl", 0.0) or 0.0)
+    meta = getattr(trade, "metadata", None) or {}
+    risk_amount = meta.get("risk_amount") or getattr(trade, "max_loss", 0.0) or 1e-9
+    r_multiple = pnl_net / risk_amount
+    open_t = int(getattr(trade, "open_time", 0) or 0)
+    close_t = int(getattr(trade, "close_time", 0) or 0)
+    dur_bars = int(round((close_t - open_t) / tf_ms)) if (tf_ms and close_t > open_t) else 0
+    return TradeResult(pnl_net=pnl_net, r_multiple=r_multiple,
+                       duration_bars=dur_bars, win=pnl_net > 0)
+
+
+def load_walkforward_data(cfg, symbols: Sequence[str], timeframe: str,
+                          limit: int, cache_dir: str = "data/cache"):
+    """Load real candles per symbol; fall back to synthetic when offline.
+
+    Returns ``(data, source)`` where ``source`` is ``"real"`` or ``"synthetic"``.
+    The synthetic path is deterministic and explicitly NOT live evidence.
+    """
+    from .backtest import generate_candles, load_real_candles
+    data: Dict[str, List] = {}
+    for s in symbols:
+        try:
+            rows = load_real_candles(s, timeframe, limit=limit, cache_dir=cache_dir,
+                                     exchange_id=cfg.exchange_id)
+        except Exception as exc:  # pragma: no cover - network/offline
+            log.warning("load_real_candles failed for %s: %s", s, exc)
+            rows = []
+        if rows:
+            data[s] = rows
+    if data:
+        return data, "real"
+    log.warning("No real candles available — using synthetic data (NOT live evidence).")
+    data = {s: generate_candles(s.split("/")[0].split(":")[0], limit,
+                                seed=7 + i, start_price=100.0 * (i + 1), tf=timeframe)
+            for i, s in enumerate(symbols)}
+    return data, "synthetic"
+
+
+def run_walkforward_analysis(cfg, symbols: Optional[Sequence[str]] = None,
+                             timeframe: Optional[str] = None, limit: int = 3000,
+                             wf_cfg: Optional[WalkForwardConfig] = None,
+                             profiles: Optional[Sequence[str]] = None,
+                             data_override: Optional[Dict[str, List]] = None):
+    """Segmented out-of-sample walk-forward for each profile.
+
+    Returns ``(results, source, data)``. Parameters are FIXED from ``cfg`` (no
+    in-sample auto-tuning here); each window prepends ``warmup_bars`` of context
+    during which entries are structurally blocked, so every collected trade is
+    out-of-sample. Funding is charged by the backtester. The decision table is
+    net-of-cost (fees + slippage + funding).
+
+    For parameter-robustness (the spec's grid sweep + plateau_check) run a real
+    data grid on a Binance-reachable host; that needs network + compute.
+    """
+    import dataclasses
+
+    from .backtest import Backtester, _tf_ms
+
+    timeframe = timeframe or cfg.ltf
+    profiles = list(profiles or ["aurvex_enhanced", "bugra_replica"])
+    wf_cfg = wf_cfg or WalkForwardConfig()
+    symbols = list(symbols or ["BTC/USDT:USDT", "ETH/USDT:USDT",
+                               "SOL/USDT:USDT", "BNB/USDT:USDT"])
+    # Charge the same funding rate the analysis advertises.
+    cfg = dataclasses.replace(cfg, funding_rate_8h=wf_cfg.funding_rate_8h)
+
+    if data_override is not None:
+        data, source = data_override, "override"
+    else:
+        data, source = load_walkforward_data(cfg, symbols, timeframe, limit)
+
+    tf_ms = _tf_ms(timeframe)
+    warmup = max(1, wf_cfg.warmup_bars)
+    oos = max(1, wf_cfg.oos_bars)
+    step = max(1, wf_cfg.step_bars)
+    n = min((len(c) for c in data.values()), default=0)
+    # Multiple-testing penalty: best of N profiles is picked on the same data.
+    n_trials = max(wf_cfg.n_trials, len(profiles))
+
+    results: List[WalkForwardResult] = []
+    for profile in profiles:
+        pcfg = dataclasses.replace(cfg, strategy_profile=profile, ltf=timeframe)
+        trades_by_window: List[List[TradeResult]] = []
+        s0 = warmup
+        while s0 + oos <= n:
+            window = {sym: c[s0 - warmup: s0 + oos] for sym, c in data.items()}
+            bt = Backtester(pcfg)
+            bt.run(window)
+            trades_by_window.append([_trade_to_result(t, tf_ms)
+                                     for t in bt._last_closed])
+            s0 += step
+        wfc = dataclasses.replace(wf_cfg, n_trials=n_trials,
+                                  base_equity=cfg.initial_paper_balance)
+        results.append(run_walk_forward(trades_by_window, profile, wfc))
+    return results, source, data

@@ -119,6 +119,9 @@ class Backtester:
         self.detector = SetupDetector(cfg)
         self.engine = DecisionEngine(cfg)
         self.executor = PaperExecutor(cfg)
+        # Closed Trade objects from the most recent run(); the walk-forward
+        # orchestrator reads these to build per-window OOS TradeResults.
+        self._last_closed: List[Candle] = []
 
     def _precompute_trail_series(self, candles: List[Candle]) -> Dict:
         """Precompute the per-bar series the runner trailing stop needs.
@@ -306,6 +309,7 @@ class Backtester:
         metrics["symbols"] = list(ltf_data.keys())
         metrics["bars_per_symbol"] = {s: len(c) for s, c in ltf_data.items()}
         metrics.update(self._baseline_extras(closed, reject_reasons, margin_rejected))
+        self._last_closed = closed   # exposed for the walk-forward orchestrator
         return metrics
 
     @staticmethod
