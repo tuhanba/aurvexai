@@ -21,7 +21,23 @@ from .models import LONG, MarketSnapshot, Signal
 
 # Per-setup factor weights. Missing factors simply contribute 0.
 # Weights within a setup are relative; the builder normalises them.
+#
+# The two active Bugra-system detectors share the same five-condition TA core
+# and therefore the same factor set (ema_spread / st_distance / adx_strength /
+# cloud_thickness). Without weights here their factor_score would be 0, capping
+# the score at ~0.30*base_confidence*100 (~19) — below trade_threshold — so the
+# engine could NEVER open a trade. These weights make the factor signal count.
 SETUP_WEIGHTS: Dict[str, Dict[str, float]] = {
+    "aurvex_enhanced": {
+        "adx_strength": 1.2, "ema_spread": 1.1,
+        "st_distance": 1.0, "cloud_thickness": 0.9,
+    },
+    "bugra_replica": {
+        "adx_strength": 1.2, "ema_spread": 1.1,
+        "st_distance": 1.0, "cloud_thickness": 0.9,
+    },
+    # --- legacy setups (detectors removed; weights kept harmless for any
+    #     historical/shadow re-scoring of old setup_type rows) ---
     "momentum_breakout": {
         "trend_align": 1.0, "volume_expansion": 1.2,
         "breakout_strength": 1.3, "momentum": 0.8,
