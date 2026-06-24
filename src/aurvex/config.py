@@ -142,6 +142,10 @@ class Config:
     # Stop-distance guards (as fraction of price).
     min_stop_dist_pct: float = field(default_factory=lambda: _float("MIN_STOP_DIST_PCT", 0.30))
     max_stop_dist_pct: float = field(default_factory=lambda: _float("MAX_STOP_DIST_PCT", 2.50))
+    # Extended stop ceiling for bugra_replica profile (fixed-% wider stop).
+    max_stop_dist_pct_bugra: float = field(
+        default_factory=lambda: _float("MAX_STOP_DIST_PCT_BUGRA", 5.00)
+    )
 
     # Take-profit R multiples (SL distance == 1R).
     tp1_r: float = field(default_factory=lambda: _float("TP1_R", 1.5))
@@ -182,6 +186,25 @@ class Config:
     shadow_only_setups: List[str] = field(
         default_factory=lambda: _list("SHADOW_ONLY_SETUPS", [])
     )
+
+    # -- Strategy profile ---------------------------------------------------
+    # "legacy"         : original five detectors (default, no behaviour change)
+    # "bugra_replica"  : Bugra system replica (EMA/ST/Ichimoku/ADX, fixed-% SL/TP)
+    # "aurvex_enhanced": enhanced profile (same TA core + ATR-based SL)
+    strategy_profile: str = field(
+        default_factory=lambda: _str("STRATEGY_PROFILE", "legacy")
+    )
+
+    # -- Bugra replica parameters ------------------------------------------
+    bugra_stop_pct: float = field(default_factory=lambda: _float("BUGRA_STOP_PCT", 4.49))
+    bugra_tp1_pct: float = field(default_factory=lambda: _float("BUGRA_TP1_PCT", 1.50))
+    bugra_tp2_pct: float = field(default_factory=lambda: _float("BUGRA_TP2_PCT", 2.80))
+    bugra_tp3_pct: float = field(default_factory=lambda: _float("BUGRA_TP3_PCT", 4.49))
+    bugra_ema_fast: int = field(default_factory=lambda: _int("BUGRA_EMA_FAST", 9))
+    bugra_ema_slow: int = field(default_factory=lambda: _int("BUGRA_EMA_SLOW", 21))
+    bugra_st_period: int = field(default_factory=lambda: _int("BUGRA_ST_PERIOD", 10))
+    bugra_st_mult: float = field(default_factory=lambda: _float("BUGRA_ST_MULT", 3.0))
+    bugra_adx_min: float = field(default_factory=lambda: _float("BUGRA_ADX_MIN", 20.0))
 
     # CE-2 (Wave 2): allowed UTC trade hours, e.g. "10,11,12,13".
     # Empty list = all hours allowed (default). Filters out dead / toksik sessions
@@ -263,6 +286,9 @@ class Config:
         )
         assert 0 < self.risk_pct <= 5, "risk_pct out of sane range"
         assert self.mode in {"paper", "live"}, "AX_MODE must be 'paper' or 'live'"
+        assert self.strategy_profile in {"legacy", "bugra_replica", "aurvex_enhanced"}, (
+            "STRATEGY_PROFILE must be legacy|bugra_replica|aurvex_enhanced"
+        )
         assert self.maint_margin_rate >= 0, "maint_margin_rate must be >= 0"
         assert self.liq_safety_buffer >= 1.0, "liq_safety_buffer must be >= 1.0"
         assert self.max_leverage >= 1, "max_leverage must be >= 1"

@@ -60,7 +60,8 @@ class StopNorm:
     stop_dist_pct: float = 0.0
 
 
-def normalize_stop(cfg: Config, side: str, entry: float, stop: float) -> StopNorm:
+def normalize_stop(cfg: Config, side: str, entry: float, stop: float,
+                   setup_type: str = "") -> StopNorm:
     """Apply the engine's stop-distance guard band (the single source of truth).
 
     Used by both the risk manager (sizing) and the shadow learner (so its proxy
@@ -69,6 +70,9 @@ def normalize_stop(cfg: Config, side: str, entry: float, stop: float) -> StopNor
 
     A too-tight stop is widened to ``min_stop_dist_pct``; a too-wide stop is
     rejected. Returns the (possibly widened) stop and its distance in percent.
+
+    For ``bugra_replica`` setups the stop ceiling is ``max_stop_dist_pct_bugra``
+    (wider, to accommodate the fixed-% 4.49% stop). All other guards still apply.
     """
     if entry <= 0:
         return StopNorm(False, "invalid entry")
@@ -83,9 +87,13 @@ def normalize_stop(cfg: Config, side: str, entry: float, stop: float) -> StopNor
             stop = entry * (1 - stop_dist_pct / 100.0)
         else:
             stop = entry * (1 + stop_dist_pct / 100.0)
-    if stop_dist_pct > cfg.max_stop_dist_pct:
+    # Ceiling: bugra_replica uses a wider allowed stop distance.
+    is_bugra = (setup_type == "bugra_replica" or
+                cfg.strategy_profile == "bugra_replica")
+    max_stop = cfg.max_stop_dist_pct_bugra if is_bugra else cfg.max_stop_dist_pct
+    if stop_dist_pct > max_stop:
         return StopNorm(False,
-                        f"stop dist {stop_dist_pct:.2f}% > max {cfg.max_stop_dist_pct:.2f}%")
+                        f"stop dist {stop_dist_pct:.2f}% > max {max_stop:.2f}%")
     return StopNorm(True, "", stop, stop_dist_pct)
 
 
@@ -103,7 +111,8 @@ class RiskManager:
 
         # Stop-distance guard band (shared with the shadow learner): widen a
         # too-tight stop to the minimum, reject a too-wide one.
-        sn = normalize_stop(cfg, signal.side, entry, float(signal.stop_hint))
+        sn = normalize_stop(cfg, signal.side, entry, float(signal.stop_hint),
+                            setup_type=signal.setup_type)
         if not sn.ok:
             return RiskResult(False, sn.reason)
         stop = sn.stop
@@ -186,9 +195,10 @@ class RiskManager:
             return RiskResult(False,
                               f"stop {stop:.6g} not safely inside est. liquidation {liq_price:.6g}")
 
-        # TP targets at R multiples.
+        # TP targets at R multiples (or fixed-% for bugra_replica).
         r = abs(entry - stop)
-        targets = self._build_targets(signal.side, entry, r)
+        targets = self._build_targets(signal.side, entry, r,
+                                      setup_type=signal.setup_type)
 
         # Actual NET risk reflects the (possibly capped) notional. With the
         # cost-inclusive sizing above this equals risk_amount when uncapped, and
@@ -278,9 +288,22 @@ class RiskManager:
             margin_used = avail
         return notional, leverage, margin_used
 
-    def _build_targets(self, side: str, entry: float, r: float) -> List[TPTarget]:
+    def _build_targets(self, side: str, entry: float, r: float,
+                       setup_type: str = "") -> List[TPTarget]:
         cfg = self.cfg
         sign = 1 if side == LONG else -1
+        is_bugra = (setup_type == "bugra_replica" or
+                    cfg.strategy_profile == "bugra_replica")
+        if is_bugra:
+            # Fixed-% TP levels: entry ± pct/100 * entry
+            return [
+                TPTarget(price=entry + sign * entry * cfg.bugra_tp1_pct / 100.0,
+                         fraction=cfg.tp1_frac),
+                TPTarget(price=entry + sign * entry * cfg.bugra_tp2_pct / 100.0,
+                         fraction=cfg.tp2_frac),
+                TPTarget(price=entry + sign * entry * cfg.bugra_tp3_pct / 100.0,
+                         fraction=cfg.tp3_frac),
+            ]
         return [
             TPTarget(price=entry + sign * r * cfg.tp1_r, fraction=cfg.tp1_frac),
             TPTarget(price=entry + sign * r * cfg.tp2_r, fraction=cfg.tp2_frac),
