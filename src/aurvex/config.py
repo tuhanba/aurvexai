@@ -187,6 +187,14 @@ class Config:
         default_factory=lambda: _list("SHADOW_ONLY_SETUPS", [])
     )
 
+    # -- Leverage policy ---------------------------------------------------
+    # "efficient"   : use the highest liquidation-safe leverage to minimise
+    #                 locked margin (same risk, less capital committed).
+    # "conservative": original slot-fit minimum leverage (legacy behaviour).
+    leverage_policy: str = field(
+        default_factory=lambda: _str("LEVERAGE_POLICY", "efficient")
+    )
+
     # -- Strategy profile ---------------------------------------------------
     # "legacy"         : original five detectors (default, no behaviour change)
     # "bugra_replica"  : Bugra system replica (EMA/ST/Ichimoku/ADX, fixed-% SL/TP)
@@ -288,6 +296,9 @@ class Config:
         assert self.mode in {"paper", "live"}, "AX_MODE must be 'paper' or 'live'"
         assert self.strategy_profile in {"legacy", "bugra_replica", "aurvex_enhanced"}, (
             "STRATEGY_PROFILE must be legacy|bugra_replica|aurvex_enhanced"
+        )
+        assert self.leverage_policy in {"efficient", "conservative"}, (
+            "LEVERAGE_POLICY must be efficient|conservative"
         )
         assert self.maint_margin_rate >= 0, "maint_margin_rate must be >= 0"
         assert self.liq_safety_buffer >= 1.0, "liq_safety_buffer must be >= 1.0"
