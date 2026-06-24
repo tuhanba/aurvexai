@@ -37,6 +37,7 @@ from .scanner import UniverseScanner
 from .setups import SetupDetector, build_context
 from .shadow import ShadowLearner
 from .storage import Storage
+from .commander import build_commander, read_mode_request
 from .telegram import build_notifier
 
 log = logging.getLogger("aurvex.engine")
@@ -61,9 +62,12 @@ class Engine:
         self.journal = TradeJournal(self.db)
         self.shadow = ShadowLearner(cfg, self.db)
         self.notifier = build_notifier(cfg)
+        self.commander = build_commander(cfg)
+        self.commander.set_engine(self)
         self._stop = asyncio.Event()
         self._cycles = 0
         self._last_summary_day = -1
+        self._start_ms = now_ms()
         self.db.ensure_balance(cfg.initial_paper_balance)
         # Stamp the epoch so Wave 2 compares against THIS clean run, never the
         # contaminated legacy history (written once; never deletes history).
@@ -88,10 +92,23 @@ class Engine:
         self._persist_telegram_health()
         self.notifier.system_started(self.cfg.mode, bal)
         self._persist_telegram_health()
+        # Check for a queued mode-request from the commander (written by /livemode
+        # or /papermode on the previous run).
+        mode_req = read_mode_request()
+        if mode_req:
+            requested = mode_req.get("mode", "")
+            if requested in {"paper", "live"}:
+                log.info("applying queued mode request: %s → %s",
+                         self.cfg.mode, requested)
+                self.cfg.mode = requested
+                self.notifier.send(
+                    f"ℹ️ Mode applied from queued request: {requested.upper()}")
         try:
             self.scanner.scan()  # warm the universe once
         except Exception as exc:
             log.warning("initial scan failed: %s", exc)
+        # Start the Telegram command poll loop as a background task.
+        poll_task = asyncio.ensure_future(self.commander.poll_forever())
         try:
             while not self._stop.is_set():
                 started = now_ms()
@@ -107,6 +124,11 @@ class Engine:
                 sleep_s = sleep_override if sleep_override is not None else self.cfg.cycle_interval_sec
                 await self._sleep(max(0.0, sleep_s - elapsed))
         finally:
+            poll_task.cancel()
+            try:
+                await poll_task
+            except (asyncio.CancelledError, Exception):
+                pass
             self.notifier.system_stopped(f"cycles={self._cycles}")
             self.db.close()
             log.info("engine stopped after %d cycles", self._cycles)
@@ -166,7 +188,9 @@ class Engine:
         open_notional = pf.open_notional   # running, updated as trades open this cycle
         open_margin = pf.open_margin       # running, updated as trades open this cycle
 
-        scanned = symbols[: self.cfg.max_symbols_per_cycle]
+        # Commander pause: skip new-entry scan entirely; open-trade management runs.
+        accepting_new = not self.commander.is_paused()
+        scanned = symbols[: self.cfg.max_symbols_per_cycle] if accepting_new else []
         candidates = 0
 
         if self.cfg.global_ranking:
