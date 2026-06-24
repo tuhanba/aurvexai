@@ -209,11 +209,10 @@ class Config:
     trail_swing_bars: int = field(default_factory=lambda: _int("TRAIL_SWING_BARS", 5))
 
     # -- Strategy profile ---------------------------------------------------
-    # "legacy"         : original five detectors (default, no behaviour change)
-    # "bugra_replica"  : Bugra system replica (EMA/ST/Ichimoku/ADX, fixed-% SL/TP)
-    # "aurvex_enhanced": enhanced profile (same TA core + ATR-based SL)
+    # "aurvex_enhanced": enhanced profile — same TA core + ATR-adaptive SL (default)
+    # "bugra_replica"  : Bugra system replica — same 5-condition TA, fixed-% SL/TP
     strategy_profile: str = field(
-        default_factory=lambda: _str("STRATEGY_PROFILE", "legacy")
+        default_factory=lambda: _str("STRATEGY_PROFILE", "aurvex_enhanced")
     )
 
     # -- Bugra replica parameters ------------------------------------------
@@ -309,8 +308,8 @@ class Config:
         )
         assert 0 < self.risk_pct <= 5, "risk_pct out of sane range"
         assert self.mode in {"paper", "live"}, "AX_MODE must be 'paper' or 'live'"
-        assert self.strategy_profile in {"legacy", "bugra_replica", "aurvex_enhanced"}, (
-            "STRATEGY_PROFILE must be legacy|bugra_replica|aurvex_enhanced"
+        assert self.strategy_profile in {"bugra_replica", "aurvex_enhanced"}, (
+            "STRATEGY_PROFILE must be bugra_replica|aurvex_enhanced"
         )
         assert self.leverage_policy in {"efficient", "conservative"}, (
             "LEVERAGE_POLICY must be efficient|conservative"

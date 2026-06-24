@@ -101,6 +101,15 @@ CREATE TABLE IF NOT EXISTS balance_ledger (
     ts INTEGER, mode TEXT, balance REAL, change REAL, reason TEXT, trade_id TEXT
 );
 
+CREATE TABLE IF NOT EXISTS coin_profiles (
+    symbol TEXT PRIMARY KEY,
+    total_signals INTEGER DEFAULT 0,
+    total_trades INTEGER DEFAULT 0,
+    wins INTEGER DEFAULT 0,
+    total_r REAL DEFAULT 0.0,
+    last_seen_ms INTEGER DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -557,3 +566,35 @@ class Storage:
         rows = self.conn.execute("SELECT * FROM heartbeat").fetchall()
         return [{"component": r["component"], "ts": r["ts"],
                  "status": json.loads(r["status"])} for r in rows]
+
+    # -- coin profile library -----------------------------------------------
+
+    def coin_signal_seen(self, symbol: str, ts_ms: int) -> None:
+        self.conn.execute(
+            "INSERT INTO coin_profiles(symbol, total_signals, last_seen_ms) VALUES(?,1,?) "
+            "ON CONFLICT(symbol) DO UPDATE SET "
+            "total_signals=total_signals+1, last_seen_ms=MAX(last_seen_ms,?)",
+            (symbol, ts_ms, ts_ms))
+        self.conn.commit()
+
+    def coin_trade_closed(self, symbol: str, win: bool, r_multiple: float) -> None:
+        self.conn.execute(
+            "INSERT INTO coin_profiles(symbol, total_trades, wins, total_r) VALUES(?,1,?,?) "
+            "ON CONFLICT(symbol) DO UPDATE SET "
+            "total_trades=total_trades+1, "
+            "wins=wins+?, "
+            "total_r=total_r+?",
+            (symbol, int(win), r_multiple, int(win), r_multiple))
+        self.conn.commit()
+
+    def get_coin_profile(self, symbol: str) -> Optional[Dict[str, Any]]:
+        row = self.conn.execute(
+            "SELECT * FROM coin_profiles WHERE symbol=?", (symbol,)).fetchone()
+        if not row:
+            return None
+        return {k: row[k] for k in row.keys()}
+
+    def all_coin_profiles(self) -> List[Dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM coin_profiles ORDER BY total_trades DESC").fetchall()
+        return [{k: r[k] for k in r.keys()} for r in rows]

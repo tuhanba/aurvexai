@@ -23,7 +23,7 @@ from aurvex.funnel import FunnelLogger, CAPACITY_STAGES
 from aurvex.models import (ALLOW, REJECT, WATCH, LONG, SHORT, Decision,
                             Candle, FunnelStats, now_ms)
 from aurvex.risk import RiskManager
-from aurvex.setups import SetupDetector, build_context, Context, TFView, detect_trend_continuation
+from aurvex.setups import SetupDetector, build_context, Context, TFView
 from aurvex.shadow import ShadowLearner
 from aurvex.storage import Storage
 
@@ -470,93 +470,3 @@ class TestTradeHoursFilter:
         monkeypatch.setenv("TRADE_HOURS_UTC", "")
         cfg = Config()
         assert cfg.trade_hours_utc == []
-
-
-# ---------------------------------------------------------------------------
-# CE-5: HTF ADX gate for trend_continuation
-# ---------------------------------------------------------------------------
-
-def _make_context(cfg, n_ltf: int = 60, n_htf: int = 30,
-                  htf_adx: float = 25.0) -> Context:
-    """Minimal Context with controllable htf_adx."""
-    price = 100.0
-    ltf_candles = [
-        Candle(ts=i * 60_000, open=price, high=price * 1.002,
-               low=price * 0.998, close=price, volume=1000.0)
-        for i in range(n_ltf)
-    ]
-    htf_candles = [
-        Candle(ts=i * 900_000, open=price, high=price * 1.005,
-               low=price * 0.995, close=price, volume=5000.0)
-        for i in range(n_htf)
-    ]
-    ltf_view = TFView.of(ltf_candles)
-    htf_view = TFView.of(htf_candles)
-    from aurvex.models import now_ms as _now_ms
-    from aurvex.models import OrderBook
-    snap = make_snapshot()
-    ctx = Context(cfg=cfg, snap=snap, ltf=ltf_view, htf=htf_view, last=price)
-    ctx.htf_adx = htf_adx
-    ctx.htf_ema_fast = price * 1.001
-    ctx.htf_ema_slow = price * 0.999
-    from aurvex import indicators as ind
-    ctx.ltf_atr = ind.atr(ltf_view.highs, ltf_view.lows, ltf_view.closes, 14)
-    ctx.ltf_adx = 25.0
-    ctx.ltf_rsi = 50.0
-    return ctx
-
-
-class TestAdxGateTrendContinuation:
-    def test_gate_disabled_by_default(self, cfg):
-        assert cfg.min_htf_adx_trend == 0.0
-
-    def test_gate_zero_no_effect(self, cfg):
-        cfg.min_htf_adx_trend = 0.0
-        ctx = _make_context(cfg, htf_adx=5.0)
-        # ADX=5 but gate disabled → function should not be blocked by ADX gate
-        # (may still return None for other structural reasons — that is fine)
-        result = detect_trend_continuation(ctx)
-        # Just ensure it doesn't raise; gate is not the blocking factor.
-
-    def test_gate_blocks_low_adx(self, cfg):
-        cfg.min_htf_adx_trend = 20.0
-        ctx = _make_context(cfg, htf_adx=10.0)
-        result = detect_trend_continuation(ctx)
-        assert result is None, "Low HTF ADX should suppress trend_continuation"
-
-    def test_gate_allows_high_adx(self, cfg):
-        cfg.min_htf_adx_trend = 20.0
-        ctx = _make_context(cfg, htf_adx=30.0)
-        # With ADX=30 the gate is open; structural conditions may still prevent
-        # a signal (market data is flat), so we just check it isn't None purely
-        # because of the ADX gate (i.e., gate doesn't block a 30-ADX context).
-        # We can confirm by momentarily disabling the gate and comparing.
-        cfg.min_htf_adx_trend = 0.0
-        result_no_gate = detect_trend_continuation(ctx)
-        cfg.min_htf_adx_trend = 20.0
-        result_with_gate = detect_trend_continuation(ctx)
-        # Both should give the same outcome (gate open at ADX=30 ≥ 20).
-        assert result_with_gate == result_no_gate
-
-    def test_gate_at_exact_threshold(self, cfg):
-        cfg.min_htf_adx_trend = 20.0
-        ctx = _make_context(cfg, htf_adx=20.0)
-        # ADX == threshold → gate should PASS (≥ not >)
-        # Again result may be None for structural reasons, but not because of the gate.
-        cfg.min_htf_adx_trend = 0.0
-        result_no_gate = detect_trend_continuation(ctx)
-        cfg.min_htf_adx_trend = 20.0
-        result_with_gate = detect_trend_continuation(ctx)
-        assert result_with_gate == result_no_gate
-
-    def test_gate_blocks_none_adx(self, cfg):
-        cfg.min_htf_adx_trend = 20.0
-        ctx = _make_context(cfg, htf_adx=25.0)
-        ctx.htf_adx = None  # no ADX data
-        result = detect_trend_continuation(ctx)
-        assert result is None, "Missing HTF ADX with gate enabled should block"
-
-    def test_config_min_htf_adx_trend_from_env(self, monkeypatch):
-        monkeypatch.setenv("MIN_HTF_ADX_TREND", "25.0")
-        cfg = Config()
-        assert cfg.min_htf_adx_trend == 25.0

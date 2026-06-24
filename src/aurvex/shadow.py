@@ -489,3 +489,76 @@ class ShadowLearner:
         if avg_r is None:
             return 1.0
         return round(max(0.7, min(1.3, 1.0 + avg_r * 0.3)), 3)
+
+
+# ---------------------------------------------------------------------------
+# Coin profile library
+# ---------------------------------------------------------------------------
+
+class CoinLibrary:
+    """
+    Per-symbol performance library.
+
+    Accumulates closed-trade statistics for every coin the engine touches.
+    After MIN_TRADES closed trades for a symbol the library returns a small
+    score delta that nudges the entry decision for that coin:
+
+      avg_r > 0 → positive delta (coin has edge here) → up to +5 pts
+      avg_r < 0 → negative delta (coin is a loser here) → down to -5 pts
+
+    This is advisory, capped, and only activates after enough data — it
+    cannot override the threshold or block a trade on its own.
+
+    Also records every signal seen per coin so future walk-forward analysis
+    can ask "which coins generate the most signals?" without needing live logs.
+    """
+    MIN_TRADES = 10     # minimum closed trades before score delta is applied
+    MAX_DELTA = 5.0     # maximum score nudge in either direction
+
+    def __init__(self, db) -> None:
+        self._db = db
+
+    def on_signal(self, symbol: str, ts_ms: int = 0) -> None:
+        """Call each time a signal is detected for a coin."""
+        try:
+            self._db.coin_signal_seen(symbol, ts_ms or 0)
+        except Exception:
+            pass
+
+    def on_trade_closed(self, symbol: str, win: bool, r_multiple: float) -> None:
+        """Call each time a trade closes for a coin."""
+        try:
+            self._db.coin_trade_closed(symbol, win, r_multiple)
+        except Exception:
+            pass
+
+    def score_delta(self, symbol: str) -> float:
+        """Advisory score nudge in [-MAX_DELTA, +MAX_DELTA] for the given symbol."""
+        try:
+            profile = self._db.get_coin_profile(symbol)
+        except Exception:
+            return 0.0
+        if not profile or profile.get("total_trades", 0) < self.MIN_TRADES:
+            return 0.0
+        n = profile["total_trades"]
+        avg_r = profile["total_r"] / n
+        delta = avg_r * 3.0
+        return round(max(-self.MAX_DELTA, min(self.MAX_DELTA, delta)), 2)
+
+    def profile(self, symbol: str) -> dict:
+        """Full profile dict for a symbol (for dashboard/API)."""
+        try:
+            return self._db.get_coin_profile(symbol) or {}
+        except Exception:
+            return {}
+
+    def all_profiles(self) -> list:
+        """All coin profiles sorted by trade count (for dashboard/API)."""
+        try:
+            return self._db.all_coin_profiles()
+        except Exception:
+            return []
+
+
+def build_coin_library(db) -> CoinLibrary:
+    return CoinLibrary(db)

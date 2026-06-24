@@ -35,7 +35,7 @@ from .market_data import build_provider
 from .models import ALLOW, OPEN, REJECT, Decision, MarketSnapshot, now_ms
 from .scanner import UniverseScanner
 from .setups import SetupDetector, build_context
-from .shadow import ShadowLearner
+from .shadow import ShadowLearner, build_coin_library
 from .storage import Storage
 from .commander import build_commander, read_mode_request
 from .telegram import build_notifier
@@ -61,6 +61,7 @@ class Engine:
         self.executor = PaperExecutor(cfg)
         self.journal = TradeJournal(self.db)
         self.shadow = ShadowLearner(cfg, self.db)
+        self.coins = build_coin_library(self.db)
         self.notifier = build_notifier(cfg)
         self.commander = build_commander(cfg)
         self.commander.set_engine(self)
@@ -224,8 +225,11 @@ class Engine:
                     self.engine.scorer.build(s, snap)
                     if self.cfg.shadow_apply:
                         delta = self.shadow.score_delta(s.setup_type)
-                        if delta:
-                            s.score = max(0.0, min(100.0, s.score + delta))
+                        coin_delta = self.coins.score_delta(s.symbol)
+                        total_delta = delta + coin_delta
+                        if total_delta:
+                            s.score = max(0.0, min(100.0, s.score + total_delta))
+                    self.coins.on_signal(s.symbol, now_ms())
                 signal = max(all_signals, key=lambda s: s.score)
 
                 closed_ltf = snap.closed_ltf(self.cfg.ltf)
@@ -342,8 +346,11 @@ class Engine:
                     self.engine.scorer.build(s, snap)
                     if self.cfg.shadow_apply:
                         delta = self.shadow.score_delta(s.setup_type)
-                        if delta:
-                            s.score = max(0.0, min(100.0, s.score + delta))
+                        coin_delta = self.coins.score_delta(s.symbol)
+                        total_delta = delta + coin_delta
+                        if total_delta:
+                            s.score = max(0.0, min(100.0, s.score + total_delta))
+                    self.coins.on_signal(s.symbol, now_ms())
                 signal = max(all_signals, key=lambda s: s.score)
 
                 # Refresh portfolio view counters locally for same-cycle gating. The
@@ -460,6 +467,11 @@ class Engine:
                 self.notifier.trade_event(trade, ev.kind, ev.price, ev.pnl)
             if trade.status != OPEN:
                 self.notifier.trade_closed(trade)
+                self.coins.on_trade_closed(
+                    trade.symbol,
+                    win=trade.realized_pnl >= 0,
+                    r_multiple=trade.realized_pnl_pct / 100.0 if trade.realized_pnl_pct else 0.0,
+                )
         if marks:
             try:
                 self.db.set_meta("marks", {"ts": now_ms(), "prices": marks})

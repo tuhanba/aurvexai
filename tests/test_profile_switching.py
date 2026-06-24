@@ -1,13 +1,13 @@
 """
-Block 5 tests — AURVEX_ENHANCED detector + profile-based registry switching.
+Profile registry + detector tests (updated after legacy removal).
 
 Gates:
-1. Profile "legacy"         → SetupDetector uses LEGACY_DETECTORS (no bugra/enhanced).
-2. Profile "bugra_replica"  → registry contains ONLY detect_bugra_replica.
-3. Profile "aurvex_enhanced"→ registry contains ONLY detect_aurvex_enhanced.
-4. detect_aurvex_enhanced fires on a strong uptrend (ATR-based stop within legacy range).
+1. Profile "bugra_replica"   → registry contains ONLY detect_bugra_replica.
+2. Profile "aurvex_enhanced" → registry contains ONLY detect_aurvex_enhanced.
+3. Unrecognised / default profile → falls back to detect_aurvex_enhanced.
+4. detect_aurvex_enhanced fires on a strong uptrend (ATR-based stop within range).
 5. detect_aurvex_enhanced ATR stop is within [min_stop_dist_pct, max_stop_dist_pct].
-6. All three profiles load without error (config.validate() passes).
+6. Both supported profiles load without error (config.validate() passes).
 """
 import os
 import sys
@@ -21,13 +21,13 @@ from aurvex.models import LONG, SHORT
 from aurvex.setups import (
     SetupDetector, _build_registry,
     detect_aurvex_enhanced, detect_bugra_replica,
-    LEGACY_DETECTORS, Context, TFView,
+    Context, TFView,
 )
 from aurvex import indicators as ind
 
 
 # ---------------------------------------------------------------------------
-# Helpers (same as test_bugra_replica.py, extracted locally)
+# Helpers
 # ---------------------------------------------------------------------------
 
 def _make_uptrend_candles(n: int, start: float = 100.0, step: float = 0.5, ts0: int = 0):
@@ -79,20 +79,7 @@ def _build_ctx(profile: str, side: str = LONG, n: int = 130) -> Context:
 
 
 # ---------------------------------------------------------------------------
-# 1. Legacy profile → legacy registry
-# ---------------------------------------------------------------------------
-
-def test_legacy_profile_uses_legacy_registry():
-    cfg = _cfg("legacy")
-    registry = _build_registry(cfg)
-    for fn in LEGACY_DETECTORS:
-        assert fn in registry
-    assert detect_bugra_replica not in registry
-    assert detect_aurvex_enhanced not in registry
-
-
-# ---------------------------------------------------------------------------
-# 2. bugra_replica profile → only replica in registry
+# 1. bugra_replica profile → only replica in registry
 # ---------------------------------------------------------------------------
 
 def test_bugra_profile_registry():
@@ -102,13 +89,25 @@ def test_bugra_profile_registry():
 
 
 # ---------------------------------------------------------------------------
-# 3. aurvex_enhanced profile → only enhanced in registry
+# 2. aurvex_enhanced profile → only enhanced in registry
 # ---------------------------------------------------------------------------
 
 def test_enhanced_profile_registry():
     cfg = _cfg("aurvex_enhanced")
     registry = _build_registry(cfg)
     assert registry == [detect_aurvex_enhanced]
+
+
+# ---------------------------------------------------------------------------
+# 3. Default / unrecognised profile → falls back to aurvex_enhanced
+# ---------------------------------------------------------------------------
+
+def test_default_profile_falls_back_to_enhanced():
+    cfg = Config()
+    cfg.strategy_profile = "aurvex_enhanced"   # default after legacy removal
+    registry = _build_registry(cfg)
+    assert detect_aurvex_enhanced in registry
+    assert detect_bugra_replica not in registry
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +124,7 @@ def test_aurvex_enhanced_long_fires():
 
 
 # ---------------------------------------------------------------------------
-# 5. Enhanced stop is within standard guard band (not bugra-wide)
+# 5. Enhanced stop is within standard guard band
 # ---------------------------------------------------------------------------
 
 def test_aurvex_enhanced_stop_within_legacy_range():
@@ -138,17 +137,16 @@ def test_aurvex_enhanced_stop_within_legacy_range():
         f"Stop dist {stop_dist_pct:.3f}% below min {cfg.min_stop_dist_pct}%"
     )
     assert stop_dist_pct <= cfg.max_stop_dist_pct, (
-        f"Stop dist {stop_dist_pct:.3f}% above max {cfg.max_stop_dist_pct}% "
-        f"(enhanced uses legacy range, not bugra-wide)"
+        f"Stop dist {stop_dist_pct:.3f}% above max {cfg.max_stop_dist_pct}%"
     )
 
 
 # ---------------------------------------------------------------------------
-# 6. All three profiles load config without error
+# 6. Both supported profiles validate without error
 # ---------------------------------------------------------------------------
 
-def test_all_profiles_validate():
-    for profile in ("legacy", "bugra_replica", "aurvex_enhanced"):
+def test_supported_profiles_validate():
+    for profile in ("bugra_replica", "aurvex_enhanced"):
         os.environ["STRATEGY_PROFILE"] = profile
         cfg = Config()
         cfg.validate()  # must not raise
