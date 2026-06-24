@@ -21,9 +21,9 @@
         ▼
  per symbol:
    get_snapshot     → MarketSnapshot {LTF candles, HTF candles, order book, funding}
-   build_context    → cached indicators + HTF bias
-   SetupDetector    → Signal (first matching setup, priority-ordered)
-   ScoreBuilder     → score 0..100 (factors + book imbalance + spread tightness)
+   build_context    → cached EMA/ADX/ATR/RSI + LTF Supertrend/Ichimoku/±DI + HTF bias
+   SetupDetector    → Signal (active profile detector: bugra_replica | aurvex_enhanced)
+   ScoreBuilder     → score 0..100 (per-setup factor weights + book imbalance + spread)
         ▼
  DecisionEngine.decide(signal, snapshot, portfolio):
    1) FilterChain   → 7 minimal hard filters (first failure wins)
@@ -47,11 +47,11 @@
 |---|---|
 | `config.py` | All tunables, env-driven. Paper and live share every value. |
 | `models.py` | Plain dataclasses. `Decision` is the contract (`to_dict`/`to_json`). |
-| `indicators.py` | Pure-python SMA/EMA/RSI/ATR/ADX/ROC — no numpy/pandas. |
+| `indicators.py` | Pure-python SMA/EMA/RSI/ATR/ADX/ROC + Supertrend/Ichimoku/±DI — no numpy/pandas. |
 | `market_data.py` | `CCXTProvider` (lazy ccxt, public data) and deterministic `SyntheticProvider`. |
 | `scanner.py` | Ranks the universe by quote volume, applies include/exclude, bounds size. |
-| `setups.py` | HTF `Context` + 5 detectors, each returns a `Signal` with factors. |
-| `scoring.py` | Blends setup factors (70%) + base confidence (30%), book/spread nudges. |
+| `setups.py` | `Context` (LTF Supertrend/Ichimoku/±DI cache + HTF bias) + 2 profile detectors (`bugra_replica`, `aurvex_enhanced`); legacy detectors removed. |
+| `scoring.py` | Blends per-setup factor weights (70%) + base confidence (30%), book/spread nudges. `SETUP_WEIGHTS` must cover every active setup. |
 | `filters.py` | 7 hard filters: daily-loss, max-open, duplicate, cooldown, liquidity, spread, slippage. |
 | `risk.py` | Stop-distance guards, position sizing, leverage suggestion, TP targets. |
 | `decision.py` | The single brain. Filters → threshold → risk → ALLOW/WATCH/REJECT. |
@@ -62,9 +62,27 @@
 | `funnel.py` | Accumulates per-cycle observability counts. |
 | `shadow.py` | Observe-first learner. Advisory only; never a hard veto. |
 | `telegram.py` | Single notifier; `NullNotifier` when unconfigured. |
-| `backtest.py` | No-lookahead replay through the same engine. |
+| `backtest.py` | No-lookahead replay through the same engine; 8h funding + runner-trailing inputs. |
+| `walkforward.py` | Block 6 offline validation: segmented OOS walk-forward, funding, Monte-Carlo drawdown, deflated Sharpe, plateau check, decision table. |
 | `engine.py` | Async loop tying it together; graceful shutdown; heartbeat. |
 | `dashboard/` | Flask read-only API + auto-refreshing HTML. |
+
+## Strategy profiles & validation
+
+One detector runs per `STRATEGY_PROFILE`:
+
+- `aurvex_enhanced` (default) — 5-condition TA core (EMA cross + Supertrend +
+  Ichimoku + ADX/±DI) with a volatility-adaptive ATR stop.
+- `bugra_replica` — the same TA core with a fixed-% stop/TP (Bugra replica).
+
+Both feed the *same* `DecisionEngine` / `RiskManager` / executor (parity is
+preserved). `SETUP_WEIGHTS` in `scoring.py` carries factor weights for both
+active setups — without them every score is capped below `trade_threshold` and
+nothing trades. Block 6 (`python main.py walkforward`) validates a profile
+out-of-sample on real Binance data (deterministic synthetic fallback when
+offline), net of fees + slippage + funding, and prints a per-profile decision
+table. Live stays OFF until that table shows a positive net edge with an
+acceptable drawdown (see `ROADMAP.md`).
 
 ## Data flow & state
 
