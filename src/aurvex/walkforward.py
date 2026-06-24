@@ -41,6 +41,35 @@ def _cache_path(cache_dir: str, symbol: str, timeframe: str) -> str:
     return os.path.join(cache_dir, f"{sym}_{timeframe}.csv")
 
 
+def _paginate_ohlcv(ex, symbol: str, timeframe: str, limit: int,
+                    per_call: int = 1500) -> List[List]:
+    """Fetch up to ``limit`` OHLCV rows, paging backwards via ``since``.
+
+    Binance futures caps a single klines request at ~1500 candles, so deep
+    history needs several calls. Returns oldest-first, de-duplicated rows (the
+    most recent ``limit`` of them). ``ex`` is any ccxt-like exchange exposing
+    ``parse_timeframe``, ``milliseconds`` and ``fetch_ohlcv(since=, limit=)``.
+    """
+    tf_ms = ex.parse_timeframe(timeframe) * 1000
+    since = ex.milliseconds() - limit * tf_ms
+    out: List[List] = []
+    seen = set()
+    while len(out) < limit:
+        batch = ex.fetch_ohlcv(symbol, timeframe, since=since,
+                               limit=min(per_call, limit - len(out)))
+        if not batch:
+            break
+        fresh = [r for r in batch if r[0] not in seen]
+        for r in fresh:
+            seen.add(r[0])
+        out.extend(fresh)
+        if len(batch) < per_call:
+            break  # exchange has no more recent data
+        since = batch[-1][0] + tf_ms
+    out.sort(key=lambda r: r[0])
+    return out[-limit:]
+
+
 def load_or_fetch_candles(symbol: str, timeframe: str,
                           limit: int = 2000,
                           cache_dir: str = "data/cache",
@@ -68,9 +97,13 @@ def load_or_fetch_candles(symbol: str, timeframe: str,
 
     try:
         import ccxt  # type: ignore
-        ex = getattr(ccxt, exchange_id)({"enableRateLimit": True})
+        ex = getattr(ccxt, exchange_id)({
+            "enableRateLimit": True,
+            "options": {"defaultType": "future"},
+        })
         ex.load_markets()
-        raw = ex.fetch_ohlcv(symbol, timeframe, limit=limit)
+        # Page beyond the single-request cap so deep history is available.
+        raw = _paginate_ohlcv(ex, symbol, timeframe, limit)
         if raw:
             with open(path, "w", newline="") as f:
                 w = csv.writer(f)

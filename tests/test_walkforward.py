@@ -219,3 +219,50 @@ def test_walkforward_analysis_synthetic_fallback(cfg, monkeypatch):
     assert source == "synthetic"
     assert used                                  # synthetic data was generated
     assert len(results) == 2
+
+
+# ---------------------------------------------------------------------------
+# 9. ccxt pagination (beyond the single-request 1500-candle cap)
+# ---------------------------------------------------------------------------
+
+def test_paginate_ohlcv_pages_beyond_single_call():
+    from aurvex.walkforward import _paginate_ohlcv
+
+    class FakeEx:
+        TF_MS = 60_000
+
+        def parse_timeframe(self, tf):
+            return 60                      # seconds per bar (1m)
+
+        def milliseconds(self):
+            return 10_000 * self.TF_MS     # "now"
+
+        def fetch_ohlcv(self, symbol, timeframe, since=None, limit=None):
+            # Return `limit` consecutive bars starting at `since` (cap modelled
+            # by the caller passing limit<=per_call).
+            return [[since + i * self.TF_MS, 1.0, 1.0, 1.0, 1.0, 1.0]
+                    for i in range(limit)]
+
+    rows = _paginate_ohlcv(FakeEx(), "BTC/USDT:USDT", "1m", 4000, per_call=1500)
+    ts = [r[0] for r in rows]
+    assert len(rows) == 4000                # 1500 + 1500 + 1000 across 3 calls
+    assert ts == sorted(ts)                 # oldest-first
+    assert len(set(ts)) == 4000             # de-duplicated
+
+
+def test_paginate_ohlcv_stops_when_exchange_runs_out():
+    from aurvex.walkforward import _paginate_ohlcv
+
+    class ShortEx:
+        def parse_timeframe(self, tf):
+            return 60
+
+        def milliseconds(self):
+            return 10_000 * 60_000
+
+        def fetch_ohlcv(self, symbol, timeframe, since=None, limit=None):
+            return [[since + i * 60_000, 1, 1, 1, 1, 1] for i in range(200)]
+
+    # Asks for 4000 but each call yields 200 (< per_call) → stops after one call.
+    rows = _paginate_ohlcv(ShortEx(), "X", "1m", 4000, per_call=1500)
+    assert len(rows) == 200
