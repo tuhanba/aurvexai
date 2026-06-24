@@ -27,6 +27,7 @@ import logging
 import random
 from typing import Dict, List, Optional
 
+from . import indicators as ind
 from .config import Config
 from .decision import DecisionEngine
 from .executors import PaperExecutor
@@ -119,6 +120,47 @@ class Backtester:
         self.engine = DecisionEngine(cfg)
         self.executor = PaperExecutor(cfg)
 
+    def _precompute_trail_series(self, candles: List[Candle]) -> Dict:
+        """Precompute the per-bar series the runner trailing stop needs.
+
+        Only the series for the configured trail_mode is built (plus ATR, the
+        default). Called once per symbol and only when runner trailing is on.
+        """
+        highs = [c.high for c in candles]
+        lows = [c.low for c in candles]
+        closes = [c.close for c in candles]
+        s: Dict = {"atr": ind.atr_series(highs, lows, closes, 14)}
+        mode = self.cfg.trail_mode
+        if mode == "supertrend":
+            s["st"] = ind.supertrend_series(highs, lows, closes,
+                                            self.cfg.bugra_st_period,
+                                            self.cfg.bugra_st_mult)
+        elif mode == "kijun":
+            kj: List[Optional[float]] = [None] * len(candles)
+            for j in range(25, len(candles)):
+                kj[j] = (max(highs[j - 25:j + 1]) + min(lows[j - 25:j + 1])) / 2.0
+            s["kijun"] = kj
+        return s
+
+    def _trail_inputs(self, ltf: List[Candle], i: int, series: Dict):
+        """Return (atr, supertrend_line, kijun, highs, lows) for bar ``i``."""
+        mode = self.cfg.trail_mode
+        atrs = series.get("atr") or []
+        atr_val = atrs[i] if i < len(atrs) else None
+        st_line = kijun = highs = lows = None
+        if mode == "supertrend":
+            sts = series.get("st") or []
+            v = sts[i] if i < len(sts) else None
+            st_line = v["line"] if v else None
+        elif mode == "kijun":
+            kjs = series.get("kijun") or []
+            kijun = kjs[i] if i < len(kjs) else None
+        elif mode == "swing":
+            lo = max(0, i - self.cfg.trail_swing_bars + 1)
+            highs = [c.high for c in ltf[lo:i + 1]]
+            lows = [c.low for c in ltf[lo:i + 1]]
+        return atr_val, st_line, kijun, highs, lows
+
     def _apply_funding(self, trade, close_ts: int, tf_ms: int) -> float:
         """Deduct estimated 8h funding for the holding period (Block 6).
 
@@ -146,6 +188,11 @@ class Backtester:
         warmup = max(45, cfg.htf_limit)
         tf_ms = _tf_ms(cfg.ltf)
         funding_total = 0.0
+        # Runner trailing inputs are only needed (and only computed) when a
+        # runner is configured; otherwise the fill path is byte-identical.
+        trailing_on = cfg.runner_frac > 0
+        trail_series = ({s: self._precompute_trail_series(c)
+                         for s, c in ltf_data.items()} if trailing_on else {})
 
         # Build a global, time-ordered event stream across all symbols.
         events = []
@@ -170,8 +217,16 @@ class Backtester:
             # 1) manage existing position for this symbol on this bar
             tr = open_trades.get(sym)
             if tr is not None:
-                fills = self.executor.simulate_fill(tr, bar.high, bar.low, bar.close,
-                                                    bar_ts=bar.ts)
+                if trailing_on:
+                    atr_v, st_v, kj_v, hh, ll = self._trail_inputs(
+                        ltf, i, trail_series[sym])
+                    fills = self.executor.simulate_fill(
+                        tr, bar.high, bar.low, bar.close, bar_ts=bar.ts,
+                        atr=atr_v, supertrend_line=st_v, kijun=kj_v,
+                        highs=hh, lows=ll)
+                else:
+                    fills = self.executor.simulate_fill(tr, bar.high, bar.low, bar.close,
+                                                        bar_ts=bar.ts)
                 for ev in fills:
                     if ev.kind != "BE_MOVE":
                         balance += ev.pnl
