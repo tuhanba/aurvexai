@@ -30,6 +30,9 @@ def _base_cfg(**kwargs) -> Config:
     cfg.trade_threshold = 60.0
     cfg.watchlist_threshold = 50.0
     cfg.trade_hours_utc = []
+    # Pin to conservative policy: these golden tests document the pre-Block-3
+    # slot-aware leverage algorithm; efficient leverage is tested separately.
+    cfg.leverage_policy = "conservative"
     for k, v in kwargs.items():
         setattr(cfg, k, v)
     return cfg

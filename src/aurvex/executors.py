@@ -26,7 +26,7 @@ trade decision (score/threshold/sizing) - that already happened upstream.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 from .config import Config
 from .models import (LIVE, LONG, OPEN, PAPER, SHORT, CLOSED, Decision, Trade,
@@ -49,8 +49,10 @@ class BaseExecutor:
     # -- trade construction (shared) --------------------------------------
     def build_trade(self, decision: Decision, mode: str) -> Trade:
         assert decision.decision == "ALLOW", "build_trade requires an ALLOW decision"
-        fractions = decision.metadata.get("tp_fractions",
-                                          [self.cfg.tp1_frac, self.cfg.tp2_frac, self.cfg.tp3_frac])
+        fractions = decision.metadata.get(
+            "tp_fractions",
+            [self.cfg.tp1_frac, self.cfg.tp2_frac, self.cfg.tp3_frac],
+        )
         targets = [
             TPTarget(price=decision.tp1, fraction=fractions[0]),
             TPTarget(price=decision.tp2, fraction=fractions[1]),
@@ -118,8 +120,79 @@ class BaseExecutor:
         trade.realized_pnl_pct = trade.realized_pnl / risk_amount  # R multiple
         return net
 
+    def _cost_adjusted_be(self, trade: Trade) -> float:
+        """Break-even price adjusted for round-trip fees + slippage (cost-BE).
+
+        Moves the stop to the point where closing the remaining fraction covers
+        all round-trip costs, so the trade breaks even on cash (not just price).
+        """
+        rt = self._cost_frac() * 2.0  # round-trip: entry taker + exit taker
+        if trade.side == LONG:
+            return trade.entry * (1.0 + rt)
+        return trade.entry * (1.0 - rt)
+
+    def advance_trailing(
+        self,
+        trade: Trade,
+        high: float, low: float, close: float,
+        atr: Optional[float] = None,
+        supertrend_line: Optional[float] = None,
+        kijun: Optional[float] = None,
+        highs: Optional[Sequence[float]] = None,
+        lows: Optional[Sequence[float]] = None,
+    ) -> None:
+        """Advance the trailing stop for a runner position.
+
+        Rules (enforced):
+          * Only moves in the profit direction — NEVER loosens the stop.
+          * trail_mode "atr"        : close ∓ trail_atr_mult × ATR
+          * trail_mode "supertrend" : supertrend support/resistance line
+          * trail_mode "kijun"      : Ichimoku kijun-sen (base line)
+          * trail_mode "swing"      : recent N-bar micro swing (low for LONG,
+                                      high for SHORT)
+
+        Caller must provide the relevant optional inputs for the chosen mode.
+        Does nothing if trailing is not active or no usable value is available.
+        """
+        if not trade.metadata.get("trailing"):
+            return
+        cfg = self.cfg
+        cur = trade.current_stop
+        candidate: Optional[float] = None
+
+        mode = cfg.trail_mode
+        if mode == "atr" and atr is not None:
+            if trade.side == LONG:
+                candidate = close - cfg.trail_atr_mult * atr
+            else:
+                candidate = close + cfg.trail_atr_mult * atr
+        elif mode == "supertrend" and supertrend_line is not None:
+            candidate = supertrend_line
+        elif mode == "kijun" and kijun is not None:
+            candidate = kijun
+        elif mode == "swing":
+            n = cfg.trail_swing_bars
+            if highs is not None and lows is not None and len(highs) >= n:
+                if trade.side == LONG:
+                    candidate = min(lows[-n:])
+                else:
+                    candidate = max(highs[-n:])
+
+        if candidate is None:
+            return
+        # Ratchet: only move in the profit direction.
+        if trade.side == LONG:
+            trade.current_stop = max(cur, candidate)
+        else:
+            trade.current_stop = min(cur, candidate)
+
     def simulate_fill(self, trade: Trade, high: float, low: float,
-                      close: float, bar_ts: Optional[int] = None) -> List[FillEvent]:
+                      close: float, bar_ts: Optional[int] = None,
+                      atr: Optional[float] = None,
+                      supertrend_line: Optional[float] = None,
+                      kijun: Optional[float] = None,
+                      highs: Optional[Sequence[float]] = None,
+                      lows: Optional[Sequence[float]] = None) -> List[FillEvent]:
         """
         Advance an OPEN trade against one price bar. Pessimistic intrabar
         ordering: the stop is checked before take-profits, so if both are
@@ -133,6 +206,12 @@ class BaseExecutor:
           * one fill per candle: the same (or an older) bar never advances a
             trade twice (``bar_ts > last_processed_bar_ts``), so a 20s cycle that
             re-sees the same 1m bar ~3x counts it once.
+
+        Block 4 extensions (backwards-compatible via runner_frac=0 default):
+          * TP1 → cost-adjusted break-even (entry + round-trip fees, not raw entry).
+          * TP2 → stop locked to TP1 price.
+          * TP3 → runner trailing activated when runner_frac > 0.
+          * Trailing stop advances each bar (monotone, profit direction only).
         """
         events: List[FillEvent] = []
         if trade.status == CLOSED or trade.remaining_fraction <= 0:
@@ -147,6 +226,15 @@ class BaseExecutor:
                 return events           # already advanced on this bar
             trade.metadata["last_processed_bar_ts"] = bar_ts
 
+        # Advance trailing BEFORE checking fills (so the tightened stop can be
+        # hit on the same bar it advances — conservative, favours the stop).
+        if trade.metadata.get("trailing"):
+            self.advance_trailing(
+                trade, high, low, close,
+                atr=atr, supertrend_line=supertrend_line, kijun=kijun,
+                highs=highs, lows=lows,
+            )
+
         cur_stop = trade.current_stop
 
         # 1) Stop check (pessimistic, before TPs).
@@ -157,8 +245,14 @@ class BaseExecutor:
             trade.status = CLOSED
             trade.close_time = now_ms()
             trade.close_price = cur_stop
-            # Distinguish a breakeven stop from the original protective stop.
-            trade.close_reason = "BE" if trade.metadata.get("be_moved") else "SL"
+            be_moved = trade.metadata.get("be_moved")
+            trail = trade.metadata.get("trailing")
+            if trail:
+                trade.close_reason = "TRAIL"
+            elif be_moved:
+                trade.close_reason = "BE"
+            else:
+                trade.close_reason = "SL"
             events.append(FillEvent(trade.close_reason, cur_stop, frac, net, True))
             return events
 
@@ -179,11 +273,30 @@ class BaseExecutor:
                 trade.close_price = tp.price
                 trade.close_reason = label
             events.append(FillEvent(label, tp.price, tp.fraction, net, fully))
-            # Move stop to breakeven after the first TP.
-            if i == 0 and self.cfg.move_sl_to_be_after_tp1 and not fully:
-                trade.current_stop = trade.entry
-                trade.metadata["be_moved"] = True
-                events.append(FillEvent("BE_MOVE", trade.entry, 0.0, 0.0, False))
+
+            if not fully:
+                if i == 0 and self.cfg.move_sl_to_be_after_tp1:
+                    # Block 4: cost-adjusted BE (not raw entry).
+                    be_price = self._cost_adjusted_be(trade)
+                    if trade.side == LONG:
+                        be_price = max(be_price, trade.entry)   # never below entry
+                    else:
+                        be_price = min(be_price, trade.entry)   # never above entry
+                    trade.current_stop = be_price
+                    trade.metadata["be_moved"] = True
+                    events.append(FillEvent("BE_MOVE", be_price, 0.0, 0.0, False))
+                elif i == 1:
+                    # Block 4: lock stop at TP1 price after TP2 hits.
+                    tp1_price = trade.tp_targets[0].price
+                    if trade.side == LONG:
+                        trade.current_stop = max(trade.current_stop, tp1_price)
+                    else:
+                        trade.current_stop = min(trade.current_stop, tp1_price)
+                    trade.metadata["tp2_locked"] = True
+                elif i == 2:
+                    # Block 4: TP3 hit — activate runner trailing if configured.
+                    if self.cfg.runner_frac > 0:
+                        trade.metadata["trailing"] = True
             if fully:
                 break
         return events

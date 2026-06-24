@@ -62,7 +62,8 @@ class ShadowLearner:
             return None
         # Normalise the stop EXACTLY as the engine would (min/max guard) so the
         # proxy R reflects the risk the engine actually trades, not the raw hint.
-        sn = normalize_stop(self.cfg, signal.side, entry, raw_stop)
+        sn = normalize_stop(self.cfg, signal.side, entry, raw_stop,
+                            setup_type=signal.setup_type)
         if not sn.ok:
             return None
         stop = sn.stop

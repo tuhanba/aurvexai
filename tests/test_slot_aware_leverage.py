@@ -21,6 +21,8 @@ def _cfg_slots(cfg):
     cfg.max_leverage = 10
     cfg.min_stop_dist_pct = 0.30
     cfg.max_portfolio_exposure_pct = 2000.0   # keep the notional cap from binding
+    # These tests specifically verify slot-aware (conservative) behaviour.
+    cfg.leverage_policy = "conservative"
     return cfg
 
 
