@@ -340,6 +340,46 @@ class TestLadderReplay:
         assert r["final_outcome"] == "SL"
         assert r["net_r"] < 0
 
+    def test_tp2_lock_books_tp1_on_reversal(self, cfg, tmp_path):
+        """Block 4 parity: after TP2 the stop locks to the TP1 price, so a
+        reversal exits the remaining fraction at TP1 (positive R), not at BE."""
+        db = self._make_storage(tmp_path)
+        learner = ShadowLearner(cfg, db)
+        entry, stop, tp1 = 100.0, 99.0, 101.5  # r = 1.0, tp2 = 102.5, tp3 = 104.0
+        self._insert_shadow(db, entry=entry, stop=stop, tp1=tp1, sig_ts=0)
+        candles = [
+            # Bar 1: take TP1 and TP2 (not TP3); stop locks to TP1 = 101.5.
+            Candle(ts=60_000, open=100.0, high=103.0, low=100.0, close=102.0, volume=1e3),
+            # Bar 2: reverse down through the locked stop at 101.5.
+            Candle(ts=120_000, open=101.4, high=101.6, low=101.0, close=101.2, volume=1e3),
+        ]
+        r = learner.ladder_replay({"BTCUSDT": candles})[0]
+        assert r["tp1_hit"] and r["tp2_hit"] and not r["tp3_hit"]
+        # Remaining 0.2 booked at +1.5R (TP1 lock), not 0R (BE): net ≈ 1.67.
+        # Without the TP2-lock it would be ≈ 1.37, so > 1.5 distinguishes them.
+        assert 1.5 < r["net_r"] < 1.8
+
+    def test_runner_pnl_is_counted_after_tp3(self, cfg, tmp_path):
+        """Block 4 parity: with runner_frac > 0 the runner fraction is trailed
+        and its PnL is booked — not silently dropped at TP3."""
+        cfg.tp1_frac, cfg.tp2_frac, cfg.tp3_frac, cfg.runner_frac = 0.35, 0.30, 0.20, 0.15
+        db = self._make_storage(tmp_path)
+        learner = ShadowLearner(cfg, db)
+        entry, stop, tp1 = 100.0, 99.0, 101.5  # tp2 = 102.5, tp3 = 104.0
+        self._insert_shadow(db, entry=entry, stop=stop, tp1=tp1, sig_ts=0)
+        # < 15 bars → ATR undefined → trailing holds at the TP1-locked stop; the
+        # runner rides to the last bar and is booked at its close (2.8R).
+        candles = [
+            Candle(ts=60_000, open=100.0, high=104.5, low=100.0, close=102.0, volume=1e3),
+            Candle(ts=120_000, open=102.0, high=103.0, low=102.0, close=102.5, volume=1e3),
+            Candle(ts=180_000, open=102.5, high=103.0, low=102.0, close=102.8, volume=1e3),
+        ]
+        r = learner.ladder_replay({"BTCUSDT": candles})[0]
+        assert r["tp1_hit"] and r["tp2_hit"] and r["tp3_hit"]
+        assert r["final_outcome"] == "TP3"
+        # All four fractions booked (≈2.365); dropping the runner would give ≈1.945.
+        assert r["net_r"] > 2.0
+
     def test_missing_symbol_skipped(self, cfg, tmp_path):
         db = self._make_storage(tmp_path)
         learner = ShadowLearner(cfg, db)

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from . import indicators as ind
 from .config import Config
 from .models import (LONG, OPEN, MarketSnapshot, Signal, Decision, new_id, now_ms)
 from .risk import normalize_stop
@@ -200,6 +201,7 @@ class ShadowLearner:
         cfg = self.cfg
         rows = self.db.conn.execute("SELECT * FROM shadows").fetchall()
         results: List[Dict[str, Any]] = []
+        atr_cache: Dict[str, List[Optional[float]]] = {}
 
         for sh in rows:
             sh = dict(sh)
@@ -228,32 +230,60 @@ class ShadowLearner:
             cost_r = rt / stop_frac if stop_frac > 0 else 0.0
 
             f1, f2, f3 = cfg.tp1_frac, cfg.tp2_frac, cfg.tp3_frac
+            runner_frac = cfg.runner_frac
             remaining = 1.0
             gross_r = 0.0
-            tp1_hit = tp2_hit = tp3_hit = be_moved = False
+            tp1_hit = tp2_hit = tp3_hit = be_moved = trailing = False
             cur_stop = stop
             final_outcome = "EXPIRED"
             bars_to_close = 0
             last_close = entry  # fallback for EXPIRED exit price
 
-            for c in candles:
+            # Cost-adjusted break-even price (mirrors the paper executor's
+            # _cost_adjusted_be: never worse than raw entry).
+            rt = (cfg.taker_fee_pct + cfg.slippage_assumption_pct) / 100.0 * 2.0
+            be_price = entry * (1.0 + rt) if side == LONG else entry * (1.0 - rt)
+
+            # ATR series for runner trailing (cached per symbol). Shadow models
+            # the runner with ATR trailing — exact for the default TRAIL_MODE=atr,
+            # an approximation for supertrend/kijun/swing modes.
+            atrs = atr_cache.get(symbol)
+            if atrs is None:
+                atrs = ind.atr_series([c.high for c in candles],
+                                      [c.low for c in candles],
+                                      [c.close for c in candles], 14)
+                atr_cache[symbol] = atrs
+
+            for idx, c in enumerate(candles):
                 if c.ts <= sig_ts:
                     continue
                 bars_to_close += 1
                 last_close = c.close
                 h, l = c.high, c.low
 
+                # Runner trailing: ratchet the stop in the profit direction only,
+                # BEFORE the stop check (conservative, mirrors the executor).
+                if trailing and atrs[idx] is not None:
+                    if side == LONG:
+                        cur_stop = max(cur_stop, c.close - cfg.trail_atr_mult * atrs[idx])
+                    else:
+                        cur_stop = min(cur_stop, c.close + cfg.trail_atr_mult * atrs[idx])
+
                 # Pessimistic: stop before TPs within the same bar.
                 stop_hit = (l <= cur_stop) if side == LONG else (h >= cur_stop)
                 if stop_hit:
-                    # BE stop → 0R price move; original stop → -1R.
-                    exit_r_per_1 = 0.0 if be_moved else -1.0
+                    # Book the remaining fraction at the ACTUAL stop price so a
+                    # cost-BE / TP1-locked / trailed stop earns its real R (the
+                    # raw stop = -1R, a cost-BE ≈ break-even, a TP1-lock = +tp1_r).
+                    exit_r_per_1 = ((cur_stop - entry) if side == LONG
+                                    else (entry - cur_stop)) / r
                     gross_r += exit_r_per_1 * remaining
-                    final_outcome = "BE" if be_moved else "SL"
+                    final_outcome = ("TRAIL" if trailing
+                                     else ("BE" if be_moved else "SL"))
                     remaining = 0.0
                     break
 
-                # TP1
+                # TP1 → move stop to cost-adjusted break-even.
                 if not tp1_hit:
                     reached = (h >= tp1_price) if side == LONG else (l <= tp1_price)
                     if reached:
@@ -262,10 +292,11 @@ class ShadowLearner:
                         remaining -= f1
                         tp1_hit = True
                         if cfg.move_sl_to_be_after_tp1:
-                            cur_stop = entry
+                            cur_stop = (max(be_price, entry) if side == LONG
+                                        else min(be_price, entry))
                             be_moved = True
 
-                # TP2 (only after TP1)
+                # TP2 (only after TP1) → lock stop at the TP1 price.
                 if tp1_hit and not tp2_hit:
                     reached = (h >= tp2_price) if side == LONG else (l <= tp2_price)
                     if reached:
@@ -273,8 +304,10 @@ class ShadowLearner:
                         gross_r += tp2_r * f2
                         remaining -= f2
                         tp2_hit = True
+                        cur_stop = (max(cur_stop, tp1_price) if side == LONG
+                                    else min(cur_stop, tp1_price))
 
-                # TP3 (only after TP2)
+                # TP3 (only after TP2) → activate runner trailing if configured.
                 if tp2_hit and not tp3_hit:
                     reached = (h >= tp3_price) if side == LONG else (l <= tp3_price)
                     if reached:
@@ -282,8 +315,11 @@ class ShadowLearner:
                         gross_r += tp3_r * f3
                         remaining -= f3
                         tp3_hit = True
-                        final_outcome = "TP3"
-                        break
+                        if runner_frac > 1e-9:
+                            trailing = True   # keep the runner open and trail it
+                        else:
+                            final_outcome = "TP3"
+                            break
 
                 if remaining <= 1e-9:
                     final_outcome = "TP3"
@@ -299,7 +335,9 @@ class ShadowLearner:
                     gross_r += exit_r_per_1 * remaining
 
             # Final outcome label for partial TP situations
-            if final_outcome == "EXPIRED" and tp2_hit:
+            if final_outcome == "EXPIRED" and tp3_hit:
+                final_outcome = "TP3"   # runner rode to the last bar
+            elif final_outcome == "EXPIRED" and tp2_hit:
                 final_outcome = "TP2_PARTIAL"
             elif final_outcome == "EXPIRED" and tp1_hit:
                 final_outcome = "TP1_PARTIAL"

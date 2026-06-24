@@ -44,6 +44,13 @@ or live-only branch, so parity is preserved:
 - **Shadow stop normalisation (T3).** The shadow learner reuses the engine's
   `normalize_stop()` so its proxy is measured against the exact stop the engine
   would trade — advisory only, never a veto.
+- **Block 4 exit model (shared).** TP1 → cost-adjusted break-even, TP2 → stop
+  locked to the TP1 price, TP3 → runner trailing (when `RUNNER_FRAC>0`), and the
+  monotone trailing ratchet all live in the shared `simulate_fill`, so paper,
+  live-mock and backtest exit identically. The shadow research replay
+  (`ShadowLearner.ladder_replay`) mirrors the same exit logic (cost-BE, TP1-lock,
+  ATR-trailed runner booked at its real exit price) so shadow expectancy does not
+  drift from the paper executor. Still advisory only — never a veto.
 
 ## What differs (executor only)
 
