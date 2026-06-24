@@ -399,10 +399,97 @@ def detect_mean_reversion(ctx: Context) -> Optional[Signal]:
 
 def detect_aurvex_enhanced(ctx: Context) -> Optional[Signal]:
     """
-    Aurvex enhanced detector.  Same TA core as bugra_replica but uses an
-    ATR-based (volatility-sensitive) stop instead of a fixed percentage.
-    Implemented fully in Block 5; returns None until then.
+    Aurvex enhanced detector.  Same five-condition TA core as bugra_replica
+    (EMA crossover + Supertrend + Ichimoku + ADX/DI) but replaces the fixed-%
+    stop with a volatility-adaptive ATR-based stop.
+
+    Stop = entry ∓ (ATR14 × multiplier) clamped to min_stop_dist_pct …
+    max_stop_dist_pct (the standard legacy range) so the risk manager can
+    always size correctly without the wider bugra ceiling.
+
+    ATR multiplier default: 2.0 (roughly 2× daily range, typical scalp risk).
+    Config uses existing bugra TA parameters (ema_fast/slow, st_period/mult,
+    adx_min) so only one set of knobs is needed across both profiles.
     """
+    cfg = ctx.cfg
+    ltf = ctx.ltf
+
+    if len(ltf) < max(cfg.bugra_ema_slow + 5, 30):
+        return None
+
+    st = ctx.ltf_supertrend
+    ichi = ctx.ltf_ichimoku
+    di = ctx.ltf_di
+
+    if st is None or ichi is None or di is None:
+        return None
+    if ctx.ltf_adx is None or ctx.ltf_atr is None:
+        return None
+
+    ema_fast_val = ind.ema(ltf.closes, cfg.bugra_ema_fast)
+    ema_slow_val = ind.ema(ltf.closes, cfg.bugra_ema_slow)
+    if ema_fast_val is None or ema_slow_val is None:
+        return None
+
+    entry = ctx.last
+    atr_val = ctx.ltf_atr
+    adx_ok = ctx.ltf_adx >= cfg.bugra_adx_min
+
+    # ATR-based stop distance (2× ATR, clamped to standard guard band).
+    atr_stop_dist = atr_val * 2.0
+    stop_dist_pct = atr_stop_dist / entry * 100.0
+    stop_dist_pct = max(cfg.min_stop_dist_pct,
+                        min(stop_dist_pct, cfg.max_stop_dist_pct))
+
+    # --- LONG ---
+    ema_long = ema_fast_val > ema_slow_val
+    st_long = st["direction"] == 1
+    ichi_long = ichi["price_vs_cloud"] == 1 and ichi["cloud_bull"] is True
+    di_long = di["plus_di"] > di["minus_di"]
+
+    if ema_long and st_long and ichi_long and adx_ok and di_long:
+        stop = entry * (1.0 - stop_dist_pct / 100.0)
+        ema_spread = _clamp01(abs(ema_fast_val - ema_slow_val) / (entry * 0.01 + 1e-9) / 2.0)
+        st_dist = _clamp01((entry - st["line"]) / (atr_val + 1e-9) / 3.0)
+        cloud_thick = _clamp01(abs(ichi["span_a"] - ichi["span_b"]) / (atr_val + 1e-9) / 5.0)
+        adx_factor = _clamp01((ctx.ltf_adx - cfg.bugra_adx_min) / 30.0)
+        factors = {
+            "ema_spread": ema_spread,
+            "st_distance": st_dist,
+            "adx_strength": adx_factor,
+            "cloud_thickness": cloud_thick,
+        }
+        return Signal(
+            symbol=ctx.snap.symbol, side=LONG, setup_type="aurvex_enhanced",
+            entry_hint=entry, stop_hint=stop, factors=factors,
+            base_confidence=0.58,
+            notes=f"enhanced EMA{cfg.bugra_ema_fast}/{cfg.bugra_ema_slow} ATR-stop",
+        )
+
+    # --- SHORT ---
+    ema_short = ema_fast_val < ema_slow_val
+    st_short = st["direction"] == -1
+    ichi_short = ichi["price_vs_cloud"] == -1 and ichi["cloud_bull"] is False
+    di_short = di["minus_di"] > di["plus_di"]
+
+    if ema_short and st_short and ichi_short and adx_ok and di_short:
+        stop = entry * (1.0 + stop_dist_pct / 100.0)
+        ema_spread = _clamp01(abs(ema_fast_val - ema_slow_val) / (entry * 0.01 + 1e-9) / 2.0)
+        st_dist = _clamp01((st["line"] - entry) / (atr_val + 1e-9) / 3.0)
+        cloud_thick = _clamp01(abs(ichi["span_a"] - ichi["span_b"]) / (atr_val + 1e-9) / 5.0)
+        adx_factor = _clamp01((ctx.ltf_adx - cfg.bugra_adx_min) / 30.0)
+        factors = {
+            "ema_spread": ema_spread,
+            "st_distance": st_dist,
+            "adx_strength": adx_factor,
+            "cloud_thickness": cloud_thick,
+        }
+        return Signal(
+            symbol=ctx.snap.symbol, side=SHORT, setup_type="aurvex_enhanced",
+            entry_hint=entry, stop_hint=stop, factors=factors,
+            base_confidence=0.58,
+            notes=f"enhanced EMA{cfg.bugra_ema_fast}/{cfg.bugra_ema_slow} ATR-stop",
+        )
     return None
 
 
