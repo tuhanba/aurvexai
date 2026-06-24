@@ -30,15 +30,17 @@ def test_tp1_then_breakeven_then_be_stop(cfg):
     ex = PaperExecutor(cfg)
     t = ex.open(_decision(cfg, side=LONG))
     tp1 = t.tp_targets[0].price
-    # Bar reaches tp1 (but not tp2): scale out + move stop to BE.
+    # Bar reaches tp1 (but not tp2): scale out + move stop to cost-adjusted BE.
     ev = ex.simulate_fill(t, high=tp1 + 0.01, low=99.5, close=tp1)
     kinds = [e.kind for e in ev]
     assert "TP1" in kinds and "BE_MOVE" in kinds
     assert t.status == OPEN
-    assert t.current_stop == t.entry  # moved to breakeven
+    # Block 4: BE is cost-adjusted (slightly above raw entry for LONG).
+    assert t.current_stop >= t.entry
     assert 0 < t.remaining_fraction < 1.0
-    # Next bar dips to entry -> BE close (not SL).
-    ev2 = ex.simulate_fill(t, high=t.entry + 0.1, low=t.entry - 0.5, close=t.entry)
+    # Next bar dips to or below the cost-BE → BE close (not SL).
+    be_stop = t.current_stop
+    ev2 = ex.simulate_fill(t, high=be_stop + 0.1, low=be_stop - 0.5, close=be_stop)
     assert t.status == CLOSED
     assert t.close_reason == "BE"
 

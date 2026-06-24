@@ -195,6 +195,19 @@ class Config:
         default_factory=lambda: _str("LEVERAGE_POLICY", "efficient")
     )
 
+    # -- Runner / trailing stop --------------------------------------------
+    # runner_frac: fraction of position kept as a "runner" after TP3, trailed.
+    # 0.0 = disabled (legacy). Must satisfy tp1+tp2+tp3+runner == 1.0 when > 0.
+    runner_frac: float = field(default_factory=lambda: _float("RUNNER_FRAC", 0.0))
+    # trail_mode: how to advance the trailing stop for the runner.
+    # "atr"         : close ∓ trail_atr_mult * ATR14
+    # "supertrend"  : supertrend line
+    # "kijun"       : Ichimoku kijun-sen (base line)
+    # "swing"       : N-bar micro swing high/low
+    trail_mode: str = field(default_factory=lambda: _str("TRAIL_MODE", "atr"))
+    trail_atr_mult: float = field(default_factory=lambda: _float("TRAIL_ATR_MULT", 0.7))
+    trail_swing_bars: int = field(default_factory=lambda: _int("TRAIL_SWING_BARS", 5))
+
     # -- Strategy profile ---------------------------------------------------
     # "legacy"         : original five detectors (default, no behaviour change)
     # "bugra_replica"  : Bugra system replica (EMA/ST/Ichimoku/ADX, fixed-% SL/TP)
@@ -287,8 +300,10 @@ class Config:
 
     # ---------------------------------------------------------------------
     def validate(self) -> None:
-        frac_sum = self.tp1_frac + self.tp2_frac + self.tp3_frac
-        assert abs(frac_sum - 1.0) < 1e-6, f"TP fractions must sum to 1.0 (got {frac_sum})"
+        frac_sum = self.tp1_frac + self.tp2_frac + self.tp3_frac + self.runner_frac
+        assert abs(frac_sum - 1.0) < 1e-6, (
+            f"TP fractions (tp1+tp2+tp3+runner) must sum to 1.0 (got {frac_sum})"
+        )
         assert self.trade_threshold >= self.watchlist_threshold, (
             "trade_threshold must be >= watchlist_threshold"
         )
