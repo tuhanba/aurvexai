@@ -68,11 +68,13 @@ class Engine:
         self._stop = asyncio.Event()
         self._cycles = 0
         self._last_summary_day = -1
+        self._kill_switch_fired_day: int = -1
+        self._last_error: str = ""
         self._start_ms = now_ms()
         self.db.ensure_balance(cfg.initial_paper_balance)
-        # Stamp the epoch so Wave 2 compares against THIS clean run, never the
-        # contaminated legacy history (written once; never deletes history).
-        self.db.ensure_epoch("wave1")
+        # Stamp the epoch (configurable via EPOCH_LABEL, default "wave3").
+        # Written once on first start; never overwrites an existing epoch stamp.
+        self.db.ensure_epoch(cfg.epoch_label)
 
     # -- lifecycle ---------------------------------------------------------
     def request_stop(self, *_: object) -> None:
@@ -91,7 +93,7 @@ class Engine:
         except Exception as exc:
             log.debug("telegram verify error: %s", exc)
         self._persist_telegram_health()
-        self.notifier.system_started(self.cfg.mode, bal)
+        self.notifier.system_started(self.cfg.mode, bal, epoch=self.cfg.epoch_label)
         self._persist_telegram_health()
         # Check for a queued mode-request from the commander (written by /livemode
         # or /papermode on the previous run).
@@ -115,8 +117,10 @@ class Engine:
                 started = now_ms()
                 try:
                     await self._cycle()
+                    self._last_error = ""  # clear on clean cycle
                 except Exception as exc:                  # never die on a cycle
                     log.exception("cycle error: %s", exc)
+                    self._last_error = str(exc)[:200]
                     self.notifier.health_warning(f"cycle error: {exc}")
                 self._cycles += 1
                 if max_cycles is not None and self._cycles >= max_cycles:
@@ -300,7 +304,10 @@ class Engine:
 
                 trade = self.executor.open(d)
                 self.journal.record_open(trade)
-                self.notifier.trade_opened(trade)
+                rank_pos = _opened_ranks.__len__() + 1  # 1-based position in opened list
+                self.notifier.trade_opened(trade, balance=self.db.get_balance(),
+                                           rank_pos=rank_pos,
+                                           rank_total=len(ranked_candidates))
                 funnel.mark_executed()
                 live_open_symbols.add(sym)
                 open_count += 1
@@ -395,7 +402,7 @@ class Engine:
                         continue
                     trade = self.executor.open(d)
                     self.journal.record_open(trade)
-                    self.notifier.trade_opened(trade)
+                    self.notifier.trade_opened(trade, balance=self.db.get_balance())
                     funnel.mark_executed()
                     live_open_symbols.add(sym)
                     open_count += 1
@@ -411,6 +418,14 @@ class Engine:
         except Exception as exc:
             log.debug("shadow update error: %s", exc)
 
+        # Compute data freshness from the newest closed-bar timestamp seen this cycle.
+        _max_bar_ts = 0
+        for _snap in snapshots.values():
+            _closed = _snap.closed_ltf(self.cfg.ltf)
+            if _closed:
+                _max_bar_ts = max(_max_bar_ts, _closed[-1].ts)
+        data_age_ms = int(now_ms() - _max_bar_ts) if _max_bar_ts else 0
+
         # Persist funnel.
         last_times = self.db.last_trade_times()
         last_min_ago = None
@@ -421,12 +436,33 @@ class Engine:
         stats = funnel.finalize(last_min_ago, cycle_ms=float(now_ms() - cycle_start))
         self.db.insert_funnel(stats)
 
-        # Heartbeat.
+        # Kill-switch state (reuse the same expression as f_daily_loss so they
+        # never disagree). Fire the Telegram notification once per UTC day.
+        bal = self.db.get_balance()
+        daily_pnl = self.db.daily_realized_pnl(_utc_day_start_ms())
+        kill_switch_active = daily_pnl <= -(bal * self.cfg.max_daily_loss_pct / 100.0)
+        if kill_switch_active:
+            today = dt.datetime.now(dt.timezone.utc).toordinal()
+            if today != self._kill_switch_fired_day:
+                self._kill_switch_fired_day = today
+                try:
+                    self.notifier.kill_switch_hit(
+                        daily_pnl, bal * self.cfg.max_daily_loss_pct / 100.0)
+                except Exception as exc:
+                    log.debug("kill_switch notification error: %s", exc)
+
+        # Heartbeat (enriched — Block F).
         self.db.set_heartbeat("engine", {
-            "ts": now_ms(), "cycle": self._cycles, "balance": self.db.get_balance(),
+            "ts": now_ms(), "cycle": self._cycles, "balance": bal,
             "open_trades": open_count, "scanned": len(symbols),
             "allow": stats.decision_allow_count, "executed": stats.executed_count,
             "mode": self.cfg.mode,
+            "cycle_ms": round(float(now_ms() - cycle_start), 1),
+            "data_age_ms": data_age_ms,
+            "last_trade_min_ago": last_min_ago,
+            "kill_switch": kill_switch_active,
+            "daily_realized_pnl": round(daily_pnl, 4),
+            "last_error": self._last_error,
         })
 
         # Daily summary once per UTC day (skip the very first cycle).
@@ -461,10 +497,19 @@ class Engine:
             if not events:
                 continue
             self.journal.record_fills(trade, events)
+            be_moved = any(e.kind == "BE_MOVE" for e in events)
             for ev in events:
                 if ev.kind == "BE_MOVE":
-                    continue
-                self.notifier.trade_event(trade, ev.kind, ev.price, ev.pnl)
+                    continue  # reported as part of the paired TP event below
+                stop_hint: Optional[str] = None
+                if ev.kind == "TP1" and be_moved:
+                    stop_hint = "break-even"
+                elif ev.kind == "TP2":
+                    stop_hint = "TP1"
+                elif ev.kind == "TP3":
+                    stop_hint = "trailing" if self.cfg.runner_frac > 0 else "closed"
+                self.notifier.trade_event(trade, ev.kind, ev.price, ev.pnl,
+                                          stop_to=stop_hint)
             if trade.status != OPEN:
                 self.notifier.trade_closed(trade)
                 self.coins.on_trade_closed(
