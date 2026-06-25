@@ -169,6 +169,8 @@ def test_shadow_cannot_change_position_size(tmp_path):
     cfg_shadow = _cfg(tmp_path, shadow_apply=True)
 
     db = Storage(cfg_no_shadow.db_path)
+    # Set current epoch to "wave2" so epoch-scoped advisory sees these rows.
+    db.ensure_epoch("wave2")
 
     # Shadow lehine çarpan varmış gibi sahte resolved row ekle
     db.conn.execute(
