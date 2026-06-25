@@ -32,6 +32,7 @@ header{
 .pill.ok{color:var(--green);border-color:var(--green)}
 .pill.err{color:var(--red);border-color:var(--red)}
 .pill.gold{color:var(--gold);border-color:var(--gold-dim)}
+.pill.warn{color:#f0a800;border-color:#7a5400}
 
 /* ── Layout ── */
 main{padding:var(--gap);display:flex;flex-direction:column;gap:var(--gap);max-width:1280px;margin:0 auto}
@@ -43,6 +44,24 @@ main{padding:var(--gap);display:flex;flex-direction:column;gap:var(--gap);max-wi
 /* ── Card ── */
 .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px}
 .card-title{font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:var(--gold);margin-bottom:10px}
+.section-label{font-size:9px;text-transform:uppercase;letter-spacing:2px;color:var(--gold-dim);margin:8px 0 4px;padding:0 2px}
+
+/* ── System Health Strip ── */
+.health-strip{
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+}
+.health-item{display:flex;flex-direction:column;gap:2px;min-width:120px}
+.health-label{font-size:9px;text-transform:uppercase;letter-spacing:1px;color:var(--muted)}
+.health-val{font-size:12px;color:var(--text)}
+.health-val.ok{color:var(--green)}
+.health-val.err{color:var(--red)}
+.health-val.warn{color:#f0a800}
+.health-sep{width:1px;height:36px;background:var(--line);flex-shrink:0}
+.freshness-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
+.freshness-dot.ok{background:var(--green)}
+.freshness-dot.warn{background:#f0a800}
+.freshness-dot.err{background:var(--red)}
 
 /* ── KPI ── */
 .kpi-val{font-size:26px;font-weight:700;line-height:1}
@@ -67,6 +86,14 @@ main{padding:var(--gap);display:flex;flex-direction:column;gap:var(--gap);max-wi
 .funnel-bar{flex:1;height:6px;background:var(--panel2);border-radius:4px;overflow:hidden}
 .funnel-bar > i{display:block;height:100%;background:linear-gradient(90deg,var(--gold-dim),var(--gold));border-radius:4px;transition:width .4s}
 .funnel-count{width:32px;text-align:right;font-size:11px;color:var(--sub);flex-shrink:0}
+
+/* ── Score validity buckets ── */
+.bucket-row{display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--line)}
+.bucket-row:last-child{border-bottom:none}
+.bucket-label{width:56px;font-size:11px;color:var(--muted);flex-shrink:0}
+.bucket-bar{flex:1;height:6px;background:var(--panel2);border-radius:4px;overflow:hidden}
+.bucket-bar > i{display:block;height:100%;background:linear-gradient(90deg,var(--gold-dim),var(--gold));border-radius:4px}
+.bucket-stats{width:120px;text-align:right;font-size:11px;color:var(--sub);flex-shrink:0}
 
 /* ── Tags ── */
 .tag{display:inline-block;padding:2px 8px;border:1px solid var(--line);border-radius:6px;color:var(--sub);font-size:11px;margin:2px}
@@ -100,6 +127,8 @@ tr:last-child td{border-bottom:none}
   .kpi-val{font-size:22px}
   header{padding:10px 12px}
   .brand{font-size:16px}
+  .health-strip{gap:8px}
+  .health-sep{display:none}
 }
 @media(max-width:420px){
   .g4,.g3,.g2{grid-template-columns:1fr 1fr}
@@ -112,6 +141,7 @@ tr:last-child td{border-bottom:none}
   <div class="brand">AURVEX</div>
   <div class="pills">
     <span id="modePill" class="pill gold">paper</span>
+    <span id="epochPill" class="pill gold">epoch: —</span>
     <span id="tgPill" class="pill">tg: ?</span>
     <span id="alivePill" class="pill err">engine: ?</span>
     <span id="clock" class="pill"><span class="refresh-dot"></span><span id="clockTxt">--:--</span></span>
@@ -120,7 +150,45 @@ tr:last-child td{border-bottom:none}
 
 <main>
 
-  <!-- KPI row -->
+  <!-- System Health Strip (Block E-1) -->
+  <div class="health-strip" id="healthStrip">
+    <div class="health-item">
+      <div class="health-label">Engine</div>
+      <div class="health-val" id="hsEngine">—</div>
+    </div>
+    <div class="health-sep"></div>
+    <div class="health-item">
+      <div class="health-label">Mode</div>
+      <div class="health-val gold" id="hsMode">PAPER</div>
+    </div>
+    <div class="health-sep"></div>
+    <div class="health-item">
+      <div class="health-label">Kill switch</div>
+      <div class="health-val ok" id="hsKill">armed ✓</div>
+    </div>
+    <div class="health-sep"></div>
+    <div class="health-item">
+      <div class="health-label">Data freshness</div>
+      <div class="health-val" id="hsData">—</div>
+    </div>
+    <div class="health-sep"></div>
+    <div class="health-item">
+      <div class="health-label">Cycle</div>
+      <div class="health-val" id="hsCycle">—</div>
+    </div>
+    <div class="health-sep"></div>
+    <div class="health-item">
+      <div class="health-label">Telegram</div>
+      <div class="health-val" id="hsTg">—</div>
+    </div>
+    <div class="health-sep"></div>
+    <div class="health-item" id="hsErrItem" style="display:none">
+      <div class="health-label">Last error</div>
+      <div class="health-val err" id="hsErr" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</div>
+    </div>
+  </div>
+
+  <!-- Daily-Risk card (Block E-2) + KPI row -->
   <div class="grid g4">
     <div class="card">
       <div class="card-title">Balance</div>
@@ -144,9 +212,38 @@ tr:last-child td{border-bottom:none}
     </div>
   </div>
 
+  <!-- Daily-Risk & Kill-Switch card (Block E-2) -->
+  <div class="card">
+    <div class="card-title">Daily Risk — Kill Switch</div>
+    <div class="grid g4" style="gap:14px">
+      <div>
+        <div class="row-label">Daily realized PnL</div>
+        <div style="font-size:18px" id="dailyPnl">—</div>
+        <div class="kpi-sub" id="dailyPnlLimit">limit — USDT</div>
+      </div>
+      <div>
+        <div class="row-label">Progress to limit</div>
+        <div class="bar" style="margin-top:8px"><div class="bar-fill red" id="killBar" style="width:0%"></div></div>
+        <div class="kpi-sub" id="killPct" style="margin-top:4px">—</div>
+      </div>
+      <div>
+        <div class="row-label">Kill switch status</div>
+        <div style="font-size:16px;margin-top:4px" id="killStatus">—</div>
+      </div>
+      <div>
+        <div class="row-label">Max daily loss</div>
+        <div style="font-size:18px" id="maxDailyLoss">—</div>
+        <div class="kpi-sub">of balance</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Performance section -->
+  <div class="section-label">Performance</div>
+
   <!-- Portfolio metrics (IF-4) -->
   <div class="card">
-    <div class="card-title">Portfolio — slots & risk</div>
+    <div class="card-title">Portfolio — slots &amp; risk</div>
     <div class="grid g4" style="gap:14px">
       <div>
         <div class="row-label">Slot util</div>
@@ -175,7 +272,10 @@ tr:last-child td{border-bottom:none}
     </div>
   </div>
 
-  <!-- Funnel + Engine -->
+  <!-- Activity section -->
+  <div class="section-label">Activity</div>
+
+  <!-- Funnel + Engine-Health Detail -->
   <div class="grid g2">
     <div class="card">
       <div class="card-title">Funnel — last cycle</div>
@@ -187,10 +287,11 @@ tr:last-child td{border-bottom:none}
       <div style="margin-top:8px" id="rejects"></div>
     </div>
     <div class="card">
-      <div class="card-title">Engine</div>
-      <div class="row"><span class="row-label">cycle</span><span id="cycleNum" class="row-val">—</span></div>
+      <div class="card-title">Engine Health</div>
+      <div class="row"><span class="row-label">cycle #</span><span id="cycleNum" class="row-val">—</span></div>
       <div class="row"><span class="row-label">last trade</span><span id="lastTrade" class="row-val">—</span></div>
-      <div class="row"><span class="row-label">cycle time</span><span id="cycleMs" class="row-val">—</span></div>
+      <div class="row"><span class="row-label">cycle latency</span><span id="cycleMs" class="row-val">—</span></div>
+      <div class="row"><span class="row-label">data age</span><span id="dataAge" class="row-val">—</span></div>
       <div class="row"><span class="row-label">balance</span><span id="acBalance" class="row-val">—</span></div>
       <div class="row"><span class="row-label">margin / free</span><span id="acMargin" class="row-val">—</span></div>
       <div class="row"><span class="row-label">equity</span><span id="acEquity" class="row-val">—</span></div>
@@ -203,6 +304,9 @@ tr:last-child td{border-bottom:none}
     <div class="card-title">Open trades</div>
     <div id="openTrades"></div>
   </div>
+
+  <!-- Learning section -->
+  <div class="section-label">Learning</div>
 
   <!-- Shadow + Setup performance -->
   <div class="grid g2">
@@ -227,6 +331,37 @@ tr:last-child td{border-bottom:none}
       </div>
     </div>
   </div>
+
+  <!-- Score Validity panel (Block E-3) -->
+  <div class="card">
+    <div class="card-title">Score Validity — ranking evidence</div>
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;flex-wrap:wrap">
+      <div>
+        <div class="row-label">Verdict</div>
+        <div style="font-size:16px;margin-top:3px" id="svVerdict">—</div>
+      </div>
+      <div>
+        <div class="row-label">Sufficient data</div>
+        <div style="font-size:14px;margin-top:3px" id="svSufficient">—</div>
+      </div>
+      <div>
+        <div class="row-label">Total resolved</div>
+        <div style="font-size:14px;margin-top:3px" id="svTotal">—</div>
+      </div>
+      <div>
+        <div class="row-label">Epoch</div>
+        <div style="font-size:14px;margin-top:3px" id="svEpoch">—</div>
+      </div>
+    </div>
+    <div id="svBuckets"></div>
+    <div class="kpi-sub" style="margin-top:8px;font-size:10px;color:var(--muted)">
+      Enable GLOBAL_RANKING only after sufficient_data=true and verdict=predictive ✓.
+      If inverted ✗, investigate before ranking by score.
+    </div>
+  </div>
+
+  <!-- Diagnostics section -->
+  <div class="section-label">Diagnostics</div>
 
   <!-- Closed trades -->
   <div class="card">
@@ -266,33 +401,110 @@ tr:last-child td{border-bottom:none}
 <script>
 const fmt=(n,d=2)=>n===null||n===undefined?'—':Number(n).toFixed(d);
 const cls=n=>n>0?'pos':n<0?'neg':'neu';
+const signed=(v,d=2)=>(v>=0?'+':'')+fmt(v,d);
 async function getJSON(u){const r=await fetch(u);return r.json();}
 
 async function refresh(){
   try{
-    const [st,fn,me,op,cl,sg,sh,ac,tg,pm] = await Promise.all([
+    const [st,fn,me,op,cl,sg,sh,ac,tg,pm,sv] = await Promise.all([
       getJSON('/api/status'), getJSON('/api/funnel'), getJSON('/api/metrics'),
       getJSON('/api/trades/open'), getJSON('/api/trades/closed'),
       getJSON('/api/signals'), getJSON('/api/shadow'),
       getJSON('/api/accounting'), getJSON('/api/telegram'),
-      getJSON('/api/portfolio_metrics')
+      getJSON('/api/portfolio_metrics'), getJSON('/api/score_validity')
     ]);
 
-    // ── header pills ──
+    // ── Header pills ──
     const alive = st.engine_alive;
     const ap = document.getElementById('alivePill');
     ap.textContent = 'engine: '+(alive?'alive':'down');
     ap.className = 'pill '+(alive?'ok':'err');
-    document.getElementById('modePill').textContent = st.mode || 'paper';
+    document.getElementById('modePill').textContent = (st.mode||'paper').toUpperCase();
+    document.getElementById('epochPill').textContent = 'epoch: '+(st.epoch_label||'—');
 
     const tgState = tg.configured?(tg.healthy?'ok':(tg.healthy===false?'err':'?')):'off';
     const tp = document.getElementById('tgPill');
     tp.textContent = 'tg: '+tgState;
     tp.className = 'pill '+(tgState==='ok'?'ok':tgState==='err'?'err':'');
 
+    // ── System Health Strip ──
+    const heEl = document.getElementById('hsEngine');
+    const cycleMsVal = st.cycle_ms;
+    const cycleNum = (st.heartbeat&&st.heartbeat.cycle)||0;
+    if(alive){
+      heEl.textContent = `alive · cycle ${cycleNum} · ${fmt(cycleMsVal,0)} ms`;
+      heEl.className = 'health-val ok';
+    } else {
+      heEl.textContent = 'DOWN';
+      heEl.className = 'health-val err';
+    }
+
+    const modeEl = document.getElementById('hsMode');
+    modeEl.textContent = (st.mode||'paper').toUpperCase();
+    modeEl.className = 'health-val'+(st.mode==='paper'?' gold':' err');
+
+    const killEl = document.getElementById('hsKill');
+    if(st.kill_switch){
+      killEl.textContent = 'TRIPPED — entries paused';
+      killEl.className = 'health-val err';
+    } else {
+      killEl.textContent = 'armed ✓';
+      killEl.className = 'health-val ok';
+    }
+
+    const dataAgeMs = st.data_age_ms;
+    const cycleIntervalMs = (st.heartbeat&&st.heartbeat.cycle_interval_ms)||20000;
+    const dataEl = document.getElementById('hsData');
+    if(dataAgeMs===null||dataAgeMs===undefined){
+      dataEl.innerHTML = '<span class="freshness-dot warn"></span>unknown';
+      dataEl.className = 'health-val';
+    } else {
+      const dataAgeSec = Math.round(dataAgeMs/1000);
+      const freshClass = dataAgeMs < 60000 ? 'ok' : dataAgeMs < 300000 ? 'warn' : 'err';
+      dataEl.innerHTML = `<span class="freshness-dot ${freshClass}"></span>${dataAgeSec}s ago`;
+      dataEl.className = 'health-val';
+    }
+
+    document.getElementById('hsCycle').textContent = fmt(cycleMsVal,0)+' ms latency';
+
+    const tgEl = document.getElementById('hsTg');
+    tgEl.textContent = tgState;
+    tgEl.className = 'health-val '+(tgState==='ok'?'ok':tgState==='err'?'err':'');
+
+    const errStr = st.last_error||'';
+    const errItem = document.getElementById('hsErrItem');
+    if(errStr){
+      errItem.style.display='flex';
+      document.getElementById('hsErr').textContent = errStr;
+    } else {
+      errItem.style.display='none';
+    }
+
+    // ── Daily-Risk card (Block E-2) ──
+    const dailyPnl = st.daily_realized_pnl||0;
+    const maxLossPct = st.max_daily_loss_pct||3.0;
+    const bal = st.balance||0;
+    const lossLimit = bal * maxLossPct / 100.0;
+    const dp = document.getElementById('dailyPnl');
+    dp.textContent = signed(dailyPnl)+' USDT';
+    dp.className = cls(dailyPnl);
+    document.getElementById('dailyPnlLimit').textContent = 'limit -'+fmt(lossLimit)+' USDT';
+    const pctUsed = lossLimit>0 ? Math.min(100, Math.abs(Math.min(0,dailyPnl))/lossLimit*100) : 0;
+    document.getElementById('killBar').style.width = pctUsed+'%';
+    document.getElementById('killPct').textContent = fmt(pctUsed,0)+'% of daily limit';
+    const ksEl = document.getElementById('killStatus');
+    if(st.kill_switch){
+      ksEl.textContent = '🛑 TRIPPED';
+      ksEl.className = 'neg';
+    } else {
+      ksEl.textContent = '✓ Not tripped';
+      ksEl.className = 'pos';
+    }
+    document.getElementById('maxDailyLoss').textContent = fmt(maxLossPct,1)+'%';
+
     // ── KPIs ──
-    const bal = document.getElementById('balance');
-    bal.textContent = fmt(st.balance)+' USDT';
+    const balEl = document.getElementById('balance');
+    balEl.textContent = fmt(st.balance)+' USDT';
     const delta = st.balance - st.initial_balance;
     const bd = document.getElementById('balanceDelta');
     bd.textContent = (delta>=0?'+':'')+fmt(delta)+' USDT vs start';
@@ -365,8 +577,18 @@ async function refresh(){
       document.getElementById('cycleMs').textContent = fmt(L.cycle_ms,0)+' ms';
     }
 
+    // Data age in engine health card
+    const daEl = document.getElementById('dataAge');
+    if(st.data_age_ms===null||st.data_age_ms===undefined){
+      daEl.textContent = '—';
+      daEl.className = 'row-val';
+    } else {
+      const sec = Math.round(st.data_age_ms/1000);
+      daEl.textContent = sec+'s';
+      daEl.className = 'row-val '+(sec<60?'pos':sec<300?'':'neg');
+    }
+
     // ── Accounting ──
-    const signed=(v,d=2)=>(v>=0?'+':'')+fmt(v,d);
     document.getElementById('acBalance').textContent = fmt(ac.balance)+' USDT';
     const am = document.getElementById('acMargin');
     am.textContent = fmt(ac.open_margin)+' / '+fmt(ac.free_margin)+' USDT';
@@ -417,6 +639,46 @@ async function refresh(){
        <td class="${cls(r.net_pnl)}">${signed(r.net_pnl)}</td>
        <td class="${cls(r.expectancy)}">${fmt(r.expectancy,3)}</td></tr>`).join('')
       ||'<tr><td colspan="5" style="color:var(--muted)">none</td></tr>';
+
+    // ── Score Validity panel (Block E-3) ──
+    if(sv){
+      const mono = sv.monotone_expected;
+      const suf = sv.sufficient_data;
+      const verdictEl = document.getElementById('svVerdict');
+      if(!suf){
+        verdictEl.textContent = 'insufficient data (need N≥100)';
+        verdictEl.className = 'neu';
+      } else if(mono===true){
+        verdictEl.textContent = 'score predictive ✓';
+        verdictEl.className = 'pos';
+      } else if(mono===false){
+        verdictEl.textContent = 'score inverted ✗';
+        verdictEl.className = 'neg';
+      } else {
+        verdictEl.textContent = 'inconclusive (flat)';
+        verdictEl.className = 'neu';
+      }
+      document.getElementById('svSufficient').textContent = suf?'yes (N≥100)':'no (<100)';
+      document.getElementById('svSufficient').className = suf?'pos':'neu';
+      document.getElementById('svTotal').textContent = sv.total||0;
+      document.getElementById('svEpoch').textContent = sv.epoch||'—';
+
+      const buckets = sv.buckets||{};
+      const bkeys = ['45-55','55-65','65-75','75+'];
+      const maxWin = Math.max(1,...bkeys.map(k=>(buckets[k]||{}).win_pct||0));
+      document.getElementById('svBuckets').innerHTML = bkeys.map(k=>{
+        const b = buckets[k]||{};
+        const wp = b.win_pct!==null&&b.win_pct!==undefined ? fmt(b.win_pct,0)+'% win' : '—';
+        const ar = b.avg_r!==null&&b.avg_r!==undefined ? fmt(b.avg_r,3)+'R' : '—';
+        const barW = b.win_pct!==null ? Math.round(b.win_pct/Math.max(1,maxWin)*100) : 0;
+        const arCls = (b.avg_r||0)>0?'pos':(b.avg_r||0)<0?'neg':'neu';
+        return `<div class="bucket-row">
+          <div class="bucket-label">${k}</div>
+          <div class="bucket-bar"><i style="width:${barW}%"></i></div>
+          <div class="bucket-stats"><span class="${arCls}">${ar}</span> · ${wp} · n=${b.n||0}</div>
+        </div>`;
+      }).join('');
+    }
 
     // ── Closed trades ──
     document.querySelector('#closedTbl tbody').innerHTML = cl.trades.map(t=>
