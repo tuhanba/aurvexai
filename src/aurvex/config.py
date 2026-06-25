@@ -21,7 +21,11 @@ from typing import List
 try:  # pragma: no cover - trivial
     from dotenv import load_dotenv
 
-    load_dotenv()
+    # Test hermeticity: when AURVEX_NO_DOTENV=1 (set by the test conftest) the
+    # deployment's .env must NOT leak into unit tests (e.g. a server-side
+    # SHADOW_ONLY_SETUPS would otherwise make every test setup shadow-only).
+    if os.environ.get("AURVEX_NO_DOTENV") != "1":
+        load_dotenv()
 except Exception:  # pragma: no cover
     pass
 

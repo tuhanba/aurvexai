@@ -4,6 +4,13 @@ import sys
 
 import pytest
 
+# Hermetic tests: disable .env loading BEFORE aurvex.config is imported (it calls
+# load_dotenv at import time). A populated deployment .env — e.g.
+# SHADOW_ONLY_SETUPS, TRADE_HOURS_UTC, SCORE_AS_GATE — must never leak into the
+# unit suite and silently change decision outcomes. Defaults come from the
+# dataclass field defaults instead, which is what the tests assert against.
+os.environ["AURVEX_NO_DOTENV"] = "1"
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from aurvex.config import Config
