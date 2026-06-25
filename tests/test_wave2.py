@@ -403,6 +403,9 @@ class TestDetectAllBestScore:
 
     def test_decision_engine_uses_best_scored_signal(self, cfg):
         """The engine should pick the highest-scored signal when multiple are found."""
+        # Legacy score veto pinned ON so the sub-threshold signal is rejected
+        # (Buğra-primary default is OFF and would ALLOW it).
+        cfg.score_as_gate = True
         eng = DecisionEngine(cfg)
         # Make two signals with different scores; only the higher one should ALLOW.
         sig_low = make_signal(setup_type="momentum_breakout", score=40.0)

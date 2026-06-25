@@ -5,14 +5,19 @@ This is the most important invariant in the whole system: paper mode, live
 mode and the backtester all call THIS function with the same inputs and get
 the same `Decision` out. Only the executor downstream differs.
 
-Pipeline inside one decision:
+Pipeline inside one decision (Buğra primary gate):
 
     signal (+ snapshot + portfolio)
       -> score (already attached by score builder, but re-checked)
       -> minimal hard filters  (reject with stage + reason)
-      -> score threshold       (ALLOW path requires score >= trade_threshold)
+      -> [score is ADVISORY — no gate by default; score_as_gate=True restores
+          the legacy veto, min_execution_score>0 adds an opt-in soft floor]
       -> risk evaluation        (sizing; reject if risk can't be formed)
       -> ALLOW with full sizing
+
+The Buğra signal itself (detected upstream) plus the safety filters and the
+risk gate decide whether a trade is executable. Score/Shadow are SUPPORT only
+(ranking + risk modulation, applied in the engine) — never a hard block here.
 
 There is exactly one threshold and one risk model. No live-only overrides.
 """
@@ -69,7 +74,7 @@ class DecisionEngine:
             d.reason = f"filter:{fres.stage}"
             return d
 
-        # 2) Score threshold.
+        # 2) Score handling (Buğra primary gate).
         # 2a) Shadow-only setups: pass quality check but are observation-only.
         #     They still score, track in shadow, and appear in the funnel —
         #     only the execution step is blocked. Gated here so the shadow
@@ -82,6 +87,9 @@ class DecisionEngine:
             d.reason = "shadow_only"
             return d
 
+        # 2b) Legacy score veto (OFF by default). Only fires if the owner
+        #     explicitly re-enables score_as_gate. Buğra primary gate keeps this
+        #     skipped so an unvalidated score never blocks the strategy.
         if cfg.score_as_gate and signal.score < cfg.trade_threshold:
             if signal.score >= cfg.watchlist_threshold:
                 d.decision = WATCH
@@ -94,6 +102,18 @@ class DecisionEngine:
                 d.failed_stage = "score_threshold"
                 d.reject_reason = f"score {signal.score:.1f} < watch {cfg.watchlist_threshold:.0f}"
                 d.reason = "low_score"
+            return d
+
+        # 2c) Optional soft execution floor (OFF by default, min_execution_score=0).
+        #     A future safety knob: when > 0, reject Buğra candidates whose score
+        #     falls below the floor. This is NOT the legacy veto — it is opt-in and
+        #     defaults to no floor so Buğra stays the sole entry gate.
+        if cfg.min_execution_score > 0 and signal.score < cfg.min_execution_score:
+            d.decision = REJECT
+            d.failed_stage = "min_score_floor"
+            d.reject_reason = (f"score {signal.score:.1f} < min_execution_score "
+                               f"{cfg.min_execution_score:.1f}")
+            d.reason = "min_score_floor"
             return d
 
         # 3) Risk evaluation / sizing.

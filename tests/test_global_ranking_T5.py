@@ -37,12 +37,14 @@ def _cfg(**kwargs) -> Config:
 # Config defaults
 # ---------------------------------------------------------------------------
 
-def test_global_ranking_default_false():
-    assert Config().global_ranking is False
+def test_global_ranking_default_true():
+    # Buğra primary gate: two-pass rank allocation is the default slot-selector.
+    assert Config().global_ranking is True
 
 
-def test_rank_key_default_composite():
-    assert Config().rank_key == "composite"
+def test_rank_key_default_edge():
+    # Edge-validated ranking is the default (follows measured edge, not raw score).
+    assert Config().rank_key == "edge"
 
 
 def test_max_per_cluster_default_zero():

@@ -54,8 +54,14 @@ class ShadowLearner:
 
         Deduped on (symbol, side, setup_type, signal_bar_ts): the same signalled
         bar is tracked at most once no matter how many cycles re-see it.
+
+        Integrity (Buğra primary gate): with the score veto removed, sub-45 Buğra
+        signals can now be EXECUTED. We must measure everything we trade, so
+        executed signals (source="paper") are always tracked regardless of
+        shadow_min_score. The floor only thins the "rejected" observation
+        population, never the executed one.
         """
-        if signal.score < self.cfg.shadow_min_score:
+        if source != "paper" and signal.score < self.cfg.shadow_min_score:
             return None
         entry = decision.entry or signal.entry_hint
         raw_stop = decision.stop_loss or signal.stop_hint

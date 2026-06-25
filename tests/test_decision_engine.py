@@ -25,6 +25,8 @@ def test_allow_when_score_high(cfg):
 
 
 def test_watch_between_thresholds(cfg):
+    # Legacy score veto (Buğra-primary default is OFF — pin it ON to test WATCH).
+    cfg.score_as_gate = True
     eng = DecisionEngine(cfg)
     sig = make_signal(score=55.0)  # between watch(50) and trade(60)
     d = eng.decide(sig, make_snapshot(), _pf(cfg))
@@ -33,6 +35,8 @@ def test_watch_between_thresholds(cfg):
 
 
 def test_reject_low_score(cfg):
+    # Legacy score veto (Buğra-primary default is OFF — pin it ON to test REJECT).
+    cfg.score_as_gate = True
     eng = DecisionEngine(cfg)
     sig = make_signal(score=20.0)
     d = eng.decide(sig, make_snapshot(), _pf(cfg))

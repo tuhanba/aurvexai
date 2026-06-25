@@ -201,6 +201,12 @@ class Decision:
     reason: str = ""
     failed_stage: str = ""
     reject_reason: str = ""
+    # Buğra primary gate — slot-selection support layer (populated in two-pass
+    # Pass 2). rank = allocation rank (higher wins the slot); rank_basis = how it
+    # was derived ("edge_monotone" | "edge_avg_r" | "neutral_insufficient_data" |
+    # "composite" | "score"). Default 0.0/"" on the legacy first-come path.
+    rank: float = 0.0
+    rank_basis: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
     ts: int = field(default_factory=now_ms)
 

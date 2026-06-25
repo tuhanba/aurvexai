@@ -203,7 +203,14 @@ class Engine:
             # W3-T5 two-pass: Pass 1 = scan + rank, Pass 2 = allocate in rank
             # order. Only active when GLOBAL_RANKING=true (default False).
             # ------------------------------------------------------------------
-            from .allocation import CandidateSlot, apply_caps, cluster_for, rank_signal
+            from .allocation import (CandidateSlot, apply_caps, cluster_for,
+                                      rank_basis, rank_signal)
+
+            # Edge-validated ranking reads the score-bucket predictivity ONCE per
+            # cycle (avg_r per bucket, monotonicity, sufficiency). Ranking follows
+            # this MEASURED edge — it never assumes high score = good.
+            cycle_buckets = self.shadow.score_bucket_stats()
+            cycle_rank_basis = rank_basis(self.cfg, cycle_buckets)
 
             ranked_candidates: List[CandidateSlot] = []
 
@@ -244,11 +251,15 @@ class Engine:
                     signal=signal, snap=snap,
                     alt_signals=[s for s in all_signals if s is not signal],
                     sig_bar_ts=sig_bar_ts,
-                    rank=rank_signal(self.cfg, signal, shadow_delta),
+                    rank=rank_signal(self.cfg, signal, shadow_delta,
+                                     buckets=cycle_buckets),
                 ))
 
-            # Sort highest rank first.
-            ranked_candidates.sort(key=lambda c: c.rank, reverse=True)
+            # Sort highest rank first. Deterministic tiebreak (matters most for
+            # the neutral/insufficient-data basis where ranks collapse to the
+            # shadow delta): 24h quote volume desc, then symbol asc.
+            ranked_candidates.sort(
+                key=lambda c: (-c.rank, -c.snap.quote_volume_24h, c.signal.symbol))
 
             # Build side-count map for max_same_side cap.
             _open_sides: Dict[str, int] = {}
@@ -268,6 +279,11 @@ class Engine:
                 pf.open_notional = open_notional
                 pf.open_margin = open_margin
                 d = self.engine.decide(cand.signal, cand.snap, pf)
+                # Slot-selection support layer: record why this candidate won
+                # (or lost) its slot race. Set before persistence so signal_events
+                # and the dashboard/Telegram can show the rank basis.
+                d.rank = cand.rank
+                d.rank_basis = cycle_rank_basis
                 self.db.insert_signal_event(d)
                 funnel.record(d)
 

@@ -167,10 +167,11 @@ def test_score_bucket_stats_default_uses_current_epoch(tmp_path):
 # T4 — SCORE_AS_GATE config flag
 # ---------------------------------------------------------------------------
 
-def test_score_as_gate_default_true():
-    """Config default: score_as_gate=True (preserves pre-T4 behaviour)."""
+def test_score_as_gate_default_false():
+    """Config default: score_as_gate=False (Buğra primary gate — score is support,
+    not a veto; predictivity unconfirmed so an unvalidated score must not block)."""
     cfg = Config()
-    assert cfg.score_as_gate is True
+    assert cfg.score_as_gate is False
 
 
 def test_score_as_gate_true_rejects_below_threshold(tmp_path):

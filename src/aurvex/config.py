@@ -238,18 +238,36 @@ class Config:
         default_factory=lambda: _int_list("TRADE_HOURS_UTC", [])
     )
 
-    # -- W3-T4: Score validity gate ----------------------------------------
-    # When True (default), score < trade_threshold is a hard REJECT gate (current
-    # behaviour). When False, score is advisory; signals proceed to risk/ranking.
-    # T4 decision: N too thin at measurement time → keep True.
-    score_as_gate: bool = field(default_factory=lambda: _bool("SCORE_AS_GATE", True))
+    # -- Buğra primary gate: score is SUPPORT, not a veto ------------------
+    # When False (DEFAULT), score is advisory only: a Buğra signal that passes
+    # the safety filters + risk gate is ALLOWED regardless of score. Score then
+    # acts as a SUPPORT layer (ranking + risk modulation), never a hard block.
+    # When True (legacy), score < trade_threshold is a hard REJECT/WATCH gate.
+    # Default flipped to False because score predictivity is UNCONFIRMED in
+    # clean-core (epoch N too thin to prove monotonicity) — an unvalidated score
+    # must not veto Buğra, the actual strategy. Env override SCORE_AS_GATE=true
+    # reverts to the gated behaviour in one step.
+    score_as_gate: bool = field(default_factory=lambda: _bool("SCORE_AS_GATE", False))
+    # Optional soft execution floor (default 0.0 = OFF, honouring "no veto").
+    # When > 0, a Buğra candidate with score < min_execution_score is rejected
+    # with failed_stage="min_score_floor". Exists only as a future safety knob;
+    # default leaves Buğra as the sole entry gate.
+    min_execution_score: float = field(
+        default_factory=lambda: _float("MIN_EXECUTION_SCORE", 0.0)
+    )
 
-    # -- W3-T5: Global two-pass ranking + allocation -----------------------
-    # When False (default), the engine's inline first-come allocation runs
-    # byte-identical to pre-T5. Set True to activate rank-order allocation.
-    global_ranking: bool = field(default_factory=lambda: _bool("GLOBAL_RANKING", False))
-    # Rank key: "score" (raw score) | "composite" (score + shadow advisory delta).
-    rank_key: str = field(default_factory=lambda: _str("RANK_KEY", "composite"))
+    # -- Buğra primary gate: two-pass ranking is the slot-selection layer ---
+    # When True (DEFAULT now), the engine runs the two-pass rank allocator so the
+    # best executable candidates win the limited max_open_trades slots. When
+    # False (legacy), the inline first-come loop runs byte-identical to pre-T5.
+    global_ranking: bool = field(default_factory=lambda: _bool("GLOBAL_RANKING", True))
+    # Rank key:
+    #   "edge"      → edge-validated rank (DEFAULT): follows MEASURED edge
+    #                 (score-bucket avg_r); falls back to a neutral tiebreak when
+    #                 data is thin. Never assumes high score = good.
+    #   "composite" → score + shadow advisory delta (capped ±5) [legacy].
+    #   "score"     → raw signal score [legacy, for A/B comparison].
+    rank_key: str = field(default_factory=lambda: _str("RANK_KEY", "edge"))
     # Max concurrent slots in one correlation cluster. 0 = disabled.
     max_per_cluster: int = field(default_factory=lambda: _int("MAX_PER_CLUSTER", 0))
     # Max concurrent cluster notional as % of equity. 0 = disabled.
@@ -272,6 +290,18 @@ class Config:
     # rather than wasting a slot on a micro position.
     min_position_notional: float = field(
         default_factory=lambda: _float("MIN_POSITION_NOTIONAL", 5.0)
+    )
+
+    # -- Buğra primary gate: score/shadow → risk modulation (SUPPORT) ------
+    # When False (DEFAULT), risk_multiplier is forced to 1.0 → sizing is
+    # byte-identical to today (the T1 golden tests stay green). When True, the
+    # engine modulates the risk budget within all hard caps using a multiplier
+    # derived from MEASURED edge (shadow avg_r + score-bucket avg_r), gated on
+    # sufficient data. Direction follows the data — never "high score = good".
+    # The multiplier is hard-clamped to [0.5, 1.5] inside RiskManager and can
+    # never break any cap or the liquidation-safety invariant.
+    risk_modulation_enabled: bool = field(
+        default_factory=lambda: _bool("RISK_MODULATION_ENABLED", False)
     )
 
     # -- Epoch label -------------------------------------------------------

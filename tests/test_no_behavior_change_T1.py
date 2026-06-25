@@ -178,8 +178,12 @@ def test_decision_engine_reject_risk_carries_clip_reason(tmp_path):
 
 
 def test_new_fields_do_not_affect_decision_string(tmp_path):
-    """Adding T1 fields must not change the decision string (ALLOW/REJECT/WATCH)."""
-    cfg = _base_cfg()
+    """Adding T1 fields must not change the decision string (ALLOW/REJECT/WATCH).
+
+    Pinned to score_as_gate=True so this test keeps asserting the legacy
+    score-veto WATCH/REJECT behaviour (the Buğra-primary default is False, which
+    would ALLOW the sub-threshold cases — covered in test_bugra_primary_gate.py)."""
+    cfg = _base_cfg(score_as_gate=True)
     cfg.db_path = str(tmp_path / "test.db")
     de = DecisionEngine(cfg)
     pf = PortfolioView(balance=1000.0, open_notional=0.0, open_count=0,

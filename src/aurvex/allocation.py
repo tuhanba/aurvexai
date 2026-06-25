@@ -1,10 +1,25 @@
-"""Two-pass global ranking allocator (W3-T5).
+"""Two-pass global ranking allocator (Buğra primary gate — slot selection).
 
-Only used when cfg.global_ranking is True. When False (default) the
-engine's existing first-come loop runs byte-identical to pre-T5 — this
-module is not touched on that path.
+Default ON (cfg.global_ranking=True). With the score veto removed, more Buğra
+candidates qualify per cycle than there are max_open_trades slots; this allocator
+orders the executable candidates so the BEST win the slots. When global_ranking
+is False (legacy) the engine's first-come loop runs instead — this module is not
+touched on that path.
 
-Two-pass flow (activated by GLOBAL_RANKING=true):
+Ranking follows MEASURED edge, it NEVER assumes high score = good:
+  * rank_key="edge" (DEFAULT): the score component's weight and sign follow the
+    score-bucket avg_r measured by the shadow learner.
+      - sufficient data + monotone-positive buckets → rank by score (+ shadow
+        score_delta capped ±5): score has earned its place.
+      - sufficient data + anti-monotone buckets → rank by the bucket's realised
+        avg_r so selection follows realised edge (an anti-predictive score thus
+        promotes the empirically-stronger LOWER-score candidate).
+      - NOT sufficient data → neutral, stable tiebreak: shadow score_delta first
+        (per-setup realised edge), then a deterministic key (24h quote volume
+        desc, then symbol). Raw score must NOT dominate while its sign is unproven.
+  * rank_key="composite" / "score" → legacy modes kept for A/B comparison.
+
+Two-pass flow:
   Pass 1 — scan all symbols, detect + score, compute rank → CandidateSlots.
   Pass 2 — sort by rank desc, call engine.decide() in rank order, apply caps.
 
@@ -16,7 +31,7 @@ Caps applied in Pass 2 (all 0-disabled by default):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from .config import Config
 from .models import MarketSnapshot, Signal
@@ -46,15 +61,75 @@ def cluster_for(symbol: str) -> Optional[str]:
     return CORRELATION_CLUSTERS.get(base)
 
 
-def rank_signal(cfg: Config, signal: Signal, shadow_delta: float = 0.0) -> float:
+def _bucket_avg_r_for_score(buckets: Dict[str, Any], score: float) -> Optional[float]:
+    """Return the realised avg_r of the score-bucket containing ``score``.
+
+    None if score falls below the tracked range (sub-45) or the bucket has no
+    resolved rows. ``buckets`` is the dict produced by
+    ShadowLearner.score_bucket_stats() under the "buckets" key.
+    """
+    bucket_defs = [("45-55", 45.0, 55.0), ("55-65", 55.0, 65.0),
+                   ("65-75", 65.0, 75.0), ("75+", 75.0, 200.0)]
+    bmap = buckets.get("buckets", {}) if buckets else {}
+    for key, lo, hi in bucket_defs:
+        if lo <= score < hi:
+            b = bmap.get(key) or {}
+            return b.get("avg_r")
+    return None
+
+
+def rank_signal(cfg: Config, signal: Signal, shadow_delta: float = 0.0,
+                buckets: Optional[Dict[str, Any]] = None) -> float:
     """Compute the allocation rank for a signal (higher = allocated first).
 
-    rank_key="score"     → raw signal score.
-    rank_key="composite" → score + advisory shadow delta (capped ±5).
+    rank_key="score"     → raw signal score [legacy].
+    rank_key="composite" → score + advisory shadow delta (capped ±5) [legacy].
+    rank_key="edge"      → edge-validated rank (DEFAULT). The score component's
+                           weight/sign follow MEASURED edge (score-bucket avg_r);
+                           falls back to a neutral tiebreak when data is thin.
+
+    ``buckets`` is ShadowLearner.score_bucket_stats() (computed once per cycle).
     """
+    delta = max(-5.0, min(5.0, shadow_delta))
+
     if cfg.rank_key == "score":
         return signal.score
-    return signal.score + max(-5.0, min(5.0, shadow_delta))
+    if cfg.rank_key == "composite":
+        return signal.score + delta
+
+    # --- edge mode --------------------------------------------------------
+    if not buckets or not buckets.get("sufficient_data"):
+        # Unproven score sign: do NOT let raw score order the slots. Rank by the
+        # per-setup realised edge (shadow delta). Remaining ties are broken by a
+        # deterministic key in the engine sort (24h quote volume desc, symbol).
+        return delta
+
+    if buckets.get("monotone_expected") is True:
+        # Score predictivity confirmed positive → score has earned its place.
+        return signal.score + delta
+
+    # Sufficient data but NOT monotone-positive (anti- or non-monotone): follow
+    # realised edge directly. Rank by the bucket's avg_r so an anti-predictive
+    # score promotes the empirically-stronger lower-score candidate.
+    avg_r = _bucket_avg_r_for_score(buckets, signal.score)
+    if avg_r is None:
+        return delta
+    # Scale avg_r into a comparable rank space; shadow delta nudges within it.
+    return avg_r * 100.0 + delta
+
+
+def rank_basis(cfg: Config, buckets: Optional[Dict[str, Any]] = None) -> str:
+    """Human-readable basis describing how this cycle's ranks were derived."""
+    if cfg.rank_key == "score":
+        return "score"
+    if cfg.rank_key == "composite":
+        return "composite"
+    if not buckets or not buckets.get("sufficient_data"):
+        n = (buckets or {}).get("total", 0)
+        return f"neutral_insufficient_data(N={n})"
+    if buckets.get("monotone_expected") is True:
+        return "edge_monotone"
+    return "edge_avg_r"
 
 
 @dataclass
