@@ -132,7 +132,7 @@ def _run_reset(cfg) -> int:
     print()
 
     db = Storage(cfg.db_path)
-    result = db.reset_for_new_epoch(cfg.initial_paper_balance, label="wave2")
+    result = db.reset_for_new_epoch(cfg.initial_paper_balance, label=cfg.epoch_label)
     db.close()
 
     print(f"✓ Shadows preserved : {result['shadows_kept']} rows")
@@ -143,6 +143,16 @@ def _run_reset(cfg) -> int:
     print()
     print("Done. Restart the engine:")
     print("  docker compose restart engine")
+
+    # Optional: Telegram reset notification (best-effort, never fatal).
+    try:
+        from aurvex.telegram import build_notifier
+        notifier = build_notifier(cfg)
+        notifier.reset_completed(cfg.epoch_label, result["new_balance"],
+                                 result["shadows_kept"])
+    except Exception:
+        pass
+
     return 0
 
 

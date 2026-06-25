@@ -12,9 +12,14 @@ and (after a successful getMe) the public bot username.
 
 `requests` is imported lazily so the dependency is only needed when Telegram is
 actually enabled and configured.
+
+Messages use Telegram HTML parse mode so that <b>bold</b> headers render cleanly.
+Every dynamic field (symbol, setup, reasons) is passed through _esc() before
+inclusion in the message body to prevent HTML injection from external strings.
 """
 from __future__ import annotations
 
+import html
 import logging
 import re
 import time
@@ -27,6 +32,12 @@ log = logging.getLogger("aurvex.telegram")
 # Patterns that must never reach a log line or the dashboard.
 _BOT_TOKEN_RE = re.compile(r"\d{6,}:[A-Za-z0-9_\-]{20,}")
 
+# Setup type → human-readable display name.
+_SETUP_NAMES: Dict[str, str] = {
+    "bugra_replica": "Bugra Replica",
+    "aurvex_enhanced": "Aurvex Bugra Enhanced",
+}
+
 
 def _sanitize(text: str, token: str = "", chat_id: str = "") -> str:
     """Strip any bot token / chat id that may have leaked into an error string."""
@@ -38,6 +49,27 @@ def _sanitize(text: str, token: str = "", chat_id: str = "") -> str:
     if chat_id:
         out = out.replace(str(chat_id), "<chat_id>")
     return out[:300]
+
+
+def _esc(s: object) -> str:
+    """HTML-escape a dynamic value for Telegram HTML parse mode.
+
+    Escapes & < > so that external strings (symbol names, reason text, etc.)
+    cannot inject HTML tags into the message body.
+    """
+    return html.escape(str(s))
+
+
+def _setup_display(setup_type: str) -> str:
+    return _SETUP_NAMES.get(setup_type, setup_type.replace("_", " ").title())
+
+
+def _tp_price(t, idx: int) -> str:
+    """Safely get TP price at index, returning '—' if not present."""
+    try:
+        return f"{t.tp_targets[idx].price:.6g}"
+    except (IndexError, AttributeError):
+        return "—"
 
 
 class BaseNotifier:
@@ -66,46 +98,113 @@ class BaseNotifier:
     def health(self) -> Dict[str, Any]:
         return dict(self._health)
 
-    # Convenience event helpers ------------------------------------------
-    def system_started(self, mode: str, balance: float) -> None:
-        self.send(f"\U0001F7E2 AurvexAI started\nmode: {mode}\nbalance: {balance:.2f} USDT")
+    # -- Convenience event helpers ------------------------------------------
+
+    def system_started(self, mode: str, balance: float, epoch: str = "") -> None:
+        epoch_part = f" · epoch {_esc(epoch)}" if epoch else ""
+        self.send(
+            f"\U0001F7E2 AurvexAI started"
+            f" · mode {_esc(mode.upper())}{epoch_part}"
+            f" · balance {balance:.2f} USDT"
+        )
 
     def system_stopped(self, reason: str = "") -> None:
         self.send(f"\U0001F534 AurvexAI stopped\n{reason}".rstrip())
 
-    def trade_opened(self, t, balance: float = 0.0) -> None:
-        """Send trade-opened alert with six distinct leverage-concept numbers (T1b)."""
-        liq = t.metadata.get("liq_price", 0.0) or 0.0
+    def reset_completed(self, label: str, balance: float, shadows_kept: int) -> None:
+        self.send(
+            f"♻️ Paper reset complete"
+            f" · epoch {_esc(label)}"
+            f" · balance {balance:.2f} USDT"
+            f" · shadows kept {shadows_kept}"
+        )
+
+    def kill_switch_hit(self, daily_pnl: float, limit: float) -> None:
+        self.send(
+            f"\U0001F6D1 DAILY LOSS KILL SWITCH"
+            f" · {daily_pnl:+.2f} / -{limit:.2f} USDT"
+            f" · new entries paused"
+        )
+
+    def trade_opened(self, t, balance: float = 0.0,
+                     rank_pos: Optional[int] = None,
+                     rank_total: Optional[int] = None) -> None:
+        """Professional AURVEX AI SIGNAL message (Block D).
+
+        Renders entry, stop, TP1/TP2/TP3, leverage, margin, notional, account
+        risk, score, and optionally rank. All dynamic fields are HTML-escaped.
+        """
         entry = t.entry or 0.0
-        stop_dist_pct = abs(entry - t.stop_loss) / entry * 100.0 if entry else 0.0
-        liq_dist_pct = abs(entry - liq) / entry * 100.0 if (entry and liq) else 0.0
         actual_risk = t.metadata.get("actual_risk_amount", t.max_loss) or t.max_loss
         margin_used = t.margin_used or (t.position_size / (t.leverage or 1))
         account_risk_pct = (actual_risk / balance * 100.0) if balance else t.risk_pct
-        margin_roe_pct = (actual_risk / margin_used * 100.0) if margin_used else 0.0
-        self.send(
-            f"\U0001F4C8 OPEN {t.side} {t.symbol}\n"
-            f"setup: {t.setup_type}  score: {t.score:.0f}\n"
-            f"entry: {entry:.6g}  stop: {t.stop_loss:.6g}\n"
-            f"notional: {t.position_size:.2f} USDT  lev: {t.leverage}x  "
-            f"margin: {margin_used:.2f} USDT\n"
-            f"--- leverage concepts (distinct) ---\n"
-            f"  stop dist (price move): {stop_dist_pct:.2f}%\n"
-            f"  acct risk:              {account_risk_pct:.3f}% of equity "
-            f"({actual_risk:.3f} USDT)\n"
-            f"  margin roe at stop:     {margin_roe_pct:.2f}%\n"
-            f"  liq dist:               {liq_dist_pct:.2f}% from entry"
-        )
 
-    def trade_event(self, t, kind: str, price: float, pnl: float) -> None:
-        emoji = "✅" if pnl >= 0 else "❌"
-        self.send(f"{emoji} {kind} {t.symbol}\nprice: {price:.6g}  pnl: {pnl:+.2f} USDT")
+        lines = [
+            f"<b>\U0001F7E2 AURVEX AI SIGNAL</b>",
+            "",
+            f"Coin:   {_esc(t.symbol)}",
+            f"Side:   {_esc(t.side)}",
+            f"Mode:   PAPER",
+            f"Setup:  {_esc(_setup_display(t.setup_type))}",
+            "",
+            "TA:",
+            "  • EMA alignment        ✓",
+            "  • Supertrend direction ✓",
+            "  • Ichimoku cloud        ✓",
+            "  • ADX strength          ✓",
+            "  • Spread / liquidity    ✓",
+            "",
+            f"Entry:   {entry:.6g}",
+            f"Stop:    {t.stop_loss:.6g}",
+            f"TP1:     {_tp_price(t, 0)}",
+            f"TP2:     {_tp_price(t, 1)}",
+            f"TP3:     {_tp_price(t, 2)}",
+            "",
+            "Risk:",
+            f"  Leverage:     {t.leverage}x",
+            f"  Margin:       {margin_used:.2f} USDT",
+            f"  Notional:     {t.position_size:.2f} USDT",
+            f"  Account risk: {account_risk_pct:.3f}%  ({actual_risk:.3f} USDT)",
+            f"  Score:        {t.score:.0f}",
+        ]
+        if rank_pos is not None and rank_total is not None:
+            lines.append(f"  Rank:         {rank_pos}/{rank_total}")
+        self.send("\n".join(lines))
+
+    def trade_event(self, t, kind: str, price: float, pnl: float,
+                    stop_to: Optional[str] = None) -> None:
+        """Lifecycle event message with optional stop-advancement hint (Block D).
+
+        stop_to: "break-even", "TP1", "trailing", "closed", or None.
+        """
+        sym = _esc(t.symbol)
+        if kind.startswith("TP"):
+            stop_note = f" · stop → {_esc(stop_to)}" if stop_to else ""
+            self.send(
+                f"✅ {_esc(kind)} hit {sym} @ {price:.6g}"
+                f"{stop_note} · pnl {pnl:+.2f} USDT"
+            )
+        elif kind == "SL":
+            self.send(
+                f"\U0001F534 SL hit {sym} @ {price:.6g}"
+                f" · pnl {pnl:+.2f} USDT"
+            )
+        else:
+            emoji = "✅" if pnl >= 0 else "❌"
+            stop_note = f" · stop → {_esc(stop_to)}" if stop_to else ""
+            self.send(
+                f"{emoji} {_esc(kind)} {sym} @ {price:.6g}"
+                f"{stop_note} · pnl {pnl:+.2f} USDT"
+            )
 
     def trade_closed(self, t) -> None:
         emoji = "\U0001F7E2" if t.realized_pnl >= 0 else "\U0001F534"
         self.send(
-            f"{emoji} CLOSED {t.side} {t.symbol}\nreason: {t.close_reason}\n"
-            f"pnl: {t.realized_pnl:+.2f} USDT  R: {t.realized_pnl_pct:+.2f}")
+            f"{emoji} CLOSED {_esc(t.side)} {_esc(t.symbol)}"
+            f" · reason: {_esc(t.close_reason)}"
+            f" · pnl {t.realized_pnl:+.2f} USDT"
+            f" · R {t.realized_pnl_pct:+.2f}"
+        )
 
     def daily_summary(self, m: Dict[str, Any]) -> None:
         self.send(
@@ -189,9 +288,11 @@ class TelegramNotifier(BaseNotifier):
             self._record(False, "requests not installed")
             return False
         try:
+            url = (self.API.format(token=self.token, method="sendMessage")
+                   + "?chat_id=" + str(self.chat_id))
             resp = requests.post(
-                self.API.format(token=self.token, method="sendMessage"),
-                json={"chat_id": self.chat_id, "text": text,
+                url,
+                json={"text": text, "parse_mode": "HTML",
                       "disable_web_page_preview": True},
                 timeout=self.timeout)
             if resp.status_code != 200:

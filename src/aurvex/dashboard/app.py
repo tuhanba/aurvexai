@@ -93,26 +93,91 @@ def create_app(cfg=None) -> Flask:
 
     @app.route("/health")
     def health():
+        """Single source of truth (Block F): green only if truly alive + fresh +
+        not kill-switched + mode-consistent. HTTP 200 always so the docker
+        healthcheck doesn't trigger container restarts; use ok:false to detect
+        degraded state without flapping."""
+        import datetime as _dt
         hb = db.get_heartbeat("engine")
-        fresh = bool(hb and (now_ms() - int(hb.get("ts", 0))) < 120_000)
-        return jsonify({"ok": True, "engine_alive": fresh, "heartbeat": hb}), 200
+        hb_data = dict(hb.get("status") or {}) if hb else {}
+        hb_ts = int(hb.get("ts", 0)) if hb else 0
+
+        ts_age = now_ms() - hb_ts if hb_ts else None
+        heartbeat_fresh = bool(hb and ts_age is not None and ts_age < 120_000)
+
+        data_age_ms = hb_data.get("data_age_ms")
+        cycle_interval_ms = cfg.cycle_interval_sec * 1000
+        data_fresh = (data_age_ms is None or data_age_ms < cycle_interval_ms * 5)
+
+        kill_switch = bool(hb_data.get("kill_switch", False))
+        engine_mode = hb_data.get("mode", cfg.mode)
+        mode_ok = engine_mode == cfg.mode
+
+        ok = heartbeat_fresh and data_fresh and not kill_switch and mode_ok
+
+        reasons: list = []
+        if not heartbeat_fresh:
+            reasons.append(
+                f"stale heartbeat ({ts_age}ms)" if ts_age is not None else "no heartbeat")
+        if not data_fresh:
+            reasons.append(f"stale data ({data_age_ms}ms)")
+        if kill_switch:
+            reasons.append("kill switch tripped")
+        if not mode_ok:
+            reasons.append(f"mode mismatch: engine={engine_mode} config={cfg.mode}")
+
+        return jsonify({
+            "ok": ok,
+            "engine_alive": heartbeat_fresh,
+            "data_age_ms": data_age_ms,
+            "kill_switch": kill_switch,
+            "mode_ok": mode_ok,
+            "reasons": reasons,
+            "heartbeat": hb_data,
+        }), 200
 
     @app.route("/api/status")
     def status():
+        import datetime as _dt
         raw = db.get_heartbeat("engine")
         hb = {}
         if raw:
             hb = dict(raw.get("status") or {})
             hb["ts"] = raw.get("ts")
         opens = db.get_open_trades(mode=cfg.mode)
+        balance = db.get_balance()
+
+        # Epoch label from DB meta.
+        epoch_meta = db.get_meta("epoch")
+        epoch_label = (epoch_meta.get("label", "unknown")
+                       if isinstance(epoch_meta, dict) else "unknown")
+
+        # Daily PnL for kill-switch display.
+        _now = now_ms()
+        _ts = _now / 1000.0
+        _day_start = int(
+            _dt.datetime.fromtimestamp(_ts, _dt.timezone.utc)
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .timestamp() * 1000
+        )
+        daily_pnl = db.daily_realized_pnl(_day_start)
+
         return jsonify({
             "mode": cfg.mode,
-            "balance": db.get_balance(),
+            "balance": balance,
             "initial_balance": cfg.initial_paper_balance,
             "open_trades": len(opens),
             "heartbeat": hb,
             "engine_alive": bool(hb and (now_ms() - int(hb.get("ts", 0))) < 120_000),
             "live_enabled": cfg.live_enabled,
+            # Block F additions:
+            "epoch_label": epoch_label,
+            "kill_switch": hb.get("kill_switch", False),
+            "data_age_ms": hb.get("data_age_ms"),
+            "cycle_ms": hb.get("cycle_ms"),
+            "last_error": hb.get("last_error", ""),
+            "daily_realized_pnl": round(daily_pnl, 4),
+            "max_daily_loss_pct": cfg.max_daily_loss_pct,
         })
 
     @app.route("/api/funnel")
@@ -264,6 +329,16 @@ def create_app(cfg=None) -> Flask:
         status = dict(hb.get("status") or {})
         status["heartbeat_ts"] = hb.get("ts")
         return jsonify(status)
+
+    @app.route("/api/score_validity")
+    def score_validity():
+        """Block E-3: score-validity panel — buckets by score range, win% and avg-R.
+
+        This is the evidence gate for enabling global_ranking / rank_key changes
+        in Block B. Only flip ranking on when sufficient_data is True and the
+        score is not inverted (monotone_expected is True).
+        """
+        return jsonify(shadow.score_bucket_stats())
 
     return app
 

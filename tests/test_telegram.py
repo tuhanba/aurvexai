@@ -136,7 +136,7 @@ def test_send_success_updates_counters(monkeypatch):
 
 
 def test_trade_opened_message_contains_risk_fields():
-    """The open message must surface notional, leverage and margin."""
+    """The open message must surface notional, leverage and margin (new SIGNAL format)."""
     sent = {}
 
     class Cap(BaseNotifier):
@@ -151,6 +151,8 @@ def test_trade_opened_message_contains_risk_fields():
               metadata={"risk_amount": 5.0, "liq_price": 51.0})
     Cap().trade_opened(t)
     txt = sent["text"]
-    assert "notional" in txt and "1000.00" in txt
-    assert "lev: 2x" in txt
-    assert "margin" in txt and "500.00" in txt
+    # New AURVEX AI SIGNAL format (Block D)
+    assert "AURVEX AI SIGNAL" in txt
+    assert "1000.00" in txt   # notional amount
+    assert "2x" in txt        # leverage
+    assert "500.00" in txt    # margin amount

@@ -499,31 +499,42 @@ class ShadowLearner:
             return "soft_score_adjustment"
         return "risk_multiplier"
 
-    def _setup_avg_r(self, setup: str) -> Optional[float]:
+    def _setup_avg_r(self, setup: str, epoch: Optional[str] = None) -> Optional[float]:
+        ep = epoch if epoch is not None else self._current_epoch()
         rows = self.db.conn.execute(
             "SELECT COALESCE(AVG(r_multiple),0) AS r, COUNT(*) AS n FROM shadows "
-            "WHERE outcome != ? AND setup_type=?", (OPEN, setup)).fetchone()
+            "WHERE outcome != ? AND setup_type=? AND epoch=?",
+            (OPEN, setup, ep)).fetchone()
         if rows["n"] == 0:
             return None
         return float(rows["r"])
 
     def score_delta(self, setup: str) -> float:
-        """Advisory score nudge in [-5, +5] based on realised edge. Soft stage+."""
-        total = len(self._resolved_rows())
+        """Advisory score nudge in [-5, +5] based on realised edge. Soft stage+.
+
+        Epoch-scoped: only current-epoch resolved rows count toward the stage gate
+        and the avg_r computation. Legacy rows from prior epochs cannot bleed in.
+        """
+        epoch = self._current_epoch()
+        total = len(self._resolved_rows(epoch=epoch))
         if total < 50:
             return 0.0
-        avg_r = self._setup_avg_r(setup)
+        avg_r = self._setup_avg_r(setup, epoch=epoch)
         if avg_r is None:
             return 0.0
-        # Map avg R in [-1, +1] to score delta in [-5, +5], clamped.
         return round(max(-5.0, min(5.0, avg_r * 5.0)), 2)
 
     def risk_multiplier(self, setup: str) -> float:
-        """Advisory risk multiplier in [0.7, 1.3]. Only meaningful at 100+ resolved."""
-        total = len(self._resolved_rows())
+        """Advisory risk multiplier in [0.7, 1.3]. Only meaningful at 100+ resolved.
+
+        Epoch-scoped: legacy rows from prior epochs are excluded so that an old
+        contaminated dataset cannot override the current epoch's clean signal.
+        """
+        epoch = self._current_epoch()
+        total = len(self._resolved_rows(epoch=epoch))
         if total < 100:
             return 1.0
-        avg_r = self._setup_avg_r(setup)
+        avg_r = self._setup_avg_r(setup, epoch=epoch)
         if avg_r is None:
             return 1.0
         return round(max(0.7, min(1.3, 1.0 + avg_r * 0.3)), 3)

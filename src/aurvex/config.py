@@ -274,6 +274,12 @@ class Config:
         default_factory=lambda: _float("MIN_POSITION_NOTIONAL", 5.0)
     )
 
+    # -- Epoch label -------------------------------------------------------
+    # Written once into the DB meta on first start (ensure_epoch). Change this
+    # value + run `python main.py reset` to start a clean forward-test epoch
+    # while preserving all shadow history.
+    epoch_label: str = field(default_factory=lambda: _str("EPOCH_LABEL", "wave3"))
+
     # -- Storage -----------------------------------------------------------
     db_path: str = field(default_factory=lambda: _str("DB_PATH", "data/aurvex.db"))
 
