@@ -339,6 +339,10 @@ class WalkForwardResult:
     windows: int = 0
     total_oos_trades: int = 0
     decision: str = "PENDING"
+    # Diagnostics: why signals did (not) become trades across all OOS windows.
+    signals_seen: int = 0
+    allows: int = 0
+    reject_reasons: Dict[str, int] = field(default_factory=dict)
 
 
 def run_walk_forward(
@@ -405,6 +409,20 @@ def print_report(results: List[WalkForwardResult]) -> str:
             f"{r.deflated_sharpe:>7.4f} "
             f"{r.decision}"
         )
+    lines.append("=" * 72)
+    # Diagnostics: when a profile takes no trades, show WHY (signals seen and the
+    # stage that rejected them) so a zero-trade table is actionable, not opaque.
+    lines.append("DIAGNOSTICS (signals → why not traded)")
+    lines.append("-" * 72)
+    for r in results:
+        lines.append(
+            f"{r.profile:<20} signals_seen={r.signals_seen}  "
+            f"allows={r.allows}  oos_trades={r.total_oos_trades}"
+        )
+        if r.reject_reasons:
+            top = "  ".join(f"{k}={v}" for k, v in
+                            list(r.reject_reasons.items())[:6])
+            lines.append(f"  rejects: {top}")
     lines.append("=" * 72)
     lines.append("LIVE gate: needs ACCEPTED + Deflated Sharpe > 0 + positive OOS expectancy")
     lines.append("No profile is LIVE-ready from this output alone — see ROADMAP.md.")
@@ -487,7 +505,8 @@ def run_walkforward_analysis(cfg, symbols: Optional[Sequence[str]] = None,
                              timeframe: Optional[str] = None, limit: int = 3000,
                              wf_cfg: Optional[WalkForwardConfig] = None,
                              profiles: Optional[Sequence[str]] = None,
-                             data_override: Optional[Dict[str, List]] = None):
+                             data_override: Optional[Dict[str, List]] = None,
+                             htf: Optional[str] = None):
     """Segmented out-of-sample walk-forward for each profile.
 
     Returns ``(results, source, data)``. Parameters are FIXED from ``cfg`` (no
@@ -524,19 +543,32 @@ def run_walkforward_analysis(cfg, symbols: Optional[Sequence[str]] = None,
     # Multiple-testing penalty: best of N profiles is picked on the same data.
     n_trials = max(wf_cfg.n_trials, len(profiles))
 
+    htf = htf or cfg.htf
     results: List[WalkForwardResult] = []
     for profile in profiles:
-        pcfg = dataclasses.replace(cfg, strategy_profile=profile, ltf=timeframe)
+        pcfg = dataclasses.replace(cfg, strategy_profile=profile,
+                                   ltf=timeframe, htf=htf)
         trades_by_window: List[List[TradeResult]] = []
+        sig_seen = 0
+        allows = 0
+        rejects: Dict[str, int] = {}
         s0 = warmup
         while s0 + oos <= n:
             window = {sym: c[s0 - warmup: s0 + oos] for sym, c in data.items()}
             bt = Backtester(pcfg)
-            bt.run(window)
+            m = bt.run(window)
+            sig_seen += int(m.get("signals_seen", 0))
+            allows += int(m.get("allows", 0))
+            for k, v in (m.get("reject_reasons") or {}).items():
+                rejects[k] = rejects.get(k, 0) + int(v)
             trades_by_window.append([_trade_to_result(t, tf_ms)
                                      for t in bt._last_closed])
             s0 += step
         wfc = dataclasses.replace(wf_cfg, n_trials=n_trials,
                                   base_equity=cfg.initial_paper_balance)
-        results.append(run_walk_forward(trades_by_window, profile, wfc))
+        res = run_walk_forward(trades_by_window, profile, wfc)
+        res.signals_seen = sig_seen
+        res.allows = allows
+        res.reject_reasons = dict(sorted(rejects.items(), key=lambda x: -x[1]))
+        results.append(res)
     return results, source, data

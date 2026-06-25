@@ -102,12 +102,13 @@ def _run_walkforward(cfg) -> int:
     symbols = [s.strip() for s in syms.split(",") if s.strip()] if syms else None
     limit = int(os.environ.get("WF_LIMIT", "3000"))
     timeframe = os.environ.get("WF_TIMEFRAME", cfg.ltf)
+    htf = os.environ.get("WF_HTF", cfg.htf)
 
     print("=== AurvexAI Block 6 — walk-forward analysis ===")
-    print(f"timeframe={timeframe}  limit={limit}  "
+    print(f"timeframe={timeframe}  htf={htf}  limit={limit}  "
           f"oos={wf.oos_bars} step={wf.step_bars} warmup={wf.warmup_bars}")
     results, source, data = run_walkforward_analysis(
-        cfg, symbols=symbols, timeframe=timeframe, limit=limit, wf_cfg=wf)
+        cfg, symbols=symbols, timeframe=timeframe, limit=limit, wf_cfg=wf, htf=htf)
     print(f"data source: {source}  symbols: {list(data.keys())}")
     if source == "synthetic":
         bar = "!" * 72
