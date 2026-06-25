@@ -70,6 +70,16 @@ class FunnelLogger:
     def mark_executed(self) -> None:
         self.stats.executed_count += 1
 
+    def mark_ranked_out(self, reason: str = "ranked_out") -> None:
+        """A candidate qualified (ALLOW) but lost the slot race (slots full / cap).
+
+        Buğra primary gate: this is a capacity outcome — the signal was good, there
+        was no room — so it is attributed to "ranked out", never a score gate.
+        """
+        self.stats.ranked_out_count += 1
+        self.stats.capacity_reject_count += 1
+        self.stats.add_reject(reason)
+
     def finalize(self, last_trade_minutes_ago: Optional[float], cycle_ms: float) -> FunnelStats:
         self.stats.last_trade_minutes_ago = last_trade_minutes_ago
         self.stats.cycle_ms = cycle_ms

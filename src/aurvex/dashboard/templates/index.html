@@ -332,9 +332,9 @@ tr:last-child td{border-bottom:none}
     </div>
   </div>
 
-  <!-- Score Validity panel (Block E-3) -->
+  <!-- Score Validity / Predictivity panel (Buğra primary gate — score = support) -->
   <div class="card">
-    <div class="card-title">Score Validity — ranking evidence</div>
+    <div class="card-title">Score Predictivity — support-layer trust (Buğra is the gate)</div>
     <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;flex-wrap:wrap">
       <div>
         <div class="row-label">Verdict</div>
@@ -354,9 +354,11 @@ tr:last-child td{border-bottom:none}
       </div>
     </div>
     <div id="svBuckets"></div>
-    <div class="kpi-sub" style="margin-top:8px;font-size:10px;color:var(--muted)">
-      Enable GLOBAL_RANKING only after sufficient_data=true and verdict=predictive ✓.
-      If inverted ✗, investigate before ranking by score.
+    <div class="kpi-sub" id="svMeaning" style="margin-top:8px;font-size:11px;color:var(--sub)">—</div>
+    <div class="kpi-sub" style="margin-top:6px;font-size:10px;color:var(--muted)">
+      Buğra is the primary entry gate. Score only ranks slots and modulates risk,
+      and only in the MEASURED direction. Ranking/risk follow this verdict — they
+      never assume high score = good.
     </div>
   </div>
 
@@ -549,11 +551,13 @@ async function refresh(){
     // ── Funnel ──
     const L = fn.latest;
     if(L){
+      // Buğra primary gate pipeline: Buğra signal → filters → executable → opened.
+      // Score is not a gate; non-trades show their real reason (filter/risk/ranked out).
       const stages=[
         ['scanned',L.scanned],['candidates',L.candidates],
-        ['setups',L.setups_detected],['score pass',L.score_pass],
-        ['ALLOW',L.decision_allow],['executed',L.executed],
-        ['watch',L.watch],['rejected',L.rejected]
+        ['Buğra setups',L.setups_detected],['executable',L.decision_allow],
+        ['opened',L.executed],['ranked out',L.ranked_out],
+        ['rejected',L.rejected]
       ];
       const max=Math.max(1,...stages.map(s=>s[1]||0));
       document.getElementById('funnel').innerHTML = stages.map(s=>
@@ -640,23 +644,27 @@ async function refresh(){
        <td class="${cls(r.expectancy)}">${fmt(r.expectancy,3)}</td></tr>`).join('')
       ||'<tr><td colspan="5" style="color:var(--muted)">none</td></tr>';
 
-    // ── Score Validity panel (Block E-3) ──
+    // ── Score Predictivity panel (Buğra primary gate — score = support) ──
     if(sv){
       const mono = sv.monotone_expected;
       const suf = sv.sufficient_data;
+      const verdict = sv.verdict || {};
       const verdictEl = document.getElementById('svVerdict');
-      if(!suf){
-        verdictEl.textContent = 'insufficient data (need N≥100)';
-        verdictEl.className = 'neu';
-      } else if(mono===true){
-        verdictEl.textContent = 'score predictive ✓';
+      // Prefer the explicit verdict badge from /api/score_validity.
+      if(verdict.verdict === 'PREDICTIVE'){
+        verdictEl.textContent = (verdict.label||'PREDICTIVE') + ' ✓';
         verdictEl.className = 'pos';
-      } else if(mono===false){
-        verdictEl.textContent = 'score inverted ✗';
+      } else if(verdict.verdict === 'ANTI_PREDICTIVE'){
+        verdictEl.textContent = (verdict.label||'ANTI-PREDICTIVE') + ' ✗';
         verdictEl.className = 'neg';
       } else {
-        verdictEl.textContent = 'inconclusive (flat)';
+        verdictEl.textContent = verdict.label || 'INSUFFICIENT';
         verdictEl.className = 'neu';
+      }
+      const meaningEl = document.getElementById('svMeaning');
+      if(meaningEl){
+        const mod = sv.risk_modulation_enabled ? 'risk modulation: ON' : 'risk modulation: OFF';
+        meaningEl.textContent = (verdict.meaning ? verdict.meaning + ' · ' : '') + mod;
       }
       document.getElementById('svSufficient').textContent = suf?'yes (N≥100)':'no (<100)';
       document.getElementById('svSufficient').className = suf?'pos':'neu';

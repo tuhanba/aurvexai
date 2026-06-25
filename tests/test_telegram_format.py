@@ -90,6 +90,49 @@ def test_rank_line_omitted_when_no_rank():
     assert "Rank" not in n.last
 
 
+def test_rank_basis_shown_with_rank():
+    n = Cap()
+    t = _trade(metadata={"actual_risk_amount": 7.5, "liq_price": 2500.0})
+    n.trade_opened(t, balance=200.0, rank_pos=1, rank_total=3,
+                   rank_basis="edge_avg_r")
+    assert "1/3" in n.last
+    assert "edge_avg_r" in n.last
+
+
+def test_risk_multiplier_line_rendered():
+    n = Cap()
+    t = _trade(metadata={"actual_risk_amount": 7.5, "liq_price": 2500.0,
+                         "risk_multiplier": 1.15, "m_shadow": 1.05,
+                         "m_score": 1.10})
+    n.trade_opened(t, balance=200.0)
+    txt = n.last
+    assert "Risk x1.15" in txt
+    assert "shadow 1.05" in txt
+    assert "score 1.10" in txt
+
+
+def test_score_labelled_as_rank_risk_input():
+    n = Cap()
+    n.trade_opened(_trade(), balance=200.0)
+    assert "rank/risk input" in n.last
+
+
+def test_daily_summary_predictivity_line():
+    n = Cap()
+    metrics = {"total_trades": 4, "winrate": 50.0, "net_pnl": 1.2,
+               "profit_factor": 1.3, "expectancy": 0.01, "expectancy_r": 0.05}
+    n.daily_summary(metrics, predictivity={"label": "ANTI-PREDICTIVE (N=120)"})
+    assert "ANTI-PREDICTIVE (N=120)" in n.last
+
+
+def test_daily_summary_omits_predictivity_when_none():
+    n = Cap()
+    metrics = {"total_trades": 4, "winrate": 50.0, "net_pnl": 1.2,
+               "profit_factor": 1.3, "expectancy": 0.01, "expectancy_r": 0.05}
+    n.daily_summary(metrics)
+    assert "score:" not in n.last
+
+
 def test_core_risk_fields_present():
     n = Cap()
     n.trade_opened(_trade(), balance=200.0)

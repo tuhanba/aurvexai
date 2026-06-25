@@ -222,6 +222,10 @@ class Storage:
         if "capacity_reject" not in funnel_cols:
             self.conn.execute(
                 "ALTER TABLE funnel ADD COLUMN capacity_reject INTEGER DEFAULT 0")
+        # Buğra primary gate: candidates that qualified but lost the slot race.
+        if "ranked_out" not in funnel_cols:
+            self.conn.execute(
+                "ALTER TABLE funnel ADD COLUMN ranked_out INTEGER DEFAULT 0")
         self.conn.commit()
 
         # Shadow dedup columns + unique index (Wave 1 / T3). Additive only.
@@ -471,13 +475,13 @@ class Storage:
         self.conn.execute(
             "INSERT INTO funnel(ts,scanned,candidates,setups_detected,score_pass,"
             "risk_pass,decision_allow,executed,rejected,watch,top_reject_reasons,"
-            "last_trade_minutes_ago,cycle_ms,quality_reject,capacity_reject) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "last_trade_minutes_ago,cycle_ms,quality_reject,capacity_reject,ranked_out) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (f.ts, f.scanned_count, f.candidate_count, f.setup_detected_count,
              f.score_pass_count, f.risk_pass_count, f.decision_allow_count,
              f.executed_count, f.rejected_count, f.watch_count,
              json.dumps(f.top_reject_reasons()), f.last_trade_minutes_ago, f.cycle_ms,
-             f.quality_reject_count, f.capacity_reject_count))
+             f.quality_reject_count, f.capacity_reject_count, f.ranked_out_count))
         self.conn.commit()
 
     def latest_funnel(self) -> Optional[Dict[str, Any]]:

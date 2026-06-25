@@ -99,7 +99,10 @@ class BaseExecutor:
                       # ledger compare intended vs realised sizing.
                       "risk_multiplier": decision.metadata.get("risk_multiplier", 1.0),
                       "m_shadow": decision.metadata.get("m_shadow", 1.0),
-                      "m_score": decision.metadata.get("m_score", 1.0)},
+                      "m_score": decision.metadata.get("m_score", 1.0),
+                      # Slot-selection support layer: why this trade won its slot.
+                      "rank": decision.rank,
+                      "rank_basis": decision.rank_basis},
         )
         return trade
 

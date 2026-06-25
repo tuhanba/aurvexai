@@ -128,16 +128,22 @@ class BaseNotifier:
 
     def trade_opened(self, t, balance: float = 0.0,
                      rank_pos: Optional[int] = None,
-                     rank_total: Optional[int] = None) -> None:
+                     rank_total: Optional[int] = None,
+                     rank_basis: Optional[str] = None) -> None:
         """Professional AURVEX AI SIGNAL message (Block D).
 
         Renders entry, stop, TP1/TP2/TP3, leverage, margin, notional, account
-        risk, score, and optionally rank. All dynamic fields are HTML-escaped.
+        risk, score (labelled as rank/risk input, not a gate), the applied risk
+        multiplier and components, and optionally the rank + basis. Shows WHY this
+        trade won its slot and at what size factor. All dynamic fields are escaped.
         """
         entry = t.entry or 0.0
         actual_risk = t.metadata.get("actual_risk_amount", t.max_loss) or t.max_loss
         margin_used = t.margin_used or (t.position_size / (t.leverage or 1))
         account_risk_pct = (actual_risk / balance * 100.0) if balance else t.risk_pct
+        risk_mult = t.metadata.get("risk_multiplier", 1.0)
+        m_shadow = t.metadata.get("m_shadow", 1.0)
+        m_score = t.metadata.get("m_score", 1.0)
 
         lines = [
             f"<b>\U0001F7E2 AURVEX AI SIGNAL</b>",
@@ -165,10 +171,12 @@ class BaseNotifier:
             f"  Margin:       {margin_used:.2f} USDT",
             f"  Notional:     {t.position_size:.2f} USDT",
             f"  Account risk: {account_risk_pct:.3f}%  ({actual_risk:.3f} USDT)",
-            f"  Score:        {t.score:.0f}",
+            f"  Risk x{risk_mult:.2f} (shadow {m_shadow:.2f} · score {m_score:.2f})",
+            f"  Score:        {t.score:.0f}  (rank/risk input — not a gate)",
         ]
         if rank_pos is not None and rank_total is not None:
-            lines.append(f"  Rank:         {rank_pos}/{rank_total}")
+            basis = f" · {_esc(rank_basis)}" if rank_basis else ""
+            lines.append(f"  Rank:         {rank_pos}/{rank_total}{basis}")
         self.send("\n".join(lines))
 
     def trade_event(self, t, kind: str, price: float, pnl: float,
@@ -206,12 +214,18 @@ class BaseNotifier:
             f" · R {t.realized_pnl_pct:+.2f}"
         )
 
-    def daily_summary(self, m: Dict[str, Any]) -> None:
-        self.send(
-            "\U0001F4CA Daily summary\n"
-            f"trades: {m['total_trades']}  winrate: {m['winrate']}%\n"
-            f"net: {m['net_pnl']:+.2f} USDT  PF: {m['profit_factor']}\n"
-            f"expectancy: {m['expectancy']:+.4f} ({m['expectancy_r']:+.2f}R)")
+    def daily_summary(self, m: Dict[str, Any],
+                      predictivity: Optional[Dict[str, Any]] = None) -> None:
+        lines = [
+            "\U0001F4CA Daily summary",
+            f"trades: {m['total_trades']}  winrate: {m['winrate']}%",
+            f"net: {m['net_pnl']:+.2f} USDT  PF: {m['profit_factor']}",
+            f"expectancy: {m['expectancy']:+.4f} ({m['expectancy_r']:+.2f}R)",
+        ]
+        if predictivity:
+            # Daily read on whether score is trustworthy as a support signal.
+            lines.append(f"score: {_esc(predictivity.get('label', ''))}")
+        self.send("\n".join(lines))
 
     def critical(self, message: str) -> None:
         self.send(f"\U0001F6A8 CRITICAL\n{message}")

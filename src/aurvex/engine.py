@@ -351,16 +351,19 @@ class Engine:
                     continue
                 if open_count >= self.cfg.max_open_trades:
                     _rejected_ranks.append(cand.rank)
+                    funnel.mark_ranked_out("ranked_out:slots_full")
                     continue
                 if self.cfg.max_per_cluster > 0:
                     cl = cluster_for(sym)
                     if cl and (sum(1 for s in live_open_symbols
                                    if cluster_for(s) == cl) >= self.cfg.max_per_cluster):
                         _rejected_ranks.append(cand.rank)
+                        funnel.mark_ranked_out("ranked_out:cluster_cap")
                         continue
                 if self.cfg.max_same_side > 0:
                     if _open_sides.get(cand.signal.side, 0) >= self.cfg.max_same_side:
                         _rejected_ranks.append(cand.rank)
+                        funnel.mark_ranked_out("ranked_out:same_side_cap")
                         continue
 
                 trade = self.executor.open(d)
@@ -368,7 +371,8 @@ class Engine:
                 rank_pos = _opened_ranks.__len__() + 1  # 1-based position in opened list
                 self.notifier.trade_opened(trade, balance=self.db.get_balance(),
                                            rank_pos=rank_pos,
-                                           rank_total=len(ranked_candidates))
+                                           rank_total=len(ranked_candidates),
+                                           rank_basis=cycle_rank_basis)
                 funnel.mark_executed()
                 live_open_symbols.add(sym)
                 open_count += 1
@@ -598,7 +602,9 @@ class Engine:
         if today != self._last_summary_day:
             self._last_summary_day = today
             try:
-                self.notifier.daily_summary(self.journal.metrics(mode=self.cfg.mode))
+                self.notifier.daily_summary(
+                    self.journal.metrics(mode=self.cfg.mode),
+                    predictivity=self.shadow.predictivity_verdict())
             except Exception as exc:
                 log.debug("daily summary error: %s", exc)
 

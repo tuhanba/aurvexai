@@ -287,6 +287,10 @@ class FunnelStats:
     # Separates "dull market / bad signal" from "full portfolio / no room".
     quality_reject_count: int = 0
     capacity_reject_count: int = 0
+    # Buğra primary gate: candidates that qualified (ALLOW) but lost the slot race
+    # this cycle (slots full or a structural cap bound). A capacity outcome, not a
+    # quality reject — the signal was good, there was simply no room.
+    ranked_out_count: int = 0
 
     def add_reject(self, reason: str) -> None:
         self.rejected_count += 1

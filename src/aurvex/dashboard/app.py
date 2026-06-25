@@ -70,6 +70,14 @@ def _trade_dict(t, balance: float = 0.0) -> Dict[str, Any]:
         "target_risk_amount": round(t.metadata.get("target_risk_amount", 0.0), 4),
         "actual_risk_amount": round(actual_risk, 4),
         "score": t.score, "status": t.status, "mode": t.mode,
+        # Buğra primary gate: score is a rank/risk input, not a pass/fail gate.
+        # Surface why this trade won its slot (rank + basis) and the applied
+        # support-side risk multiplier + components.
+        "rank": round(t.metadata.get("rank", 0.0), 4),
+        "rank_basis": t.metadata.get("rank_basis", ""),
+        "risk_multiplier": round(t.metadata.get("risk_multiplier", 1.0), 3),
+        "m_shadow": round(t.metadata.get("m_shadow", 1.0), 3),
+        "m_score": round(t.metadata.get("m_score", 1.0), 3),
         "remaining_fraction": round(t.remaining_fraction, 3),
         "realized_pnl": round(t.realized_pnl, 4),
         "realized_pnl_pct": round(t.realized_pnl_pct, 4),
@@ -332,13 +340,18 @@ def create_app(cfg=None) -> Flask:
 
     @app.route("/api/score_validity")
     def score_validity():
-        """Block E-3: score-validity panel — buckets by score range, win% and avg-R.
+        """Score-validity panel — buckets by score range, win% and avg-R, plus a
+        single clear predictivity verdict (PREDICTIVE / ANTI-PREDICTIVE /
+        INSUFFICIENT) and what it means for ranking + risk modulation right now.
 
-        This is the evidence gate for enabling global_ranking / rank_key changes
-        in Block B. Only flip ranking on when sufficient_data is True and the
-        score is not inverted (monotone_expected is True).
+        This is the owner's window into whether the score support layer is
+        trustworthy yet. Buğra is the primary gate regardless; score only ranks
+        and modulates risk, and only in the MEASURED direction.
         """
-        return jsonify(shadow.score_bucket_stats())
+        payload = dict(shadow.score_bucket_stats())
+        payload["verdict"] = shadow.predictivity_verdict()
+        payload["risk_modulation_enabled"] = cfg.risk_modulation_enabled
+        return jsonify(payload)
 
     return app
 
