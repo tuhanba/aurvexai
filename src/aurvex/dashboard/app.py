@@ -35,6 +35,38 @@ from ..shadow import ShadowLearner
 from ..storage import Storage
 
 
+def _missed_reason_bucket(reason: str) -> str:
+    """Normalise a free-text reject reason into a stable missed-opportunity bucket.
+
+    Observe-only: groups the engine's reject reasons so the dashboard can show
+    WHICH constraint turned a (later-resolved) signal away. Order matters —
+    "exposure cap" is checked before the generic notional/min checks because the
+    exposure-cap reason also mentions notional.
+    """
+    r = (reason or "").lower()
+    if not r:
+        return "other"
+    if "exposure cap" in r:
+        return "exposure_cap"
+    if "< min" in r or "min notional" in r:
+        return "min_notional"
+    if "no free margin" in r:
+        return "no_free_margin"
+    if "collapses under margin" in r:
+        return "margin_collapse"
+    if "lower score than selected" in r:
+        return "not_selected"
+    if r.startswith("score "):
+        return "score_threshold"
+    if "spread" in r:
+        return "spread"
+    if "slippage" in r:
+        return "slippage"
+    if "stop dist" in r:
+        return "stop_distance"
+    return "other"
+
+
 def _trade_dict(t, balance: float = 0.0) -> Dict[str, Any]:
     """Serialize a Trade to a dict, including the six distinct leverage-concept numbers.
 
@@ -278,6 +310,47 @@ def create_app(cfg=None) -> Flask:
         ).fetchone()
         missed_opp_n = int(row["n"]) if row else 0
 
+        # Missed-opportunity breakdown BY REASON (observe-only). Resolved rejected
+        # shadows grouped by normalised reject reason, each with win% + avg_r, so
+        # the owner can separate "no_free_margin" / "exposure_cap" / "min_notional"
+        # capacity losses from quality rejects. reject_reason is empty on legacy
+        # rows (pre-migration) and on executed paper rows, so those fall in "other".
+        missed_rows = db.conn.execute(
+            "SELECT rr.reason AS reject_reason, s.outcome AS outcome, "
+            "s.r_multiple AS r_multiple FROM shadows s "
+            "LEFT JOIN shadow_reject_reason rr ON rr.shadow_id = s.id "
+            "WHERE s.source='rejected' AND s.outcome != 'OPEN'"
+        ).fetchall()
+        missed_by_reason: Dict[str, Dict[str, Any]] = {}
+        for mr in missed_rows:
+            bucket = _missed_reason_bucket(mr["reject_reason"])
+            agg = missed_by_reason.setdefault(bucket, {"n": 0, "wins": 0, "sum_r": 0.0})
+            agg["n"] += 1
+            agg["sum_r"] += mr["r_multiple"] or 0.0
+            if mr["outcome"] == "TP":
+                agg["wins"] += 1
+        missed_opportunity_by_reason = {
+            b: {
+                "n": v["n"],
+                "win_pct": round(v["wins"] / v["n"] * 100.0, 1) if v["n"] else 0.0,
+                "avg_r": round(v["sum_r"] / v["n"], 3) if v["n"] else 0.0,
+            }
+            for b, v in missed_by_reason.items()
+        }
+        # Named convenience counters the ops dashboard pins (Section 6.3).
+        missed_no_free_margin_n = missed_by_reason.get("no_free_margin", {}).get("n", 0)
+        missed_exposure_cap_n = missed_by_reason.get("exposure_cap", {}).get("n", 0)
+        missed_min_notional_n = missed_by_reason.get("min_notional", {}).get("n", 0)
+
+        # max_open_trades misses are NOT in the rejected population: a slot-loss
+        # candidate was ALLOW (tradeable) and is tracked in the PAPER shadow
+        # population, so its count comes from the funnel's cumulative "ranked_out"
+        # (qualified-but-no-slot) tally, not from rejected shadows.
+        ro_row = db.conn.execute(
+            "SELECT COALESCE(SUM(ranked_out),0) AS n FROM funnel"
+        ).fetchone()
+        missed_max_open_trades_n = int(ro_row["n"]) if ro_row and ro_row["n"] else 0
+
         # Liq-safety summary: min safety ratio across open trades (stop / liq dist).
         liq_safety_min = None
         for t in opens:
@@ -305,11 +378,33 @@ def create_app(cfg=None) -> Flask:
         session_clip_breakdown = {r["clip_reason"] or "none": r["n"]
                                   for r in session_clip_rows}
 
+        # Daily-loss budget usage (mirrors the kill-switch view in /api/status).
+        # daily_loss_used_pct = today's realised loss as a % of the daily budget
+        # (balance * max_daily_loss_pct). 0 when flat/up; 100 means the kill
+        # switch budget is fully spent. This is the headroom display for the
+        # 200 USDT / 10% aggressive epoch (budget = 20 USDT).
+        import datetime as _dt
+        _ts = now_ms() / 1000.0
+        _day_start = int(
+            _dt.datetime.fromtimestamp(_ts, _dt.timezone.utc)
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .timestamp() * 1000
+        )
+        daily_pnl = db.daily_realized_pnl(_day_start)
+        daily_loss_budget = balance * (cfg.max_daily_loss_pct / 100.0)
+        daily_loss_used_pct = (
+            round(max(0.0, -daily_pnl) / daily_loss_budget * 100.0, 2)
+            if daily_loss_budget > 0 else 0.0
+        )
+
         return jsonify({
             "open_count": len(opens),
             "max_open_trades": cfg.max_open_trades,
             "slot_util_pct": round(slot_util_pct, 1),
             "open_risk_usdt": round(open_risk, 4),
+            # Plain-language alias: open_risk_usdt IS the max loss if every open
+            # trade hits its stop simultaneously (max_loss already fee-inclusive).
+            "max_loss_if_all_sl_usdt": round(open_risk, 4),
             "open_risk_pct": round(open_risk_pct, 2),
             "open_notional": round(open_notional, 4),
             "open_margin": round(open_margin, 4),
@@ -320,7 +415,24 @@ def create_app(cfg=None) -> Flask:
             "slot_occupancy_avg_min": round(slot_occ_avg_min, 1),
             "liq_safety_min": round(liq_safety_min, 2) if liq_safety_min is not None else None,
             "missed_opportunity_resolved_n": missed_opp_n,
+            "missed_opportunity_by_reason": missed_opportunity_by_reason,
+            "missed_no_free_margin_n": missed_no_free_margin_n,
+            "missed_exposure_cap_n": missed_exposure_cap_n,
+            "missed_min_notional_n": missed_min_notional_n,
+            "missed_max_open_trades_n": missed_max_open_trades_n,
             "balance": round(balance, 4),
+            # Active risk/profile config surfaced so the dashboard reflects the
+            # running 200 USDT / 2% / 10% aggressive epoch, not stale defaults.
+            "risk_pct": cfg.risk_pct,
+            "max_daily_loss_pct": cfg.max_daily_loss_pct,
+            "daily_realized_pnl": round(daily_pnl, 4),
+            "daily_loss_budget_usdt": round(daily_loss_budget, 4),
+            "daily_loss_used_pct": daily_loss_used_pct,
+            "active_strategy_profile": cfg.strategy_profile,
+            "leverage_policy": cfg.leverage_policy,
+            "max_leverage": cfg.max_leverage,
+            "max_portfolio_exposure_pct": cfg.max_portfolio_exposure_pct,
+            "risk_modulation_enabled": cfg.risk_modulation_enabled,
             # T1b portfolio instrumentation
             "exposure_pct": round(exposure_pct, 2),
             "portfolio_risk_util_pct": round(portfolio_risk_util_pct, 2),

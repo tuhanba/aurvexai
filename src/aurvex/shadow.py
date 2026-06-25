@@ -89,6 +89,9 @@ class ShadowLearner:
             "entry": entry, "stop_loss": stop, "tp1": tp1, "outcome": OPEN, "bars": 0,
             "signal_bar_ts": sig_ts, "last_bar_ts": sig_ts,
             "epoch": self._current_epoch(),
+            # Observe-only: copy the engine's reject reason so resolved rejected
+            # shadows can be grouped by reason on the dashboard. "" for paper rows.
+            "reject_reason": (decision.reject_reason or "") if source != "paper" else "",
         })
         return sid if inserted else None
 
