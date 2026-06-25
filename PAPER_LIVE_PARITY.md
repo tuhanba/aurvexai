@@ -15,13 +15,26 @@ max-open, duplicate handling, the decision logic) carries over to live unchanged
 Everything up to and including the decision:
 
 ```
-market data → scanner → setups → scoring → filters → threshold → risk
-            → DecisionEngine.decide()  →  Decision   ◄── identical for paper & live
+market data → scanner → Buğra setups [primary gate] → safety filters
+            → (score advisory, no veto) → risk
+            → DecisionEngine.decide(signal, snap, pf, risk_multiplier)
+            →  Decision   ◄── identical for paper, live & backtest
 ```
 
 There is exactly **one** `DecisionEngine`, **one** `trade_threshold`, **one**
 `RiskManager`. No live-only scoring, no live-only veto chain, no live-only
 threshold. The backtester uses the same `decide()` too.
+
+**Buğra primary gate (2026-06-25).** Two shared-path additions, both mode-agnostic:
+- The score veto is OFF by default (`SCORE_AS_GATE=false`); score is advisory. The
+  same flag/branch lives in the shared `decide()`, so paper/live/backtest behave
+  identically. Score/Shadow act only as a **support** layer in the engine (ranking
+  + risk modulation) — they never branch on mode.
+- `decide()` gained a `risk_multiplier` argument (default `1.0` → byte-identical
+  sizing) passed straight into the shared `RiskManager.evaluate`. The engine
+  computes it from **measured** edge once per cycle and feeds the same value
+  through the same brain regardless of executor, so parity holds. It scales the
+  risk budget only, within every existing cap and the liq-safety invariant.
 
 ### Wave 1 integrity changes (still on the shared path)
 

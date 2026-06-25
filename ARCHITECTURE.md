@@ -25,18 +25,28 @@
    SetupDetector    → Signal (active profile detector: bugra_replica | aurvex_enhanced)
    ScoreBuilder     → score 0..100 (per-setup factor weights + book imbalance + spread)
         ▼
+ SetupDetector (Buğra 5-condition TA)  → PRIMARY ENTRY GATE (no signal → no trade)
+        ▼
  DecisionEngine.decide(signal, snapshot, portfolio):
-   1) FilterChain   → 7 minimal hard filters (first failure wins)
-   2) threshold     → ALLOW (≥ trade) | WATCH (≥ watch) | REJECT
+   1) FilterChain   → 8 minimal hard safety filters (first failure wins)
+   2) score         → ADVISORY (no veto by default; SCORE_AS_GATE=false).
+                      Optional opt-in soft floor MIN_EXECUTION_SCORE (default 0).
    3) RiskManager   → sizing, guards, TP targets  (REJECT if no valid size)
-   4) ALLOW         → Decision with full sizing
+                      · risk_multiplier (support-side modulation, default 1.0)
+   4) ALLOW         → executable candidate with full sizing
+        ▼
+ Score/Shadow SUPPORT (engine, never a veto):
+   a) RANK    → order executable candidates by MEASURED edge; best win the
+                max_open_trades slots (two-pass allocator, GLOBAL_RANKING=true).
+   b) RISK    → modulate risk%/leverage/margin within hard caps, direction-
+                validated (RISK_MODULATION_ENABLED, default off → neutral 1.0).
         ▼
  PaperExecutor.open → Trade (mode=paper)         [LiveExecutor is a gated stub]
         ▼
  TradeJournal       → persist trade + balance ledger
  simulate_fill      → manage open trades each bar (scale-out, BE, SL/TP)
- ShadowLearner      → track paper + high-score rejects; resolve TP/SL
- FunnelLogger       → per-cycle counts + top reject reasons
+ ShadowLearner      → track ALL executed + high-score rejects; resolve TP/SL
+ FunnelLogger       → per-cycle counts + top reject reasons (+ ranked-out)
  Storage            → SQLite (WAL)
  Dashboard / Telegram (read / notify)
 ```
@@ -54,7 +64,7 @@
 | `scoring.py` | Blends per-setup factor weights (70%) + base confidence (30%), book/spread nudges. `SETUP_WEIGHTS` must cover every active setup. |
 | `filters.py` | 7 hard filters: daily-loss, max-open, duplicate, cooldown, liquidity, spread, slippage. |
 | `risk.py` | Stop-distance guards, position sizing, leverage suggestion, TP targets. |
-| `decision.py` | The single brain. Filters → threshold → risk → ALLOW/WATCH/REJECT. |
+| `decision.py` | The single brain. Buğra signal → safety filters → (score advisory, no veto by default) → risk → ALLOW/REJECT. Score/Shadow rank + risk-modulate in the engine, never veto here. |
 | `executors.py` | Shared `build_trade` + `simulate_fill`; `PaperExecutor`; gated `LiveExecutor` **stub**. |
 | `storage.py` | SQLite WAL. Tables: trades, signal_events, funnel, shadows, heartbeat, balance_ledger, meta. |
 | `metrics.py` | Expectancy (quote + R), profit factor, winrate, drawdown, breakdowns. |

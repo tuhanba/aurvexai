@@ -29,8 +29,15 @@ engine; do **not** reintroduce that complexity (see "Non-negotiables").
 
 ## Architecture (one line)
 
-`market data → scanner → setups → scoring → filters → risk → DecisionEngine →
-PaperExecutor → journal/shadow/funnel → SQLite → dashboard/telegram`
+`market data → scanner → Buğra setups [PRIMARY GATE] → safety filters → risk gate
+→ DecisionEngine → PaperExecutor → journal/shadow/funnel → SQLite → dashboard/telegram`
+
+The **Buğra 5-condition signal is the primary entry gate**; the safety filters
+and risk gate decide if a candidate is executable. **Score/Shadow are a SUPPORT
+layer, never a veto** — they (a) rank executable candidates for the limited slots
+and (b) modulate risk/leverage/margin within the hard caps, both in the *measured*
+edge direction only. The old "score < threshold → reject" veto is OFF by default
+(`SCORE_AS_GATE=false`); risk modulation is OFF by default (`RISK_MODULATION_ENABLED=false`).
 
 Full detail: `ARCHITECTURE.md`. Strategy detail: `SCALP_STRATEGY_SPEC.md`.
 Risk detail: `RISK_MODEL.md`.

@@ -174,3 +174,66 @@ Branch: `w3-blockC-selection`
 ## Block D — Real-data validation
 
 *(to be filled after Block C gate — gated behind real walk-forward passing OOS PF≥~1.3)*
+
+---
+
+## Buğra Primary Gate — score/Shadow demoted to support (Blocks A–D)
+
+**Date:** 2026-06-25 · **Mode:** paper (live permanently OFF) · **Branch:** `claude/bugra-primary-gate-fpye7s`
+
+The Buğra 5-condition signal is now the **primary entry gate**. Score/Shadow are a
+**support** layer (ranking + risk modulation), never a veto. Integrity-preserving by
+construction: removing the unvalidated score veto is safe; all score-*direction*
+behaviour follows **measured** edge, defaults to neutral, and is loudly visible.
+
+### Predictivity verdict at this run
+
+Clean-core epoch N is still thin (offline demo/backtest snapshot showed
+`INSUFFICIENT (N<100)`, buckets non-monotone with negative avg_r — proxy only).
+**Consequence:** ranking falls back to the neutral shadow-delta tiebreak (raw score
+does NOT order slots) and risk modulation is pinned to neutral (1.0). Nothing
+unvalidated is amplified. The score *sign* remains unconfirmed in clean-core.
+
+### Block A — score veto removed
+- `score_as_gate` default **True → False** (env `SCORE_AS_GATE` reverts). `decision.py`
+  veto branch is dead by default; `shadow_only` gate untouched.
+- `min_execution_score` (default **0.0** = OFF): opt-in soft floor → `failed_stage=
+  "min_score_floor"`. Not a veto.
+- `shadow.track_signal` always tracks executed (`source="paper"`) signals regardless
+  of `shadow_min_score` — we measure everything we trade.
+- Tests: `test_bugra_primary_gate.py`; legacy veto tests pinned to `score_as_gate=True`.
+
+### Block B — edge-validated ranking
+- `global_ranking` default **False → True**; `rank_key` default **composite → "edge"**.
+- `allocation.rank_signal` edge mode: monotone-positive → rank by score; anti-monotone →
+  rank by realised bucket `avg_r`; insufficient data → neutral shadow-delta tiebreak,
+  then deterministic 24h-volume/symbol. `rank_basis()` reports the derivation.
+- `Decision.rank` / `rank_basis` populated in two-pass Pass 2.
+- Addresses the documented "first-come scan order fills slots with earlier-scanned (not
+  highest-rank) signals" ordering root-cause (~42% risk-utilisation). Exposure-cap math
+  unchanged (out of scope).
+- Tests: `test_edge_ranking.py` (incl. the anti-monotone integrity test).
+
+### Block C — score/Shadow → risk/leverage/margin modulation (new)
+- `RiskManager.evaluate(risk_multiplier=1.0)`, hard-clamped `[0.5,1.5]`, scales the risk
+  **budget** only; every cap + liq-safety binds after. Default 1.0 → **byte-identical**
+  sizing (T1 golden tests unchanged).
+- `score_risk_multiplier` `[0.8,1.2]` from measured bucket `avg_r` (anti-predictive →
+  down-sizes high score). Engine: `clamp(m_shadow * m_score)` gated behind
+  `risk_modulation_enabled` (default **False**). Components persisted to Decision + Trade.
+- C5 preflight: engine start logs + Telegrams the predictivity verdict and whether
+  modulation is live or pinned neutral — never silent.
+- Tests: `test_risk_modulation.py`.
+
+### Block D — surfaces
+- Funnel: "ranked out" reason (capacity), persisted via additive `funnel.ranked_out`
+  column; non-trades attribute to their real stage, never `score_threshold`.
+- `_trade_dict` + Telegram show rank/rank_basis + applied risk multiplier; score labelled
+  as a rank/risk input, not a gate. `/api/score_validity` returns the verdict badge.
+- `daily_summary` carries a predictivity line.
+- Tests: `test_dashboard_surfaces.py` + funnel/telegram extensions.
+
+### Test delta
+- Suite **208 → 346 green** (+138 incl. new Block A–D tests). Parity preserved; default
+  sizing byte-identical; live stays OFF (`LiveExecutor._send_order()` still `SIMULATED`).
+- Offline `demo`, `backtest`, `walkforward`, `dashboard` all run clean.
