@@ -498,6 +498,47 @@ class ShadowLearner:
             "sufficient_data": total >= 100,
         }
 
+    def predictivity_verdict(self, epoch: Optional[str] = None) -> Dict[str, Any]:
+        """Single clear read on whether score is trustworthy as a support signal.
+
+        Returns {verdict, label, n, sufficient, monotone, meaning} where verdict is
+        one of PREDICTIVE / ANTI_PREDICTIVE / INSUFFICIENT, and meaning states what
+        that implies for ranking + risk modulation right now. Used by the engine
+        preflight, the dashboard panel, and the daily Telegram summary.
+        """
+        stats = self.score_bucket_stats(epoch=epoch)
+        n = stats["total"]
+        if not stats["sufficient_data"]:
+            return {
+                "verdict": "INSUFFICIENT",
+                "label": f"INSUFFICIENT (N={n})",
+                "n": n,
+                "sufficient": False,
+                "monotone": stats["monotone_expected"],
+                "meaning": (f"neutral: N<100 (N={n}) — score is down-weighted to a "
+                            f"tiebreak and risk modulation stays pinned to 1.0"),
+            }
+        if stats["monotone_expected"] is True:
+            return {
+                "verdict": "PREDICTIVE",
+                "label": f"PREDICTIVE (N={n})",
+                "n": n,
+                "sufficient": True,
+                "monotone": True,
+                "meaning": ("score is monotone-positive — ranking uses score and "
+                            "risk modulation may up/down-size by measured edge"),
+            }
+        return {
+            "verdict": "ANTI_PREDICTIVE",
+            "label": f"ANTI-PREDICTIVE (N={n})",
+            "n": n,
+            "sufficient": True,
+            "monotone": stats["monotone_expected"],
+            "meaning": ("score is anti-monotone — ranking follows realised avg_r "
+                        "(lower-score, higher-edge candidates preferred) and high "
+                        "score is down-sized"),
+        }
+
     def _stage(self, total: int) -> str:
         if total < 50:
             return "observe"

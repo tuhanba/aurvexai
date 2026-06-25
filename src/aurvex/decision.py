@@ -43,8 +43,12 @@ class DecisionEngine:
         self.risk = risk_manager or RiskManager(cfg)
 
     def decide(self, signal: Signal, snap: MarketSnapshot,
-               pf: PortfolioView) -> Decision:
+               pf: PortfolioView, risk_multiplier: float = 1.0) -> Decision:
         cfg = self.cfg
+        # Support-side risk modulation (Buğra primary gate). Default 1.0 →
+        # byte-identical sizing. The engine computes this from MEASURED edge and
+        # passes it through the SHARED brain so paper/live/backtest stay in parity.
+        risk_multiplier = max(0.5, min(1.5, risk_multiplier))
 
         # Ensure the signal is scored (idempotent if already scored).
         if not signal.score:
@@ -118,7 +122,9 @@ class DecisionEngine:
 
         # 3) Risk evaluation / sizing.
         rr = self.risk.evaluate(signal, snap, pf.balance, pf.open_notional,
-                                open_margin=pf.open_margin, open_count=pf.open_count)
+                                open_margin=pf.open_margin, open_count=pf.open_count,
+                                risk_multiplier=risk_multiplier)
+        d.metadata["risk_multiplier"] = risk_multiplier
         # W3-T1: stash instrumentation fields regardless of allowed/rejected so
         # REJECTED signals also carry them into signal_events.metadata.
         d.metadata["target_risk_amount"] = rr.target_risk_amount

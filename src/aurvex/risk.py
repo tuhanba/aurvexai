@@ -97,6 +97,37 @@ def normalize_stop(cfg: Config, side: str, entry: float, stop: float,
     return StopNorm(True, "", stop, stop_dist_pct)
 
 
+# Score-bucket layout shared with ShadowLearner.score_bucket_stats().
+_SCORE_BUCKET_DEFS = [("45-55", 45.0, 55.0), ("55-65", 55.0, 65.0),
+                      ("65-75", 65.0, 75.0), ("75+", 75.0, 200.0)]
+
+
+def score_risk_multiplier(cfg: Config, signal: Signal, buckets) -> float:
+    """Support-side risk multiplier in [0.8, 1.2] from the MEASURED score edge.
+
+    Direction follows realised data, never raw score:
+      * insufficient data (buckets None or sufficient_data False) → 1.0 (neutral).
+      * sufficient → map the signal's score-bucket avg_r to a multiplier. Higher
+        realised avg_r → >1.0; lower/negative → <1.0. Because it reads realised
+        avg_r, an anti-predictive score automatically DOWN-sizes high-score
+        trades instead of up-sizing them.
+
+    Never keys off raw score directly. Bounded [0.8, 1.2].
+    """
+    if not buckets or not buckets.get("sufficient_data"):
+        return 1.0
+    bmap = buckets.get("buckets", {})
+    avg_r = None
+    for key, lo, hi in _SCORE_BUCKET_DEFS:
+        if lo <= signal.score < hi:
+            avg_r = (bmap.get(key) or {}).get("avg_r")
+            break
+    if avg_r is None:
+        return 1.0
+    # 0.2 per 1R of realised edge, bounded ±0.2 → [0.8, 1.2].
+    return round(max(0.8, min(1.2, 1.0 + avg_r * 0.2)), 3)
+
+
 class RiskManager:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -105,9 +136,18 @@ class RiskManager:
                  balance: float, open_notional: float,
                  open_margin: float = 0.0,
                  risk_pct_override: Optional[float] = None,
-                 open_count: int = 0) -> RiskResult:
+                 open_count: int = 0,
+                 risk_multiplier: float = 1.0) -> RiskResult:
         cfg = self.cfg
         entry = float(signal.entry_hint)
+
+        # Support-side risk modulation (Buğra primary gate). The multiplier
+        # scales the TARGET risk budget only; every hard cap (exposure, min
+        # notional, free-margin reserve, max_leverage) and the liq-safety
+        # invariant still bind AFTER it. Hard-clamped here regardless of caller
+        # so a multiplier can only make a trade smaller or modestly larger
+        # within caps — never break a cap or liq-safety.
+        risk_multiplier = max(0.5, min(1.5, risk_multiplier))
 
         # Stop-distance guard band (shared with the shadow learner): widen a
         # too-tight stop to the minimum, reject a too-wide one.
@@ -119,7 +159,7 @@ class RiskManager:
         stop_dist_pct = sn.stop_dist_pct
 
         risk_pct = risk_pct_override if risk_pct_override is not None else cfg.risk_pct
-        risk_amount = balance * (risk_pct / 100.0)
+        risk_amount = balance * (risk_pct / 100.0) * risk_multiplier
         stop_dist_frac = stop_dist_pct / 100.0
         if stop_dist_frac <= 0:
             return RiskResult(False, "zero stop distance")

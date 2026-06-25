@@ -95,6 +95,7 @@ class Engine:
         self._persist_telegram_health()
         self.notifier.system_started(self.cfg.mode, bal, epoch=self.cfg.epoch_label)
         self._persist_telegram_health()
+        self._risk_modulation_preflight()
         # Check for a queued mode-request from the commander (written by /livemode
         # or /papermode on the previous run).
         mode_req = read_mode_request()
@@ -175,6 +176,47 @@ class Engine:
         # Legacy / fallback: derive from notional and leverage.
         lev = t.leverage or 1
         return (t.position_size * t.remaining_fraction) / lev
+
+    def _risk_modulation_preflight(self) -> None:
+        """Loud, never-silent report of the risk-modulation state on start (C5).
+
+        When risk_modulation_enabled is True, report the current predictivity
+        verdict and whether the multiplier is therefore live or pinned to neutral.
+        Enabling modulation must never be silent.
+        """
+        if not self.cfg.risk_modulation_enabled:
+            log.info("risk modulation DISABLED (sizing neutral, multiplier=1.0)")
+            return
+        try:
+            v = self.shadow.predictivity_verdict()
+        except Exception as exc:
+            log.debug("predictivity verdict error: %s", exc)
+            return
+        live = v["sufficient"]
+        state = "LIVE (sizing modulated by measured edge)" if live else \
+                "PINNED NEUTRAL (insufficient data → multiplier=1.0)"
+        msg = (f"risk modulation ENABLED · score predictivity {v['label']} · {state}")
+        log.info(msg)
+        try:
+            self.notifier.send(f"⚙️ {msg}")
+        except Exception as exc:
+            log.debug("preflight notify error: %s", exc)
+
+    def _risk_modulation(self, signal, buckets):
+        """Support-side risk multiplier for a candidate (Buğra primary gate).
+
+        Returns (risk_multiplier, m_shadow, m_score). Neutral (1.0, 1.0, 1.0)
+        unless risk_modulation_enabled is True. Direction follows MEASURED edge:
+        shadow avg_r (per-setup, N≥100 gated) × score-bucket avg_r (N≥100 gated).
+        Combined multiplier is clamped to [0.5, 1.5]; RiskManager re-clamps too.
+        """
+        if not self.cfg.risk_modulation_enabled:
+            return 1.0, 1.0, 1.0
+        from .risk import score_risk_multiplier
+        m_shadow = self.shadow.risk_multiplier(signal.setup_type)
+        m_score = score_risk_multiplier(self.cfg, signal, buckets)
+        rm = max(0.5, min(1.5, m_shadow * m_score))
+        return rm, m_shadow, m_score
 
     # -- one cycle ---------------------------------------------------------
     async def _cycle(self) -> None:
@@ -278,12 +320,15 @@ class Engine:
                 pf.open_symbols = list(live_open_symbols)
                 pf.open_notional = open_notional
                 pf.open_margin = open_margin
-                d = self.engine.decide(cand.signal, cand.snap, pf)
+                rm, m_shadow, m_score = self._risk_modulation(cand.signal, cycle_buckets)
+                d = self.engine.decide(cand.signal, cand.snap, pf, risk_multiplier=rm)
                 # Slot-selection support layer: record why this candidate won
                 # (or lost) its slot race. Set before persistence so signal_events
                 # and the dashboard/Telegram can show the rank basis.
                 d.rank = cand.rank
                 d.rank_basis = cycle_rank_basis
+                d.metadata["m_shadow"] = m_shadow
+                d.metadata["m_score"] = m_score
                 self.db.insert_signal_event(d)
                 funnel.record(d)
 
@@ -343,8 +388,11 @@ class Engine:
 
         else:
             # ------------------------------------------------------------------
-            # Original first-come inline loop (unchanged — default path).
+            # Original first-come inline loop (legacy path; default is two-pass).
             # ------------------------------------------------------------------
+            # Risk modulation reads the score-bucket predictivity once per cycle.
+            fc_buckets = (self.shadow.score_bucket_stats()
+                          if self.cfg.risk_modulation_enabled else None)
             for sym in scanned:
                 try:
                     snap = self.provider.get_snapshot(sym)
@@ -384,7 +432,10 @@ class Engine:
                 pf.open_symbols = list(live_open_symbols)
                 pf.open_notional = open_notional
                 pf.open_margin = open_margin
-                d = self.engine.decide(signal, snap, pf)
+                rm, m_shadow, m_score = self._risk_modulation(signal, fc_buckets)
+                d = self.engine.decide(signal, snap, pf, risk_multiplier=rm)
+                d.metadata["m_shadow"] = m_shadow
+                d.metadata["m_score"] = m_score
                 self.db.insert_signal_event(d)
                 funnel.record(d)
 

@@ -93,7 +93,13 @@ class BaseExecutor:
                       "target_risk_amount": decision.metadata.get("target_risk_amount", 0.0),
                       "actual_risk_amount": decision.metadata.get("actual_risk_amount", 0.0),
                       "risk_utilisation_pct": decision.metadata.get("risk_utilisation_pct", 0.0),
-                      "clip_reason": decision.metadata.get("clip_reason", "none")},
+                      "clip_reason": decision.metadata.get("clip_reason", "none"),
+                      # Buğra primary gate: support-side risk modulation applied
+                      # (1.0 = neutral). Lets the dashboard/Telegram + shadow A/B
+                      # ledger compare intended vs realised sizing.
+                      "risk_multiplier": decision.metadata.get("risk_multiplier", 1.0),
+                      "m_shadow": decision.metadata.get("m_shadow", 1.0),
+                      "m_score": decision.metadata.get("m_score", 1.0)},
         )
         return trade
 
