@@ -51,8 +51,115 @@ class QualityGrade:
         }
 
 
+# Per-bucket sample size required before the grade may be judged to separate
+# expectancy. Below this, the validity verdict is INSUFFICIENT_DATA.
+GRADE_SEPARATION_MIN_N = 100
+
+
 def _clamp01(x: float) -> float:
     return max(0.0, min(1.0, x))
+
+
+def grade_performance(closed_trades) -> Dict[str, Any]:
+    """REPORT-ONLY per-grade performance + exit-path rates + separation verdict.
+
+    Buckets CLOSED trades by their stored ``quality_grade`` (A/B/C/D) and, per
+    grade, computes the full §8 stat set:
+
+        N, winrate, avg_r, profit_factor, net_pnl,
+        sl_rate, tp1_be_rate, tp2_rate, tp3_rate
+
+    plus a single verdict line: does the grade actually SEPARATE expectancy
+    (avg_r monotone non-increasing A→D with every bucket at N≥100), or is it
+    ``insufficient_data``?
+
+    This is evidence ONLY. It blocks nothing, routes nothing, sizes nothing —
+    the quality layer stays label-only until an owner-gated wave promotes it.
+    Reads only what is already stored on each Trade; computes no new state.
+    """
+    order = ["A", "B", "C", "D"]
+    agg: Dict[str, Dict[str, Any]] = {
+        g: {"n": 0, "wins": 0, "sum_r": 0.0, "gp": 0.0, "gl": 0.0, "net": 0.0,
+            "sl": 0, "be": 0, "tp2": 0, "tp3": 0}
+        for g in order
+    }
+    for t in closed_trades:
+        if getattr(t, "status", "CLOSED") != "CLOSED":
+            continue
+        g = (t.metadata or {}).get("quality_grade")
+        if g not in agg:
+            continue
+        a = agg[g]
+        a["n"] += 1
+        r = t.realized_pnl_pct or 0.0
+        pnl = t.realized_pnl or 0.0
+        a["sum_r"] += r
+        a["net"] += pnl
+        if pnl > 0:
+            a["wins"] += 1
+            a["gp"] += pnl
+        else:
+            a["gl"] += -pnl
+        cr = t.close_reason
+        if cr == "SL":
+            a["sl"] += 1
+        elif cr == "BE":
+            a["be"] += 1
+        elif cr == "TP2":
+            a["tp2"] += 1
+        elif cr == "TP3":
+            a["tp3"] += 1
+
+    by_grade: Dict[str, Any] = {}
+    for g in order:
+        a = agg[g]
+        n = a["n"]
+        if n == 0:
+            by_grade[g] = {"n": 0, "note": "insufficient_data"}
+            continue
+        pf = round(a["gp"] / a["gl"], 3) if a["gl"] > 0 else (
+            None if a["gp"] == 0 else float("inf"))
+        by_grade[g] = {
+            "n": n,
+            "winrate": round(a["wins"] / n * 100.0, 1),
+            "avg_r": round(a["sum_r"] / n, 3),
+            "profit_factor": pf if pf != float("inf") else None,
+            "net_pnl": round(a["net"], 4),
+            "sl_rate": round(a["sl"] / n * 100.0, 1),
+            "tp1_be_rate": round(a["be"] / n * 100.0, 1),
+            "tp2_rate": round(a["tp2"] / n * 100.0, 1),
+            "tp3_rate": round(a["tp3"] / n * 100.0, 1),
+        }
+
+    # Separation verdict: every populated bucket needs N≥100; among the buckets
+    # that have data, avg_r must be monotone non-increasing A→D to "separate".
+    nonempty = [g for g in order if agg[g]["n"] > 0]
+    all_sufficient = bool(nonempty) and all(
+        agg[g]["n"] >= GRADE_SEPARATION_MIN_N for g in nonempty)
+    if not all_sufficient:
+        verdict = "insufficient_data"
+        separates = None
+        meaning = (f"need N≥{GRADE_SEPARATION_MIN_N} resolved trades per grade "
+                   f"before judging; grade stays a label.")
+    else:
+        avg_rs = [by_grade[g]["avg_r"] for g in nonempty]
+        separates = all(avg_rs[i] >= avg_rs[i + 1] for i in range(len(avg_rs) - 1))
+        verdict = "separates_expectancy" if separates else "no_separation"
+        meaning = ("grade buckets order expectancy A≥B≥C≥D — candidate for "
+                   "promotion to a ranking/sizing INPUT (owner-gated, still no "
+                   "hard veto)." if separates else
+                   "grade does NOT order expectancy — keep it label-only.")
+
+    return {
+        "label_only": True,
+        "min_n_per_bucket": GRADE_SEPARATION_MIN_N,
+        "by_grade": by_grade,
+        "separation": {
+            "verdict": verdict,
+            "separates": separates,
+            "meaning": meaning,
+        },
+    }
 
 
 def _grade_for(score_0_100: float) -> str:

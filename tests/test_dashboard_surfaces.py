@@ -89,13 +89,79 @@ def test_no_endpoint_leaks_secret_values(tmp_path):
         "/api/balance", "/api/accounting", "/api/portfolio_metrics",
         "/api/telegram", "/api/score_validity", "/api/system_state",
         "/api/setup_health", "/api/quality", "/api/missed_opportunity",
-        "/api/receipts", "/api/shadow_basis",
+        "/api/receipts", "/api/shadow_basis", "/api/diagnosis",
     ]
     for ep in endpoints:
         body = client.get(ep).get_data(as_text=True)
         assert FAKE_TOKEN not in body, f"token leaked at {ep}"
         assert FAKE_CHAT not in body, f"chat id leaked at {ep}"
         assert FAKE_KEY not in body, f"key leaked at {ep}"
+
+
+def test_diagnosis_endpoint_is_report_only(tmp_path):
+    """Phase 7: /api/diagnosis returns a report-only diagnosis (no actions)."""
+    from aurvex.dashboard.app import create_app
+    from aurvex.storage import Storage
+
+    cfg = _cfg(tmp_path)
+    Storage(cfg.db_path).ensure_epoch(cfg.epoch_label)
+    client = create_app(cfg).test_client()
+    data = client.get("/api/diagnosis").get_json()
+
+    assert data["report_only"] is True
+    assert data["actions_taken"] == "none"
+    assert "main_issue" in data
+    assert isinstance(data["findings"], list)
+
+
+def test_quality_endpoint_has_performance_block(tmp_path):
+    """Phase 6: /api/quality surfaces the per-grade performance + verdict."""
+    from aurvex.dashboard.app import create_app
+    from aurvex.storage import Storage
+
+    cfg = _cfg(tmp_path)
+    Storage(cfg.db_path).ensure_epoch(cfg.epoch_label)
+    client = create_app(cfg).test_client()
+    data = client.get("/api/quality").get_json()
+
+    assert "performance" in data
+    assert data["performance"]["label_only"] is True
+    assert "separation" in data["performance"]
+    assert set(data["performance"]["by_grade"].keys()) == {"A", "B", "C", "D"}
+
+
+def test_system_state_shadow_label_truthful(tmp_path):
+    """Phase 5: shadow label tracks the flags; hard-veto stays 'no'."""
+    from aurvex.dashboard.app import create_app
+    from aurvex.storage import Storage
+
+    cfg = _cfg(tmp_path)
+    cfg.risk_modulation_enabled = True   # active → label must say advisory
+    Storage(cfg.db_path).ensure_epoch(cfg.epoch_label)
+    client = create_app(cfg).test_client()
+    data = client.get("/api/system_state").get_json()
+
+    assert data["shadow"] == "advisory risk apply"
+    assert data["shadow_hard_veto"] == "no"
+
+
+def test_trade_dict_surfaces_configured_vs_applied(tmp_path):
+    """Phase 4: _trade_dict exposes configured vs applied risk + clip reason."""
+    from aurvex.dashboard.app import _trade_dict
+    from aurvex.models import Trade, TPTarget, LONG
+
+    t = Trade(
+        symbol="BTCUSDT", side=LONG, setup_type="bugra_replica",
+        entry=100.0, stop_loss=99.0, tp_targets=[TPTarget(101.0, 1.0)],
+        position_size=500.0, risk_pct=2.0, leverage=5, margin_used=100.0,
+        max_loss=0.78, score=40.0, threshold=60.0,
+        metadata={"actual_risk_amount": 0.78, "target_risk_amount": 4.0,
+                  "risk_utilisation_pct": 19.5, "clip_reason": "exposure_cap"},
+    )
+    d = _trade_dict(t, balance=200.0)
+    assert d["configured_risk_pct"] == 2.0
+    assert d["applied_risk_pct"] != d["configured_risk_pct"]
+    assert d["clip_reason"] == "exposure_cap"
 
 
 def test_trade_dict_surfaces_rank_and_risk_multiplier(tmp_path):

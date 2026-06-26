@@ -37,8 +37,12 @@ def opened_receipt(trade, *, balance: float = 0.0, cfg: Any = None) -> Dict[str,
     md = trade.metadata or {}
     entry = trade.entry or 0.0
     actual_risk = md.get("actual_risk_amount", trade.max_loss) or trade.max_loss
+    target_risk = md.get("target_risk_amount", actual_risk) or actual_risk
     margin_used = trade.margin_used or (trade.position_size / (trade.leverage or 1))
     account_risk_pct = (actual_risk / balance * 100.0) if balance else trade.risk_pct
+    risk_util_pct = md.get("risk_utilisation_pct")
+    if risk_util_pct is None:
+        risk_util_pct = (actual_risk / target_risk * 100.0) if target_risk else 0.0
     liq_price = md.get("liq_price", 0.0) or 0.0
     return {
         "kind": "opened",
@@ -50,6 +54,14 @@ def opened_receipt(trade, *, balance: float = 0.0, cfg: Any = None) -> Dict[str,
         "quality_grade": md.get("quality_grade", ""),
         "quality_score": md.get("quality_score", 0.0),
         "quality_reasons": md.get("quality_reasons", []),
+        # Phase 4 — configured-vs-applied risk made explicit so a human can
+        # answer "why did this open at 0.39% instead of 2%?" at a glance.
+        "configured_risk_pct": round(trade.risk_pct, 3),     # profile budget %
+        "applied_risk_pct": round(account_risk_pct, 3),      # what actually risked
+        "target_risk_usdt": round(target_risk, 4),           # budget in USDT
+        "actual_risk_usdt": round(actual_risk, 4),           # fee-inclusive final
+        "risk_utilisation_pct": round(risk_util_pct, 2),
+        "clip_reason": md.get("clip_reason", "none"),
         "risk_pct": round(account_risk_pct, 3),
         "risk_usdt": round(actual_risk, 4),
         "notional": round(trade.position_size, 2),
@@ -130,7 +142,11 @@ def telegram_lines(receipt: Dict[str, Any]) -> List[str]:
             f"quality: {receipt.get('quality_grade','?')} "
             f"({receipt.get('quality_score',0):.0f})"
             + (f" · {reasons}" if reasons else ""),
-            f"risk: {receipt['risk_usdt']:.2f} USDT ({receipt['risk_pct']:.2f}%) · "
+            f"risk: cfg {receipt.get('configured_risk_pct', receipt['risk_pct']):.2f}% → "
+            f"applied {receipt.get('applied_risk_pct', receipt['risk_pct']):.2f}% "
+            f"({receipt['risk_usdt']:.2f} USDT, util "
+            f"{receipt.get('risk_utilisation_pct', 0):.0f}%, clip "
+            f"{receipt.get('clip_reason', 'none')})",
             f"notional {receipt['notional']:.2f} · {receipt['leverage']}x · "
             f"margin {receipt['margin']:.2f}",
             f"liq-safety: {liq if liq is not None else 'n/a'} · "

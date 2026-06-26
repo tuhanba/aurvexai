@@ -22,10 +22,11 @@ from aurvex.storage import Storage
 
 
 REQUIRED_SECTIONS = [
-    "ENGINE_HEALTH", "DATA_QUALITY", "TRADE_PERFORMANCE", "FUNNEL_AND_REJECTIONS",
-    "RISK_AND_MARGIN", "SHADOW_SUMMARY", "MISSED_OPPORTUNITIES", "SETUP_HEALTH",
+    "CEO_SUMMARY", "ENGINE_HEALTH", "DATA_QUALITY", "TRADE_PERFORMANCE",
+    "FUNNEL_AND_REJECTIONS", "RISK_AND_MARGIN", "SHADOW_SUMMARY",
+    "MISSED_OPPORTUNITIES", "SETUP_HEALTH", "LOSS_DIAGNOSIS",
     "QUALITY_LAYER_SUMMARY", "RECOMMENDED_EXPERIMENTS", "RECOMMENDED_CLOUD_CODE_TASKS",
-    "READY_FOR_AGGRESSIVE_PAPER", "READY_FOR_LIVE",
+    "RECOMMENDATIONS_TIERED", "READY_FOR_AGGRESSIVE_PAPER", "READY_FOR_LIVE",
 ]
 
 
@@ -84,6 +85,44 @@ def test_all_sections_render(tmp_path):
     assert "AURVEX GOVERNOR" in text
     for section in REQUIRED_SECTIONS:
         assert section in text
+
+
+def test_ceo_summary_and_tiers_render(tmp_path):
+    """Phase 3: verdict panel + 3-tier grouping render, and the guardrails hold."""
+    from aurvex.governor import build_report, render_report
+    from aurvex.shadow import ShadowLearner
+
+    cfg = _cfg(tmp_path)
+    _seed(cfg)
+    db = Storage(cfg.db_path, read_only=True)
+    try:
+        report = build_report(cfg, db, ShadowLearner(cfg, db))
+    finally:
+        db.close()
+
+    ceo = report["CEO_SUMMARY"]
+    for key in ("state", "main_issue", "risk_action", "slot_action",
+                "quality_action", "shadow_action", "next_step"):
+        assert key in ceo and isinstance(ceo[key], str)
+    # CEO never claims live readiness.
+    assert ceo["ready_for_live"] == "NO"
+
+    tiers = report["RECOMMENDATIONS_TIERED"]
+    assert set(tiers.keys()) == {"IMMEDIATE_FIX", "CONTROLLED_EXPERIMENT", "LATER"}
+    for tier in tiers.values():
+        assert isinstance(tier, list)
+
+    # Guardrail block still reports report_only and all can_* false.
+    gov = report["GOVERNOR"]
+    assert gov["mode"] == "report_only"
+    assert gov["can_trade"] is False
+    assert gov["can_change_live"] is False
+    assert gov["can_auto_apply"] is False
+
+    text = render_report(report)
+    assert "CEO SUMMARY" in text
+    assert "RECOMMENDATIONS_TIERED" in text
+    assert "IMMEDIATE_FIX" in text
 
 
 def test_ready_for_live_always_no(tmp_path):

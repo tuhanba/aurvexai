@@ -272,6 +272,13 @@ tr:last-child td{border-bottom:none}
     </div>
   </div>
 
+  <!-- Loss Diagnosis (REPORT-ONLY) -->
+  <div class="card">
+    <div class="card-title">Loss Diagnosis (REPORT-ONLY — advises, never acts)</div>
+    <div id="diagMain" style="font-size:13px;font-weight:600;margin-bottom:6px">—</div>
+    <div id="diagFindings" style="font-size:12px;line-height:1.7"></div>
+  </div>
+
   <!-- System State + Security posture -->
   <div class="grid g2">
     <div class="card">
@@ -447,15 +454,25 @@ async function getJSON(u){const r=await fetch(u);return r.json();}
 
 async function refresh(){
   try{
-    const [st,fn,me,op,cl,sg,sh,ac,tg,pm,sv,ss,qp,mo,shl] = await Promise.all([
+    const [st,fn,me,op,cl,sg,sh,ac,tg,pm,sv,ss,qp,mo,shl,dg] = await Promise.all([
       getJSON('/api/status'), getJSON('/api/funnel'), getJSON('/api/metrics'),
       getJSON('/api/trades/open'), getJSON('/api/trades/closed'),
       getJSON('/api/signals'), getJSON('/api/shadow'),
       getJSON('/api/accounting'), getJSON('/api/telegram'),
       getJSON('/api/portfolio_metrics'), getJSON('/api/score_validity'),
       getJSON('/api/system_state'), getJSON('/api/quality'),
-      getJSON('/api/missed_opportunity'), getJSON('/api/setup_health')
+      getJSON('/api/missed_opportunity'), getJSON('/api/setup_health'),
+      getJSON('/api/diagnosis')
     ]);
+
+    // ── Loss Diagnosis (report-only) ──
+    document.getElementById('diagMain').textContent = dg.main_issue||'—';
+    document.getElementById('diagFindings').innerHTML =
+      (dg.findings||[]).map(f=>{
+        const c = f.severity==='critical'?'neg':f.severity==='warning'?'gold':'neu';
+        return `<div><span class="${c}">[${(f.severity||'').toUpperCase()}]</span> `+
+               `${f.message} <span style="color:var(--muted)">→ ${f.action}</span></div>`;
+      }).join('') || '<div style="color:var(--muted)">no findings</div>';
 
     // ── Header pills ──
     const alive = st.engine_alive;
@@ -655,13 +672,19 @@ async function refresh(){
           </div>
           <div class="trade-grid">
             <div class="trade-item">setup <span>${t.setup_type}</span></div>
-            <div class="trade-item">score <span>${fmt(t.score,0)}</span></div>
+            <div class="trade-item">grade <span>${t.quality_grade||'—'} (label)</span></div>
+            <div class="trade-item">weight <span>x${fmt(t.risk_multiplier,2)}</span></div>
+            <div class="trade-item">score <span>${fmt(t.score,0)} (not a gate)</span></div>
             <div class="trade-item">entry <span>${fmt(t.entry,4)}</span></div>
             <div class="trade-item">stop <span>${fmt(t.current_stop,4)}</span></div>
             <div class="trade-item">notional <span>${fmt(t.position_size)} USDT</span></div>
             <div class="trade-item">lev <span>${t.leverage}x</span></div>
             <div class="trade-item">margin <span>${fmt(t.margin_used)} USDT</span></div>
-            <div class="trade-item">risk <span>${fmt(t.risk_pct,2)}%</span></div>
+            <div class="trade-item">configured risk <span>${fmt(t.configured_risk_pct,2)}%</span></div>
+            <div class="trade-item">applied risk <span>${fmt(t.applied_risk_pct,3)}% (${fmt(t.actual_risk_usdt,3)} USDT)</span></div>
+            <div class="trade-item">risk util <span>${fmt(t.risk_utilisation_pct,1)}%</span></div>
+            <div class="trade-item">clip <span>${t.clip_reason||'none'}</span></div>
+            <div class="trade-item">path <span>${t.rank_basis||'—'}</span></div>
             <div class="trade-item">remaining <span>${fmt(t.remaining_fraction*100,0)}%</span></div>
             <div class="trade-item">pnl <span class="${cls(t.realized_pnl)}">${signed(t.realized_pnl)}</span></div>
           </div>
@@ -763,7 +786,7 @@ async function refresh(){
       row('balance', fmt(ss.balance,2)+' USDT'),
       row('risk %', ss.risk_pct+'% (band '+(ss.risk_band||[]).join('–')+')'),
       row('daily loss limit', ss.daily_loss_limit_pct+'%'),
-      row('shadow', ss.shadow),
+      row('shadow', ss.shadow+' · hard-veto: '+(ss.shadow_hard_veto||'no')),
       row('governor', ss.governor),
       row('quality layer', ss.quality_layer),
       row('leverage policy', ss.leverage_policy),
@@ -778,16 +801,24 @@ async function refresh(){
       `<div class="kpi-sub" style="margin-top:8px;font-size:10px;line-height:1.5">${sec.recommendation||''}</div>`
     ].join('');
 
-    // ── Quality grade (label only) ──
+    // ── Quality grade (label only) — distribution + full exit-path perf ──
     const qd = (qp&&qp.distribution)||{A:0,B:0,C:0,D:0};
-    const qr = (qp&&qp.realised_by_grade)||{};
+    const perf = (qp&&qp.performance)||{};
+    const pbg = perf.by_grade||{};
+    const sepv = (perf.separation&&perf.separation.verdict)||'insufficient_data';
     document.getElementById('qualityPanel').innerHTML =
       ['A','B','C','D'].map(g=>{
-        const rb = qr[g]||{};
-        const rinfo = rb.note?rb.note:(`avgR ${fmt(rb.avg_r,2)} · win ${fmt(rb.win_pct,0)}% (n=${rb.n})`);
-        return row('grade '+g, (qd[g]||0)+' · '+rinfo);
+        const p = pbg[g]||{};
+        if(p.note||p.n===0||p.n===undefined)
+          return row('grade '+g, (qd[g]||0)+' · insufficient_data');
+        const exit = `SL ${fmt(p.sl_rate,0)}% · BE ${fmt(p.tp1_be_rate,0)}% · `+
+                     `TP2 ${fmt(p.tp2_rate,0)}% · TP3 ${fmt(p.tp3_rate,0)}%`;
+        return row('grade '+g,
+          `${qd[g]||0} · n=${p.n} · avgR ${fmt(p.avg_r,2)} · win ${fmt(p.winrate,0)}% · `+
+          `PF ${p.profit_factor==null?'∞':fmt(p.profit_factor,2)} · net ${signed(p.net_pnl)} · ${exit}`);
       }).join('') +
-      `<div class="kpi-sub" style="margin-top:8px;font-size:10px">LABEL ONLY — blocks/routes nothing.</div>`;
+      `<div class="kpi-sub" style="margin-top:8px;font-size:10px">`+
+      `separation: <b>${sepv}</b> · LABEL ONLY — blocks/routes nothing.</div>`;
 
     // ── Missed-opportunity outcomes ──
     const mb = (mo&&mo.buckets)||{};

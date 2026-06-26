@@ -179,3 +179,60 @@ def test_quality_panel_endpoint(tmp_path):
     # Empty epoch → realised buckets report insufficient_data, not a fake 0.
     for g in ("A", "B", "C", "D"):
         assert data["realised_by_grade"][g]["note"] == "insufficient_data"
+    # Phase 6: per-grade performance block is present and honestly insufficient.
+    assert data["performance"]["label_only"] is True
+    assert data["performance"]["separation"]["verdict"] == "insufficient_data"
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: per-grade exit-path performance report (REPORT-ONLY)
+# ---------------------------------------------------------------------------
+
+def _closed(grade, close_reason, pnl, r):
+    from aurvex.models import Trade, TPTarget, CLOSED, LONG as _L
+    return Trade(symbol="BTCUSDT", side=_L, setup_type="aurvex_enhanced",
+                 entry=100.0, stop_loss=98.0, tp_targets=[TPTarget(103.0, 1.0)],
+                 position_size=100.0, risk_pct=2.0, leverage=5, max_loss=4.0,
+                 score=70.0, threshold=60.0, status=CLOSED,
+                 close_reason=close_reason, realized_pnl=pnl, realized_pnl_pct=r,
+                 metadata={"quality_grade": grade})
+
+
+def test_grade_performance_computes_exit_path_rates():
+    from aurvex.quality import grade_performance
+    trades = [
+        _closed("A", "TP3", 6.0, 1.5),
+        _closed("A", "SL", -4.0, -1.0),
+        _closed("A", "BE", 0.0, 0.0),
+        _closed("A", "TP2", 3.0, 0.75),
+    ]
+    perf = grade_performance(trades)
+    a = perf["by_grade"]["A"]
+    assert a["n"] == 4
+    assert a["sl_rate"] == 25.0
+    assert a["tp1_be_rate"] == 25.0
+    assert a["tp2_rate"] == 25.0
+    assert a["tp3_rate"] == 25.0
+    assert a["winrate"] == 50.0   # TP3 + TP2 are wins; SL + BE are not
+    # Other grades have no data → insufficient.
+    assert perf["by_grade"]["D"]["note"] == "insufficient_data"
+
+
+def test_grade_performance_verdict_insufficient_below_100():
+    from aurvex.quality import grade_performance
+    trades = [_closed("A", "TP3", 6.0, 1.5) for _ in range(5)]
+    perf = grade_performance(trades)
+    assert perf["separation"]["verdict"] == "insufficient_data"
+    assert perf["separation"]["separates"] is None
+
+
+def test_grade_performance_is_label_only_invariant():
+    """The performance report must never carry an allow/reject/sizing field —
+    it is pure observation over stored outcomes."""
+    from aurvex.quality import grade_performance
+    perf = grade_performance([_closed("B", "SL", -4.0, -1.0)])
+    assert perf["label_only"] is True
+    # No decision/sizing leakage into the report shape.
+    forbidden = {"allow", "reject", "decision", "risk_multiplier", "position_size"}
+    assert not (forbidden & set(perf.keys()))
+    assert not (forbidden & set(perf["by_grade"]["B"].keys()))

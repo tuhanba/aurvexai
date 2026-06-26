@@ -64,6 +64,33 @@ def _setup_display(setup_type: str) -> str:
     return _SETUP_NAMES.get(setup_type, setup_type.replace("_", " ").title())
 
 
+# Quality grade → colour dot. Label only; mirrors the dashboard colours.
+_GRADE_EMOJI: Dict[str, str] = {"A": "🟢", "B": "🟡", "C": "🟠", "D": "🔴"}
+
+
+def _grade_label(grade: str) -> str:
+    """Render an A/B/C/D grade with its colour dot, or '' when absent."""
+    g = (grade or "").strip().upper()
+    if g not in _GRADE_EMOJI:
+        return ""
+    return f"{g} {_GRADE_EMOJI[g]}"
+
+
+def _trade_weight_label(risk_mult: float) -> str:
+    """Human label for the applied risk multiplier (the trade's size factor).
+
+    Derived purely from the existing ``risk_multiplier`` — no new computation.
+    Buğra is the gate; this only explains how big the slot was sized within caps.
+    """
+    if risk_mult <= 0.0:
+        return "Shadow-only x0.00"
+    if risk_mult < 0.97:
+        return f"Reduced x{risk_mult:.2f}"
+    if risk_mult > 1.03:
+        return f"Boosted x{risk_mult:.2f}"
+    return f"Normal x{risk_mult:.2f}"
+
+
 def _tp_price(t, idx: int) -> str:
     """Safely get TP price at index, returning '—' if not present."""
     try:
@@ -138,12 +165,17 @@ class BaseNotifier:
         trade won its slot and at what size factor. All dynamic fields are escaped.
         """
         entry = t.entry or 0.0
-        actual_risk = t.metadata.get("actual_risk_amount", t.max_loss) or t.max_loss
+        md = t.metadata or {}
+        actual_risk = md.get("actual_risk_amount", t.max_loss) or t.max_loss
+        target_risk = md.get("target_risk_amount")        # the configured budget
         margin_used = t.margin_used or (t.position_size / (t.leverage or 1))
         account_risk_pct = (actual_risk / balance * 100.0) if balance else t.risk_pct
-        risk_mult = t.metadata.get("risk_multiplier", 1.0)
-        m_shadow = t.metadata.get("m_shadow", 1.0)
-        m_score = t.metadata.get("m_score", 1.0)
+        risk_mult = md.get("risk_multiplier", 1.0)
+        m_shadow = md.get("m_shadow", 1.0)
+        m_score = md.get("m_score", 1.0)
+        clip_reason = md.get("clip_reason", "none")
+        grade_lbl = _grade_label(md.get("quality_grade", ""))
+        modulation_applied = abs(risk_mult - 1.0) > 1e-6
 
         lines = [
             f"<b>\U0001F7E2 AURVEX AI SIGNAL</b>",
@@ -152,6 +184,12 @@ class BaseNotifier:
             f"Side:   {_esc(t.side)}",
             f"Mode:   PAPER",
             f"Setup:  {_esc(_setup_display(t.setup_type))}",
+        ]
+        # LABEL-ONLY quality grade + trade-weight (omitted gracefully if absent).
+        if grade_lbl:
+            lines.append(f"Quality: {grade_lbl}  (label only — gates nothing)")
+        lines.append(f"Weight: {_trade_weight_label(risk_mult)}")
+        lines += [
             "",
             "TA:",
             "  • EMA alignment        ✓",
@@ -170,13 +208,28 @@ class BaseNotifier:
             f"  Leverage:     {t.leverage}x",
             f"  Margin:       {margin_used:.2f} USDT",
             f"  Notional:     {t.position_size:.2f} USDT",
-            f"  Account risk: {account_risk_pct:.3f}%  ({actual_risk:.3f} USDT)",
+            f"  Configured:   {t.risk_pct:.2f}%"
+            + (f"  ({target_risk:.3f} USDT)" if target_risk is not None else ""),
+            f"  Applied:      {account_risk_pct:.3f}% account risk  ({actual_risk:.3f} USDT)",
+            f"  Clip:         {_esc(clip_reason)}",
             f"  Risk x{risk_mult:.2f} (shadow {m_shadow:.2f} · score {m_score:.2f})",
             f"  Score:        {t.score:.0f}  (rank/risk input — not a gate)",
         ]
         if rank_pos is not None and rank_total is not None:
             basis = f" · {_esc(rank_basis)}" if rank_basis else ""
             lines.append(f"  Rank:         {rank_pos}/{rank_total}{basis}")
+        # Compact "Why opened" block — explains the slot win without debug dumps.
+        lines += [
+            "",
+            "Why opened:",
+            "  • Buğra 5-condition gate passed",
+            "  • TA checklist 5/5 · spread/liquidity OK",
+            "  • Risk engine allowed (caps + liq-safety held)",
+        ]
+        if modulation_applied:
+            lines.append("  • Shadow reduced risk, did not block"
+                         if risk_mult < 1.0 else
+                         "  • Shadow modulated risk (measured edge), did not block")
         self.send("\n".join(lines))
 
     def trade_event(self, t, kind: str, price: float, pnl: float,

@@ -73,6 +73,31 @@ def missed_reason_bucket(reason: str) -> str:
     return "other"
 
 
+def shadow_mode_label(shadow_apply: bool,
+                      risk_modulation_enabled: bool) -> Dict[str, Any]:
+    """Truthful shadow-mode descriptor derived from the ACTUAL flags.
+
+    The dashboard/governor/telegram used to hard-code "observer (report-only)"
+    regardless of config — a lie whenever shadow/score were actively resizing
+    risk. This single source of truth makes the displayed label match reality:
+
+      * both flags off  → "observer (report-only)", risk multiplier pinned x1.00.
+      * either flag on  → "advisory risk apply", multiplier varies per trade.
+
+    Shadow NEVER hard-vetoes in any configuration, so ``hard_veto`` is always
+    "no". This function reports state; it changes nothing.
+    """
+    active = bool(shadow_apply or risk_modulation_enabled)
+    return {
+        "label": "advisory risk apply" if active else "observer (report-only)",
+        "active": active,
+        "hard_veto": "no",
+        "risk_multiplier": "varies (per-trade)" if active else "x1.00",
+        "shadow_apply": bool(shadow_apply),
+        "risk_modulation_enabled": bool(risk_modulation_enabled),
+    }
+
+
 class ShadowLearner:
     def __init__(self, cfg: Config, storage: Storage):
         self.cfg = cfg

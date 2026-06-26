@@ -32,7 +32,7 @@ from ..config import load_config
 from ..accounting import compute_accounting
 from ..metrics import compute_metrics
 from ..models import now_ms
-from ..shadow import ShadowLearner, missed_reason_bucket
+from ..shadow import ShadowLearner, missed_reason_bucket, shadow_mode_label
 from ..storage import Storage
 
 # The canonical reason bucketer now lives in shadow.py (so the governor + shadow
@@ -75,6 +75,12 @@ def _trade_dict(t, balance: float = 0.0) -> Dict[str, Any]:
         "risk_utilisation_pct": round(t.metadata.get("risk_utilisation_pct", 0.0), 2),
         "target_risk_amount": round(t.metadata.get("target_risk_amount", 0.0), 4),
         "actual_risk_amount": round(actual_risk, 4),
+        # Phase 4 — explicit configured-vs-applied labels (display only).
+        # configured = profile budget %, applied = what was actually risked.
+        "configured_risk_pct": round(t.risk_pct, 4),
+        "applied_risk_pct": round(account_risk_pct, 4),
+        "target_risk_usdt": round(t.metadata.get("target_risk_amount", 0.0), 4),
+        "actual_risk_usdt": round(actual_risk, 4),
         "score": t.score, "status": t.status, "mode": t.mode,
         # Buğra primary gate: score is a rank/risk input, not a pass/fail gate.
         # Surface why this trade won its slot (rank + basis) and the applied
@@ -509,6 +515,47 @@ def create_app(cfg=None) -> Flask:
             "buckets": shadow.missed_opportunity_outcomes(),
         })
 
+    @app.route("/api/diagnosis")
+    def diagnosis_panel():
+        """REPORT-ONLY loss-diagnosis panel (Phase 7).
+
+        A rules layer over aggregates that already exist (metrics, shadow,
+        quality buckets, daily-loss budget, slots). Emits a single "main issue"
+        plus advisory findings. It writes nothing and changes no behaviour.
+        """
+        from ..diagnosis import diagnose
+        from ..quality import grade_performance
+
+        closed = db.get_closed_trades(limit=5000, mode=cfg.mode)
+        metrics_d = compute_metrics(closed)
+        st = shadow.stats()
+
+        opens = db.get_open_trades(mode=cfg.mode)
+        balance = db.get_balance()
+        import datetime as _dt
+        _ts = now_ms() / 1000.0
+        _day_start = int(
+            _dt.datetime.fromtimestamp(_ts, _dt.timezone.utc)
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .timestamp() * 1000)
+        daily_pnl = db.daily_realized_pnl(_day_start)
+        daily_budget = balance * (cfg.max_daily_loss_pct / 100.0)
+        daily_used_pct = (round(max(0.0, -daily_pnl) / daily_budget * 100.0, 2)
+                          if daily_budget > 0 else 0.0)
+
+        out = diagnose(
+            metrics=metrics_d,
+            predictivity=shadow.predictivity_verdict(),
+            shadow_by_setup=st.get("by_setup", []),
+            daily_loss_used_pct=daily_used_pct,
+            open_count=len(opens),
+            max_open_trades=cfg.max_open_trades,
+            grade_separation=grade_performance(closed).get("separation"),
+            risk_modulation_enabled=cfg.risk_modulation_enabled,
+            missed=shadow.missed_opportunity_outcomes(),
+        )
+        return jsonify(out)
+
     @app.route("/api/system_state")
     def system_state():
         """Single-glance System State panel + dashboard security posture.
@@ -538,6 +585,8 @@ def create_app(cfg=None) -> Flask:
             sec_reco = ("Bound to a specific host; still prefer an SSH tunnel or an "
                         "authenticated reverse proxy + firewall allowlist for access.")
 
+        _shadow_mode = shadow_mode_label(cfg.shadow_apply, cfg.risk_modulation_enabled)
+
         return jsonify({
             "engine": {"alive": alive, "kill_switch": bool(hb_data.get("kill_switch", False))},
             "mode": cfg.mode,
@@ -550,7 +599,12 @@ def create_app(cfg=None) -> Flask:
             "risk_band": [cfg.min_risk_pct, cfg.max_risk_pct],
             "daily_loss_limit_pct": cfg.max_daily_loss_pct,
             "max_open_trades": cfg.max_open_trades,
-            "shadow": "observer (report-only)",
+            # Truthful shadow-mode label derived from the ACTUAL flags (Phase 5):
+            # no longer hard-coded, so it cannot claim "observer" while shadow is
+            # actively resizing risk.
+            "shadow": _shadow_mode["label"],
+            "shadow_mode": _shadow_mode,
+            "shadow_hard_veto": _shadow_mode["hard_veto"],
             "shadow_apply": cfg.shadow_apply,
             "governor": cfg.governor_mode,
             "quality_layer": "label_only",
@@ -667,6 +721,11 @@ def create_app(cfg=None) -> Flask:
                     "win_pct": round(a["wins"] / a["n"] * 100.0, 1),
                 }
 
+        # Phase 6: full per-grade exit-path performance + separation verdict.
+        from ..quality import grade_performance
+        performance = grade_performance(
+            db.get_closed_trades(limit=5000, mode=cfg.mode))
+
         return jsonify({
             "label_only": True,
             "note": "Quality grade is LABEL ONLY — it blocks/routes nothing. "
@@ -674,6 +733,7 @@ def create_app(cfg=None) -> Flask:
                     "buckets separate expectancy.",
             "distribution": dist,
             "realised_by_grade": realised,
+            "performance": performance,
         })
 
     return app

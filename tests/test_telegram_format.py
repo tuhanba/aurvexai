@@ -117,6 +117,82 @@ def test_score_labelled_as_rank_risk_input():
     assert "rank/risk input" in n.last
 
 
+# ---------------------------------------------------------------------------
+# Phase 1 deltas: quality grade, trade weight, configured-vs-applied, clip,
+# "why opened" — all surfaced from existing metadata, degrade gracefully.
+# ---------------------------------------------------------------------------
+
+def test_quality_grade_line_rendered_with_colour():
+    n = Cap()
+    t = _trade(metadata={"actual_risk_amount": 7.5, "liq_price": 2500.0,
+                         "quality_grade": "A"})
+    n.trade_opened(t, balance=200.0)
+    assert "Quality: A 🟢" in n.last
+    assert "label only" in n.last
+
+
+def test_quality_grade_line_omitted_when_absent():
+    n = Cap()
+    n.trade_opened(_trade(), balance=200.0)
+    assert "Quality:" not in n.last
+
+
+def test_trade_weight_label_reduced():
+    n = Cap()
+    t = _trade(metadata={"actual_risk_amount": 7.5, "liq_price": 2500.0,
+                         "risk_multiplier": 0.70})
+    n.trade_opened(t, balance=200.0)
+    assert "Weight: Reduced x0.70" in n.last
+
+
+def test_trade_weight_label_normal_default():
+    n = Cap()
+    n.trade_opened(_trade(), balance=200.0)
+    assert "Weight: Normal x1.00" in n.last
+
+
+def test_configured_vs_applied_risk_lines():
+    n = Cap()
+    # configured 0.5% (from risk_pct), target budget 1.0 USDT, applied 7.5 USDT
+    t = _trade(risk_pct=0.5,
+               metadata={"actual_risk_amount": 7.5, "liq_price": 2500.0,
+                         "target_risk_amount": 1.0})
+    n.trade_opened(t, balance=200.0)
+    txt = n.last
+    assert "Configured:   0.50%" in txt
+    assert "1.000 USDT" in txt            # target budget
+    assert "Applied:" in txt
+    assert "3.750%" in txt                 # applied = 7.5/200
+
+
+def test_clip_reason_line_rendered():
+    n = Cap()
+    t = _trade(metadata={"actual_risk_amount": 7.5, "liq_price": 2500.0,
+                         "clip_reason": "exposure_cap"})
+    n.trade_opened(t, balance=200.0)
+    assert "Clip:         exposure_cap" in n.last
+
+
+def test_why_opened_block_present():
+    n = Cap()
+    n.trade_opened(_trade(), balance=200.0)
+    txt = n.last
+    assert "Why opened:" in txt
+    assert "Buğra 5-condition gate passed" in txt
+
+
+def test_shadow_reduced_note_only_when_modulation_applied():
+    n = Cap()
+    # No modulation → no shadow note.
+    n.trade_opened(_trade(), balance=200.0)
+    assert "Shadow reduced risk" not in n.last
+    # Modulation reduced risk → note appears, framed as non-blocking.
+    t = _trade(metadata={"actual_risk_amount": 7.5, "liq_price": 2500.0,
+                         "risk_multiplier": 0.70})
+    n.trade_opened(t, balance=200.0)
+    assert "Shadow reduced risk, did not block" in n.last
+
+
 def test_daily_summary_predictivity_line():
     n = Cap()
     metrics = {"total_trades": 4, "winrate": 50.0, "net_pnl": 1.2,

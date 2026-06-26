@@ -24,10 +24,11 @@ from typing import Any, Dict, List, Optional
 
 from .analyzers import risk_throttle, setup_health
 from .config import Config
+from .diagnosis import diagnose
 from .metrics import compute_metrics
 from .models import now_ms
 from .receipt import shadow_basis
-from .shadow import ShadowLearner, missed_reason_bucket
+from .shadow import ShadowLearner, missed_reason_bucket, shadow_mode_label
 from .storage import Storage
 
 
@@ -116,7 +117,105 @@ def _quality_layer_summary(db: Storage, cfg: Config) -> Dict[str, Any]:
         realised[g] = ({"n": 0, "note": "insufficient_data"} if a["n"] == 0 else
                        {"n": a["n"], "avg_r": round(a["sum_r"] / a["n"], 3),
                         "win_pct": round(a["wins"] / a["n"] * 100.0, 1)})
-    return {"label_only": True, "distribution": dist, "realised_by_grade": realised}
+    # Phase 6: full per-grade exit-path performance + separation verdict.
+    from .quality import grade_performance
+    performance = grade_performance(db.get_closed_trades(limit=5000, mode=cfg.mode))
+    return {"label_only": True, "distribution": dist, "realised_by_grade": realised,
+            "performance": performance}
+
+
+def _ceo_summary(metrics: Dict[str, Any], rm: Dict[str, Any],
+                 diagnosis: Dict[str, Any], quality: Dict[str, Any],
+                 shadow_stats: Dict[str, Any], cfg: Config,
+                 ready_aggressive: str) -> Dict[str, Any]:
+    """Short, human verdict panel (§17). Synthesis only — decides nothing.
+
+    State / Main issue / Risk action / Slot action / Quality action / Shadow
+    action / Next step. Every line is advisory text derived from the measured
+    aggregates; the governor still has zero authority to act on any of it.
+    """
+    n = int(metrics.get("total_trades", 0) or 0)
+    pf = metrics.get("profit_factor")
+    exp_r = metrics.get("expectancy_r")
+
+    if n == 0:
+        state = "WARMING UP — no closed trades yet"
+    elif pf is not None and pf >= 1.0 and (exp_r or 0) > 0:
+        state = "EDGE FORMING — keep validating before scaling"
+    else:
+        state = "NO PROVEN EDGE YET — hold risk flat"
+
+    if pf is not None and pf < 0.7:
+        risk_action = "Hold risk flat — PF<0.7, do NOT increase risk."
+    elif pf is None or pf < 1.0:
+        risk_action = "Hold risk flat — edge unproven."
+    else:
+        risk_action = "Risk within tolerance — no change recommended."
+
+    slots_full = rm["max_open_trades"] > 0 and rm["open_count"] >= rm["max_open_trades"]
+    if slots_full and (pf is None or pf < 1.0):
+        slot_action = "Do NOT add slots — all full while edge unproven."
+    elif slots_full:
+        slot_action = "Slots full — gather missed-trade evidence before adding."
+    else:
+        slot_action = "Slots available — no change needed."
+
+    sep = quality.get("performance", {}).get("separation", {}).get("verdict")
+    if sep == "separates_expectancy":
+        quality_action = "Grade separates expectancy — candidate for owner-gated promotion."
+    elif sep == "no_separation":
+        quality_action = "Grade does not separate expectancy — keep it label-only."
+    else:
+        quality_action = "Grade not yet validated (N<100/bucket) — keep it label-only."
+
+    shadow_mode = shadow_mode_label(cfg.shadow_apply, cfg.risk_modulation_enabled)
+    if shadow_mode["active"]:
+        shadow_action = ("Shadow advisory risk is ON — read expectancy under scaled "
+                         "risk. Shadow still never blocks a trade.")
+    else:
+        shadow_action = "Shadow is observer-only — no action; it blocks nothing."
+
+    # Next step: lead with the worst diagnosis action, else accumulate data.
+    findings = diagnosis.get("findings", [])
+    if findings and findings[0]["code"] != "no_trades":
+        next_step = findings[0]["action"]
+    else:
+        next_step = ("Accumulate ≥100 resolved shadows/trades on this epoch before "
+                     "judging score/quality predictivity.")
+
+    return {
+        "state": state,
+        "main_issue": diagnosis.get("main_issue", ""),
+        "risk_action": risk_action,
+        "slot_action": slot_action,
+        "quality_action": quality_action,
+        "shadow_action": shadow_action,
+        "next_step": next_step,
+        "ready_for_aggressive_paper": ready_aggressive,
+        "ready_for_live": "NO",
+    }
+
+
+def _tiered_recommendations(diagnosis: Dict[str, Any],
+                            experiments: List[str],
+                            cloud_tasks: List[str]) -> Dict[str, List[str]]:
+    """Group recommendations into the §16 tiers. Text only — nothing is applied.
+
+    IMMEDIATE_FIX        ← critical/warning diagnosis actions (act now, no risk).
+    CONTROLLED_EXPERIMENT ← measured experiments (owner-run, evidence-gated).
+    LATER                ← deferred promotions pending more data.
+    """
+    immediate: List[str] = []
+    for f in diagnosis.get("findings", []):
+        if f["severity"] in ("critical", "warning"):
+            immediate.append(f"[{f['severity'].upper()}] {f['action']}")
+    if not immediate:
+        immediate.append("No immediate fixes flagged — observability is current.")
+    return {
+        "IMMEDIATE_FIX": immediate,
+        "CONTROLLED_EXPERIMENT": list(experiments),
+        "LATER": list(cloud_tasks),
+    }
 
 
 def build_report(cfg: Config, db: Storage, shadow: ShadowLearner) -> Dict[str, Any]:
@@ -157,6 +256,19 @@ def build_report(cfg: Config, db: Storage, shadow: ShadowLearner) -> Dict[str, A
         ready_reasons.append("kill switch active")
     ready_aggressive = "YES" if not ready_reasons else "NO"
 
+    # LOSS_DIAGNOSIS (Phase 7) — report-only rules over the aggregates above.
+    loss_diagnosis = diagnose(
+        metrics=metrics,
+        predictivity=shadow.predictivity_verdict(),
+        shadow_by_setup=shadow_stats.get("by_setup", []),
+        daily_loss_used_pct=rm["daily_loss_used_pct"],
+        open_count=rm["open_count"],
+        max_open_trades=rm["max_open_trades"],
+        grade_separation=quality.get("performance", {}).get("separation"),
+        risk_modulation_enabled=cfg.risk_modulation_enabled,
+        missed=missed,
+    )
+
     recommended_experiments = [
         "Accumulate >=100 resolved shadows on the aggressive epoch before "
         "judging score/quality predictivity.",
@@ -171,12 +283,18 @@ def build_report(cfg: Config, db: Storage, shadow: ShadowLearner) -> Dict[str, A
         "SHADOW_ONLY_SETUPS (owner-approved, not auto-applied).",
     ]
 
+    ceo_summary = _ceo_summary(metrics, rm, loss_diagnosis, quality,
+                               shadow_stats, cfg, ready_aggressive)
+    tiered = _tiered_recommendations(loss_diagnosis, recommended_experiments,
+                                     recommended_cloud_tasks)
+
     return {
         "EPOCH": {
             "label": (db.get_meta("epoch") or {}).get("label", "unknown")
             if isinstance(db.get_meta("epoch"), dict) else "unknown",
             "generated_utc": _dt.datetime.now(_dt.timezone.utc).isoformat(),
         },
+        "CEO_SUMMARY": ceo_summary,
         "ENGINE_HEALTH": health,
         "DATA_QUALITY": {
             "provider": cfg.data_provider,
@@ -203,6 +321,9 @@ def build_report(cfg: Config, db: Storage, shadow: ShadowLearner) -> Dict[str, A
         "RISK_AND_MARGIN": {**rm, "risk_throttle": throttle},
         "SHADOW_SUMMARY": {
             "epoch": shadow_stats.get("epoch"),
+            # Truthful mode label (Phase 5): matches the actual flags, never a
+            # hard-coded "observer" while shadow is resizing risk.
+            "mode": shadow_mode_label(cfg.shadow_apply, cfg.risk_modulation_enabled),
             "resolved_total": shadow_stats.get("resolved_total"),
             "independent_episodes": shadow_stats.get("effective_independent_episodes"),
             "stage": shadow_stats.get("stage"),
@@ -215,9 +336,11 @@ def build_report(cfg: Config, db: Storage, shadow: ShadowLearner) -> Dict[str, A
         },
         "MISSED_OPPORTUNITIES": missed,
         "SETUP_HEALTH": health_rows,
+        "LOSS_DIAGNOSIS": loss_diagnosis,
         "QUALITY_LAYER_SUMMARY": quality,
         "RECOMMENDED_EXPERIMENTS": recommended_experiments,
         "RECOMMENDED_CLOUD_CODE_TASKS": recommended_cloud_tasks,
+        "RECOMMENDATIONS_TIERED": tiered,
         "READY_FOR_AGGRESSIVE_PAPER": ready_aggressive,
         "READY_FOR_AGGRESSIVE_PAPER_BLOCKERS": ready_reasons,
         "READY_FOR_LIVE": "NO",   # hard, always
@@ -231,39 +354,107 @@ def build_report(cfg: Config, db: Storage, shadow: ShadowLearner) -> Dict[str, A
     }
 
 
+def _render_body(body: Any, indent: int = 2) -> List[str]:
+    """Readable indented rendering of a section body (no raw-JSON dumps)."""
+    pad = " " * indent
+    out: List[str] = []
+    if isinstance(body, dict):
+        for k, v in body.items():
+            if isinstance(v, (dict, list)) and v:
+                out.append(f"{pad}{k}:")
+                out += _render_body(v, indent + 2)
+            else:
+                out.append(f"{pad}{k}: {v}")
+    elif isinstance(body, list):
+        for item in body:
+            if isinstance(item, dict):
+                # One compact line per dict row.
+                compact = " · ".join(f"{k}={v}" for k, v in item.items())
+                out.append(f"{pad}- {compact}")
+            else:
+                out.append(f"{pad}- {item}")
+    else:
+        out.append(f"{pad}{body}")
+    return out
+
+
+def _render_ceo(ceo: Dict[str, Any]) -> List[str]:
+    """Render the §17 CEO verdict panel."""
+    return [
+        "",
+        "## CEO_SUMMARY",
+        "┌─ CEO SUMMARY " + "─" * 48,
+        f"  State:          {ceo.get('state','')}",
+        f"  {ceo.get('main_issue','')}",
+        f"  Risk action:    {ceo.get('risk_action','')}",
+        f"  Slot action:    {ceo.get('slot_action','')}",
+        f"  Quality action: {ceo.get('quality_action','')}",
+        f"  Shadow action:  {ceo.get('shadow_action','')}",
+        f"  Next step:      {ceo.get('next_step','')}",
+        f"  Aggressive paper: {ceo.get('ready_for_aggressive_paper','')} · "
+        f"Live: {ceo.get('ready_for_live','NO')}",
+        "└" + "─" * 62,
+    ]
+
+
 def render_report(report: Dict[str, Any]) -> str:
-    """Render the report dict as a plain-text block for stdout."""
-    import json
+    """Render the report dict as a readable plain-text block for stdout.
+
+    The CEO verdict panel and the 3-tier recommendations lead; the full
+    structured detail follows in readable indented form (no raw JSON). The
+    structured dict itself is unchanged — only this human rendering differs.
+    """
     lines: List[str] = []
     lines.append("=" * 64)
     lines.append("AURVEX GOVERNOR — READ-ONLY SYSTEM REPORT")
     lines.append("=" * 64)
+
+    ceo = report.get("CEO_SUMMARY")
+    if ceo:
+        lines += _render_ceo(ceo)
+
+    tiers = report.get("RECOMMENDATIONS_TIERED")
+    if tiers:
+        lines.append("")
+        lines.append("## RECOMMENDATIONS_TIERED")
+        for tier in ("IMMEDIATE_FIX", "CONTROLLED_EXPERIMENT", "LATER"):
+            lines.append(f"  {tier}:")
+            for item in tiers.get(tier, []):
+                lines.append(f"    - {item}")
+
     for section, body in report.items():
+        if section in ("CEO_SUMMARY", "RECOMMENDATIONS_TIERED"):
+            continue  # already rendered above
         lines.append("")
         lines.append(f"## {section}")
         if isinstance(body, (dict, list)):
-            lines.append(json.dumps(body, indent=2, default=str))
+            lines += _render_body(body, indent=2)
         else:
-            lines.append(str(body))
+            lines.append(f"  {body}")
     return "\n".join(lines)
 
 
 def _telegram_summary(report: Dict[str, Any]) -> str:
-    """Concise, secrets-free Telegram summary of the report."""
+    """Concise, secrets-free Telegram summary — §16 Quick Status format."""
     eh = report["ENGINE_HEALTH"]
     tp = report["TRADE_PERFORMANCE"]
     rm = report["RISK_AND_MARGIN"]
     sh = report["SHADOW_SUMMARY"]
+    ceo = report.get("CEO_SUMMARY", {})
+    diag = report.get("LOSS_DIAGNOSIS", {})
     lines = [
         "🧭 AURVEX GOVERNOR (read-only)",
         f"epoch: {report['EPOCH']['label']}",
+        f"state: {ceo.get('state','')}",
         f"engine: {'alive' if eh['heartbeat_fresh'] else 'STALE'} · "
         f"kill_switch: {eh['kill_switch']}",
         f"trades: {tp['total_trades']} · winrate {tp['winrate']}% · "
         f"net {tp['net_pnl']:+.2f} · PF {tp['profit_factor']}",
         f"risk: {rm['risk_pct']}% · daily used {rm['daily_loss_used_pct']}% · "
         f"open {rm['open_count']}/{rm['max_open_trades']}",
-        f"shadow: {sh['resolved_total']} resolved · stage {sh['stage']}",
+        f"shadow: {sh['resolved_total']} resolved · {sh['mode']['label']}",
+        f"{diag.get('main_issue','')}",
+        f"next: {ceo.get('next_step','')}",
         f"READY_FOR_AGGRESSIVE_PAPER: {report['READY_FOR_AGGRESSIVE_PAPER']}",
         f"READY_FOR_LIVE: {report['READY_FOR_LIVE']}",
     ]
