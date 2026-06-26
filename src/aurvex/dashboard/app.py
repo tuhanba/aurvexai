@@ -509,6 +509,52 @@ def create_app(cfg=None) -> Flask:
             "buckets": shadow.missed_opportunity_outcomes(),
         })
 
+    @app.route("/api/setup_health")
+    def setup_health_panel():
+        """REPORT-ONLY per-setup health + risk-throttle suggestion.
+
+        Derived from measured shadow stats. HARD GUARDRAIL: nothing here disables
+        a setup or changes risk_pct — statuses and suggestions are text only.
+        """
+        from ..analyzers import setup_health, risk_throttle
+
+        st = shadow.stats()
+        setups_in = [{"setup": s["setup"], "n": s["n"], "avg_r": s["avg_r"],
+                      "win_pct": s.get("winrate")} for s in st.get("by_setup", [])]
+        rows = setup_health(setups_in, shadow_only=cfg.shadow_only_setups)
+
+        # Risk-throttle inputs (report-only).
+        closed = db.get_closed_trades(limit=20, mode=cfg.mode)
+        recent_rs = [t.realized_pnl_pct for t in closed
+                     if t.realized_pnl_pct is not None]
+        recent_avg_r = (sum(recent_rs) / len(recent_rs)) if recent_rs else None
+        metrics = compute_metrics(db.get_closed_trades(limit=5000, mode=cfg.mode))
+
+        import datetime as _dt
+        _ts = now_ms() / 1000.0
+        _day_start = int(
+            _dt.datetime.fromtimestamp(_ts, _dt.timezone.utc)
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .timestamp() * 1000)
+        balance = db.get_balance()
+        daily_pnl = db.daily_realized_pnl(_day_start)
+        daily_budget = balance * (cfg.max_daily_loss_pct / 100.0)
+        daily_used_pct = (round(max(0.0, -daily_pnl) / daily_budget * 100.0, 2)
+                          if daily_budget > 0 else 0.0)
+
+        throttle = risk_throttle(
+            recent_avg_r=recent_avg_r, recent_n=len(recent_rs),
+            drawdown_pct=metrics.get("max_drawdown"),
+            daily_loss_used_pct=daily_used_pct, mode=cfg.risk_throttle_mode)
+
+        return jsonify({
+            "report_only": True,
+            "note": "Setup health + risk throttle are REPORT-ONLY suggestions. "
+                    "No setup is auto-disabled and risk_pct is never changed here.",
+            "setups": rows,
+            "risk_throttle": throttle,
+        })
+
     @app.route("/api/quality")
     def quality_panel():
         """LABEL-ONLY quality grade panel.
