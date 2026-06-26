@@ -143,8 +143,12 @@ def _run_reset(cfg) -> int:
 
     # Rollback artifact first — never delete an existing backup; failure here must
     # not block the reset, but we surface the path so it can be used to roll back.
+    # Root the artifact NEXT TO the DB (e.g. data/backups) so it lands on the same
+    # persisted volume in Docker rather than an ephemeral container working dir.
+    backups_root = os.path.join(os.path.dirname(cfg.db_path) or ".", "backups")
     try:
-        art_dir = write_rollback_artifact(cfg, cfg.db_path, epoch_label=cfg.epoch_label)
+        art_dir = write_rollback_artifact(cfg, cfg.db_path, epoch_label=cfg.epoch_label,
+                                          backups_root=backups_root)
         print(f"✓ Rollback artifact : {art_dir}")
     except Exception as exc:  # pragma: no cover - defensive
         print(f"! Rollback artifact FAILED (continuing reset): {exc}")
