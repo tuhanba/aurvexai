@@ -10,6 +10,7 @@ Usage:
     python main.py walkforward # Block 6: real-data (or synthetic) OOS walk-forward
                                # decision table per profile, net-of-cost (+funding)
     python main.py reset       # clear trades/funnel/signals, keep shadow data, new epoch
+    python main.py report      # read-only Governor system report (add --telegram to send)
     python main.py telegram-test   # in-container Telegram diagnostic (getMe + send)
 
 All configuration comes from the environment / .env (see .env.example).
@@ -68,6 +69,11 @@ def main(argv: list) -> int:
 
     if cmd == "reset":
         return _run_reset(cfg)
+
+    if cmd == "report":
+        from aurvex.governor import run_report
+        want_tg = "--telegram" in argv[1:]
+        return run_report(cfg, telegram=want_tg)
 
     if cmd == "balance-reset":
         return _run_balance_reset(cfg)

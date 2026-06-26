@@ -278,8 +278,19 @@ def _row_to_trade(r: sqlite3.Row) -> Trade:
 
 
 class Storage:
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, read_only: bool = False):
         self.db_path = db_path
+        self.read_only = read_only
+        if read_only:
+            # Structural read-only: open the SQLite file in mode=ro so ANY write
+            # attempt raises. No schema create, no migration, no PRAGMA writes.
+            # Used by the Governor (a separate read-only reporting process) so it
+            # cannot — by construction — mutate trades, config, risk or live state.
+            uri = f"file:{os.path.abspath(db_path)}?mode=ro"
+            self.conn = sqlite3.connect(uri, uri=True, check_same_thread=False,
+                                        timeout=30)
+            self.conn.row_factory = sqlite3.Row
+            return
         d = os.path.dirname(db_path)
         if d:
             os.makedirs(d, exist_ok=True)

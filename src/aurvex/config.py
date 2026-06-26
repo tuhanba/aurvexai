@@ -416,6 +416,25 @@ class Config:
     live_order_timeout_sec: float = field(default_factory=lambda: _float("LIVE_ORDER_TIMEOUT_SEC", 5.0))
     live_max_retries: int = field(default_factory=lambda: _int("LIVE_MAX_RETRIES", 2))
 
+    # -- Governor (read-only reporting; NEVER a runtime layer) -------------
+    # The Governor is a separate read-only command (`python main.py report`).
+    # These flags document its report-only intent, but the REAL guarantee is
+    # structural: it runs as its own process over a read-only DB connection and
+    # imports nothing from the order path. It never trades, writes config, sets
+    # any LIVE_*, or changes risk. Auto-apply of any recommendation is OFF.
+    governor_mode: str = field(default_factory=lambda: _str("GOVERNOR_MODE", "report_only"))
+    governor_can_trade: bool = field(
+        default_factory=lambda: _bool("GOVERNOR_CAN_TRADE", False))
+    governor_can_change_live: bool = field(
+        default_factory=lambda: _bool("GOVERNOR_CAN_CHANGE_LIVE", False))
+    governor_can_auto_apply: bool = field(
+        default_factory=lambda: _bool("GOVERNOR_CAN_AUTO_APPLY", False))
+    governor_requires_approval_for_risk_increase: bool = field(
+        default_factory=lambda: _bool("GOVERNOR_REQUIRES_APPROVAL_FOR_RISK_INCREASE", True))
+    # Setup-health / risk-throttle analyzers are REPORT-ONLY (Phase 6).
+    risk_throttle_mode: str = field(
+        default_factory=lambda: _str("RISK_THROTTLE_MODE", "report_only"))
+
     # -- Logging -----------------------------------------------------------
     log_level: str = field(default_factory=lambda: _str("LOG_LEVEL", "INFO"))
 
@@ -449,6 +468,11 @@ class Config:
         assert 0.0 <= self.free_margin_reserve_pct <= 90.0, (
             "free_margin_reserve_pct must be in [0, 90]"
         )
+        # Governor guardrails: it is a read-only report, never an actor. These must
+        # stay false — the Governor has no trade/live/auto-apply authority.
+        assert not self.governor_can_trade, "GOVERNOR_CAN_TRADE must be false"
+        assert not self.governor_can_change_live, "GOVERNOR_CAN_CHANGE_LIVE must be false"
+        assert not self.governor_can_auto_apply, "GOVERNOR_CAN_AUTO_APPLY must be false"
 
     @property
     def is_live(self) -> bool:
