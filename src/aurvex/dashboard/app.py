@@ -19,6 +19,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any, Dict
@@ -110,6 +111,10 @@ def _trade_dict(t, balance: float = 0.0) -> Dict[str, Any]:
         "risk_multiplier": round(t.metadata.get("risk_multiplier", 1.0), 3),
         "m_shadow": round(t.metadata.get("m_shadow", 1.0), 3),
         "m_score": round(t.metadata.get("m_score", 1.0), 3),
+        # LABEL-ONLY quality grade (blocks nothing; shown for correlation).
+        "quality_grade": t.metadata.get("quality_grade", ""),
+        "quality_score": round(t.metadata.get("quality_score", 0.0) or 0.0, 2),
+        "quality_reasons": t.metadata.get("quality_reasons", []),
         "remaining_fraction": round(t.remaining_fraction, 3),
         "realized_pnl": round(t.realized_pnl, 4),
         "realized_pnl_pct": round(t.realized_pnl_pct, 4),
@@ -467,6 +472,62 @@ def create_app(cfg=None) -> Flask:
         payload["verdict"] = shadow.predictivity_verdict()
         payload["risk_modulation_enabled"] = cfg.risk_modulation_enabled
         return jsonify(payload)
+
+    @app.route("/api/quality")
+    def quality_panel():
+        """LABEL-ONLY quality grade panel.
+
+        Shows the A/B/C/D distribution across recent decisions (allowed +
+        rejected) and, for CLOSED trades carrying a grade, the realised avg R and
+        win rate per grade. This is the evidence required BEFORE the grade could
+        ever be promoted from a label to a ranking/sizing input — it blocks
+        nothing today.
+        """
+        order = ["A", "B", "C", "D"]
+        # 1) Distribution across recent decisions (parse signal_events metadata).
+        dist = {g: 0 for g in order}
+        for s in db.recent_signals(limit=500):
+            try:
+                meta = json.loads(s.get("metadata") or "{}")
+            except (TypeError, ValueError):
+                meta = {}
+            g = meta.get("quality_grade")
+            if g in dist:
+                dist[g] += 1
+
+        # 2) Realised outcome per grade from CLOSED trades that carry a grade.
+        agg: Dict[str, Dict[str, float]] = {
+            g: {"n": 0, "wins": 0, "sum_r": 0.0} for g in order}
+        for t in db.get_closed_trades(limit=5000, mode=cfg.mode):
+            g = t.metadata.get("quality_grade")
+            if g not in agg:
+                continue
+            a = agg[g]
+            a["n"] += 1
+            a["sum_r"] += t.realized_pnl_pct or 0.0
+            if (t.realized_pnl or 0.0) > 0:
+                a["wins"] += 1
+        realised = {}
+        for g in order:
+            a = agg[g]
+            if a["n"] == 0:
+                realised[g] = {"n": 0, "avg_r": None, "win_pct": None,
+                               "note": "insufficient_data"}
+            else:
+                realised[g] = {
+                    "n": a["n"],
+                    "avg_r": round(a["sum_r"] / a["n"], 3),
+                    "win_pct": round(a["wins"] / a["n"] * 100.0, 1),
+                }
+
+        return jsonify({
+            "label_only": True,
+            "note": "Quality grade is LABEL ONLY — it blocks/routes nothing. "
+                    "Promotion to ranking/sizing requires shadow proof that the "
+                    "buckets separate expectancy.",
+            "distribution": dist,
+            "realised_by_grade": realised,
+        })
 
     return app
 

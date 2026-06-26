@@ -33,6 +33,7 @@ from .funnel import FunnelLogger
 from .journal import TradeJournal
 from .market_data import build_provider
 from .models import ALLOW, OPEN, REJECT, Decision, MarketSnapshot, now_ms
+from .quality import grade as quality_grade
 from .scanner import UniverseScanner
 from .setups import SetupDetector, build_context
 from .shadow import ShadowLearner, build_coin_library
@@ -218,6 +219,28 @@ class Engine:
         rm = max(0.5, min(1.5, m_shadow * m_score))
         return rm, m_shadow, m_score
 
+    def _attach_quality(self, d: Decision, signal, snap) -> None:
+        """Attach the LABEL-ONLY quality grade to a formed Decision's metadata.
+
+        Called AFTER decide() for BOTH allowed and rejected rows (so the grade
+        can later be correlated with outcome). It NEVER changes d.decision /
+        failed_stage / reject_reason — it only adds two metadata keys. Buğra
+        stays the gate; quality blocks nothing.
+        # LABEL ONLY until shadow proves grade buckets separate expectancy.
+        """
+        try:
+            summ = self.shadow.setup_outcome_summary(signal.setup_type)
+            qg = quality_grade(signal, snap, {
+                "decision": d, "cfg": self.cfg,
+                "shadow_setup_avg_r": summ.get("avg_r"),
+                "shadow_setup_n": summ.get("n", 0),
+            })
+            d.metadata["quality_grade"] = qg.grade
+            d.metadata["quality_score"] = qg.score_0_100
+            d.metadata["quality_reasons"] = qg.reasons
+        except Exception as exc:  # pragma: no cover - never break the cycle
+            log.debug("quality grade error: %s", exc)
+
     # -- one cycle ---------------------------------------------------------
     async def _cycle(self) -> None:
         cycle_start = now_ms()
@@ -329,6 +352,8 @@ class Engine:
                 d.rank_basis = cycle_rank_basis
                 d.metadata["m_shadow"] = m_shadow
                 d.metadata["m_score"] = m_score
+                # LABEL ONLY: attach quality grade (blocks nothing).
+                self._attach_quality(d, cand.signal, cand.snap)
                 self.db.insert_signal_event(d)
                 funnel.record(d)
 
@@ -440,6 +465,8 @@ class Engine:
                 d = self.engine.decide(signal, snap, pf, risk_multiplier=rm)
                 d.metadata["m_shadow"] = m_shadow
                 d.metadata["m_score"] = m_score
+                # LABEL ONLY: attach quality grade (blocks nothing).
+                self._attach_quality(d, signal, snap)
                 self.db.insert_signal_event(d)
                 funnel.record(d)
 

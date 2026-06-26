@@ -559,6 +559,29 @@ class ShadowLearner:
             return None
         return float(rows["r"])
 
+    def setup_outcome_summary(self, setup: str,
+                              epoch: Optional[str] = None) -> Dict[str, Any]:
+        """Resolved-shadow outcome summary for one setup, current epoch by default.
+
+        Read-only helper consumed by the LABEL-ONLY quality grader: returns the
+        net avg R, win rate and resolved sample size so the grade can reflect the
+        setup's MEASURED recent edge. Never influences sizing or the decision.
+        """
+        ep = epoch if epoch is not None else self._current_epoch()
+        row = self.db.conn.execute(
+            "SELECT COUNT(*) AS n, COALESCE(AVG(r_multiple),0) AS avg_r, "
+            "SUM(CASE WHEN outcome=? THEN 1 ELSE 0 END) AS wins FROM shadows "
+            "WHERE outcome != ? AND setup_type=? AND epoch=?",
+            (TP, OPEN, setup, ep)).fetchone()
+        n = int(row["n"]) if row else 0
+        if n == 0:
+            return {"n": 0, "avg_r": None, "win_pct": None}
+        return {
+            "n": n,
+            "avg_r": float(row["avg_r"]),
+            "win_pct": round(int(row["wins"] or 0) / n * 100.0, 1),
+        }
+
     def score_delta(self, setup: str) -> float:
         """Advisory score nudge in [-5, +5] based on realised edge. Soft stage+.
 

@@ -102,7 +102,12 @@ class BaseExecutor:
                       "m_score": decision.metadata.get("m_score", 1.0),
                       # Slot-selection support layer: why this trade won its slot.
                       "rank": decision.rank,
-                      "rank_basis": decision.rank_basis},
+                      "rank_basis": decision.rank_basis,
+                      # LABEL-ONLY quality grade carried onto the trade so the
+                      # dashboard can correlate grade with realised outcome.
+                      "quality_grade": decision.metadata.get("quality_grade", ""),
+                      "quality_score": decision.metadata.get("quality_score", 0.0),
+                      "quality_reasons": decision.metadata.get("quality_reasons", [])},
         )
         return trade
 
