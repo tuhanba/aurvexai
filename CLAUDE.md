@@ -61,10 +61,14 @@ Risk detail: `RISK_MODEL.md`.
 
 ## Config
 
-Everything is env-driven via `.env` (see `.env.example`). Paper defaults:
-balance 1000 USDT, risk 0.5%/trade, max 4 open, daily-loss kill switch 3%,
-trade threshold 60, LTF 1m / HTF 15m, `DATA_PROVIDER=ccxt`, `AX_MODE=paper`,
-`LIVE_ENABLED=false`.
+Everything is env-driven via `.env` (see `.env.example`). The active paper
+defaults come from `RISK_PROFILE` (default `aggressive_paper`): balance 200 USDT,
+risk 2%/trade (band 1–3%), max 4 open, daily-loss kill switch 10%, trade
+threshold 60, LTF 1m / HTF 15m, `DATA_PROVIDER=ccxt`, `AX_MODE=paper`,
+`LIVE_ENABLED=false`. The legacy 1000 / 0.5% / 3% values are preserved as
+`RISK_PROFILE=conservative_paper`. An explicit env var always overrides its
+profile default. Profiles are config-only — they change sizing inputs, never
+`decide()`'s allow/reject logic.
 
 ## Definition of done for any change
 
@@ -81,5 +85,8 @@ chain with `&&` (Termius mobile paste breaks on chained commands).
 
 ## Current status
 
-Paper-ready. Live OFF by design. See `INITIAL_BUILD_REPORT.md` for the readiness
-report and the exact conditions required before any live consideration.
+Paper-ready, running the `aggressive_paper` profile (200 USDT / 2% / 10%) on a
+fresh epoch with label-only quality grading and read-only governor reporting.
+Live OFF by design. See `INITIAL_BUILD_REPORT.md` for the readiness report and
+the exact conditions required before any live consideration, and
+`GOVERNOR_QUALITY_OBSERVABILITY_REPORT.md` for the aggressive-paper rollout.

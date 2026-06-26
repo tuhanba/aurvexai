@@ -11,6 +11,12 @@ import pytest
 # dataclass field defaults instead, which is what the tests assert against.
 os.environ["AURVEX_NO_DOTENV"] = "1"
 
+# Pin the unit-test baseline to the legacy (conservative) profile so the existing
+# suite's risk/balance math (0.5% of 1000 = 5 USDT, etc.) stays valid. Production
+# defaults to aggressive_paper; tests that exercise the aggressive profile set it
+# explicitly. This mirrors the AURVEX_NO_DOTENV hermeticity guarantee above.
+os.environ["RISK_PROFILE"] = "conservative_paper"
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from aurvex.config import Config

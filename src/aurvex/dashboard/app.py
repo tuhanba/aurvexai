@@ -423,7 +423,10 @@ def create_app(cfg=None) -> Flask:
             "balance": round(balance, 4),
             # Active risk/profile config surfaced so the dashboard reflects the
             # running 200 USDT / 2% / 10% aggressive epoch, not stale defaults.
+            "risk_profile": cfg.risk_profile,
             "risk_pct": cfg.risk_pct,
+            "min_risk_pct": cfg.min_risk_pct,
+            "max_risk_pct": cfg.max_risk_pct,
             "max_daily_loss_pct": cfg.max_daily_loss_pct,
             "daily_realized_pnl": round(daily_pnl, 4),
             "daily_loss_budget_usdt": round(daily_loss_budget, 4),

@@ -90,9 +90,11 @@ All settings come from environment variables / `.env`. See
 (Binance keys, Telegram token) live only in `.env`, never in code.** Paper mode
 needs no Binance key at all — Binance public market data is enough.
 
-Key defaults: paper balance **1000 USDT**, risk **0.5%/trade**, max **4** open
-trades, daily-loss kill switch **3%**, trade threshold **60**, LTF **1m** /
-HTF **15m**.
+Key defaults (`RISK_PROFILE=aggressive_paper`, the active profile): paper balance
+**200 USDT**, risk **2%/trade** (band **1–3%**), max **4** open trades, daily-loss
+kill switch **10%**, trade threshold **60**, LTF **1m** / HTF **15m**. The legacy
+**1000 / 0.5% / 3%** values live on as `RISK_PROFILE=conservative_paper`; an
+explicit env var always overrides its profile default.
 
 ## Project layout
 
