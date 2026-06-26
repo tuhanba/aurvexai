@@ -11,6 +11,7 @@ Usage:
                                # decision table per profile, net-of-cost (+funding)
     python main.py reset       # clear trades/funnel/signals, keep shadow data, new epoch
     python main.py report      # read-only Governor system report (add --telegram to send)
+    python main.py edge        # read-only edge diagnosis (clipping + BE/laddering drag)
     python main.py telegram-test   # in-container Telegram diagnostic (getMe + send)
 
 All configuration comes from the environment / .env (see .env.example).
@@ -74,6 +75,10 @@ def main(argv: list) -> int:
         from aurvex.governor import run_report
         want_tg = "--telegram" in argv[1:]
         return run_report(cfg, telegram=want_tg)
+
+    if cmd == "edge":
+        from aurvex.edge_analysis import run_edge_report
+        return run_edge_report(cfg)
 
     if cmd == "balance-reset":
         return _run_balance_reset(cfg)
