@@ -32,40 +32,13 @@ from ..config import load_config
 from ..accounting import compute_accounting
 from ..metrics import compute_metrics
 from ..models import now_ms
-from ..shadow import ShadowLearner
+from ..shadow import ShadowLearner, missed_reason_bucket
 from ..storage import Storage
 
-
-def _missed_reason_bucket(reason: str) -> str:
-    """Normalise a free-text reject reason into a stable missed-opportunity bucket.
-
-    Observe-only: groups the engine's reject reasons so the dashboard can show
-    WHICH constraint turned a (later-resolved) signal away. Order matters —
-    "exposure cap" is checked before the generic notional/min checks because the
-    exposure-cap reason also mentions notional.
-    """
-    r = (reason or "").lower()
-    if not r:
-        return "other"
-    if "exposure cap" in r:
-        return "exposure_cap"
-    if "< min" in r or "min notional" in r:
-        return "min_notional"
-    if "no free margin" in r:
-        return "no_free_margin"
-    if "collapses under margin" in r:
-        return "margin_collapse"
-    if "lower score than selected" in r:
-        return "not_selected"
-    if r.startswith("score "):
-        return "score_threshold"
-    if "spread" in r:
-        return "spread"
-    if "slippage" in r:
-        return "slippage"
-    if "stop dist" in r:
-        return "stop_distance"
-    return "other"
+# The canonical reason bucketer now lives in shadow.py (so the governor + shadow
+# aggregation can share it without importing Flask). Re-exported here under the
+# original private name for backward compatibility with existing callers/tests.
+_missed_reason_bucket = missed_reason_bucket
 
 
 def _trade_dict(t, balance: float = 0.0) -> Dict[str, Any]:
@@ -472,6 +445,69 @@ def create_app(cfg=None) -> Flask:
         payload["verdict"] = shadow.predictivity_verdict()
         payload["risk_modulation_enabled"] = cfg.risk_modulation_enabled
         return jsonify(payload)
+
+    @app.route("/api/receipts")
+    def receipts():
+        """Consolidated Decision Receipts for recent opens + important rejections.
+
+        Every field is already in the Trade / signal-event metadata — this only
+        consolidates and renders. Read-only; decides nothing.
+        """
+        from ..models import Decision
+        from ..receipt import opened_receipt, rejected_receipt
+
+        balance = db.get_balance()
+        opened = []
+        for t in db.get_open_trades(mode=cfg.mode):
+            opened.append(opened_receipt(t, balance=balance, cfg=cfg))
+        for t in db.get_closed_trades(limit=20, mode=cfg.mode):
+            opened.append(opened_receipt(t, balance=balance, cfg=cfg))
+
+        rejected = []
+        for s in db.recent_signals(limit=120):
+            if s.get("decision") != "REJECT":
+                continue
+            try:
+                meta = json.loads(s.get("metadata") or "{}")
+            except (TypeError, ValueError):
+                meta = {}
+            d = Decision(
+                symbol=s.get("symbol", ""), side=s.get("side", ""),
+                setup_type=s.get("setup_type", ""), score=s.get("score", 0.0) or 0.0,
+                decision="REJECT", failed_stage=s.get("failed_stage", ""),
+                reject_reason=s.get("reject_reason", ""), metadata=meta)
+            rejected.append(rejected_receipt(d, cfg=cfg))
+
+        return jsonify({"opened": opened[:40], "rejected": rejected[:40]})
+
+    @app.route("/api/shadow_basis")
+    def shadow_basis_view():
+        """Proxy (quick) vs full-ladder (replay) shadow bases, side by side."""
+        from ..receipt import shadow_basis
+        st = shadow.stats()
+        proxy_stats = {
+            "resolved_total": st.get("resolved_total", 0),
+            "by_setup": st.get("by_setup", []),
+            "basis": st.get("basis", ""),
+        }
+        return jsonify(shadow_basis(proxy_stats))
+
+    @app.route("/api/missed_opportunity")
+    def missed_opportunity():
+        """Per-reason missed-opportunity OUTCOME breakdown (count/avgR/winrate/PF).
+
+        Aggregates resolved shadows that did NOT open as trades — risk/filter
+        rejects AND tradeable candidates that lost the slot race — by reason, plus
+        a label-only quality C/D bucket. Empty buckets report insufficient_data.
+
+        Purpose: this is the evidence required BEFORE anyone considers raising
+        slots or leverage. No auto-adjustment is made anywhere from these numbers.
+        """
+        return jsonify({
+            "note": "Evidence only — required before raising slots/leverage. "
+                    "No auto-adjustment. quality_C_D is a LABEL, not a gate.",
+            "buckets": shadow.missed_opportunity_outcomes(),
+        })
 
     @app.route("/api/quality")
     def quality_panel():

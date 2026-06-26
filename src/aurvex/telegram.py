@@ -227,6 +227,17 @@ class BaseNotifier:
             lines.append(f"score: {_esc(predictivity.get('label', ''))}")
         self.send("\n".join(lines))
 
+    def decision_receipt(self, receipt: Dict[str, Any]) -> None:
+        """Send a concise, secrets-free Decision Receipt block (one per event).
+
+        The receipt dict is built by ``aurvex.receipt`` from data already on the
+        Trade / Decision. Every dynamic field is HTML-escaped; no token/chat id is
+        ever interpolated.
+        """
+        from .receipt import telegram_lines
+        lines = [_esc(line) for line in telegram_lines(receipt)]
+        self.send("\n".join(lines))
+
     def critical(self, message: str) -> None:
         self.send(f"\U0001F6A8 CRITICAL\n{message}")
 

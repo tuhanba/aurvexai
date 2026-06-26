@@ -266,6 +266,37 @@ def test_esc_escapes_html_special_chars():
     assert _esc("x > 1") == "x &gt; 1"
 
 
+# ---------------------------------------------------------------------------
+# Decision Receipt — concise Telegram block (Phase 4)
+# ---------------------------------------------------------------------------
+
+def test_decision_receipt_opened_block_no_secrets():
+    from aurvex.receipt import opened_receipt
+    n = Cap()
+    r = opened_receipt(_trade(), balance=200.0, cfg=None)
+    n.decision_receipt(r)
+    txt = n.last
+    assert "RECEIPT" in txt
+    assert "OPEN" in txt
+    assert "ETHUSDT" in txt
+    # No secret-like substrings.
+    assert FAKE_TOKEN not in txt
+    assert FAKE_CHAT not in txt
+
+
+def test_decision_receipt_rejected_block_renders():
+    from aurvex.receipt import rejected_receipt
+    from aurvex.models import Decision, LONG as _LONG
+    n = Cap()
+    d = Decision(symbol="BTCUSDT", side=_LONG, setup_type="aurvex_enhanced",
+                 score=70.0, decision="REJECT", failed_stage="risk",
+                 reject_reason="no free margin within reserve")
+    n.decision_receipt(rejected_receipt(d, cfg=None))
+    txt = n.last
+    assert "RECEIPT" in txt and "REJECT" in txt
+    assert "no_free_margin" in txt
+
+
 def test_no_secret_in_trade_opened_via_real_notifier():
     """Route trade_opened through TelegramNotifier to prove parse_mode is added
     and the token/chat_id never appear in the captured payload."""

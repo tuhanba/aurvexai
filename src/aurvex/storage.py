@@ -392,6 +392,16 @@ class Storage:
                 reason TEXT
             );
         """)
+        # Observe-only LABEL side table (additive): the quality grade attached to
+        # each shadowed signal at track time. Lets the missed-opportunity outcome
+        # breakdown report a "quality C/D" bucket WITHOUT the grade ever being a
+        # gate. Kept out of the shadows table so its positional layout is intact.
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS shadow_quality (
+                shadow_id TEXT PRIMARY KEY,
+                grade TEXT
+            );
+        """)
         # The unique index dedups new-epoch rows. Legacy rows have signal_bar_ts=0
         # but SQLite treats every NULL/0 group key independently only for NULLs;
         # to avoid a build failure on a contaminated legacy table we create the
@@ -644,8 +654,28 @@ class Storage:
                 self.conn.execute(
                     "INSERT OR REPLACE INTO shadow_reject_reason(shadow_id, reason) "
                     "VALUES(?,?)", (row["id"], reason))
+            grade = (row.get("quality_grade") or "").strip()
+            if grade:
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO shadow_quality(shadow_id, grade) "
+                    "VALUES(?,?)", (row["id"], grade))
         self.conn.commit()
         return inserted
+
+    def set_shadow_reject_reason(self, shadow_id: str, reason: str) -> None:
+        """Observe-only: stamp/replace the reason bucket for an existing shadow.
+
+        Used by the engine to record WHY a tradeable (ALLOW) candidate did not
+        actually open — e.g. it lost the slot race (max_open_trades) — so the
+        missed-opportunity outcome breakdown can measure what that miss cost.
+        Pure metadata: never affects sizing or the decision path.
+        """
+        if not shadow_id or not reason:
+            return
+        self.conn.execute(
+            "INSERT OR REPLACE INTO shadow_reject_reason(shadow_id, reason) "
+            "VALUES(?,?)", (shadow_id, reason.strip()))
+        self.conn.commit()
 
     def insert_shadow_ab(self, row: Dict[str, Any]) -> None:
         """Log a champion/challenger A/B entry for a resolved shadow episode."""
