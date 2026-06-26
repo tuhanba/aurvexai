@@ -509,6 +509,71 @@ def create_app(cfg=None) -> Flask:
             "buckets": shadow.missed_opportunity_outcomes(),
         })
 
+    @app.route("/api/system_state")
+    def system_state():
+        """Single-glance System State panel + dashboard security posture.
+
+        Read-only. Surfaces the active mode/profile/policy and confirms the safety
+        stances (live disabled, shadow observer, governor report-only, quality
+        label-only). The security block reports the host binding and whether the
+        dashboard is publicly reachable, and RECOMMENDS (never silently changes) a
+        safer posture. No secret is ever included.
+        """
+        hb = db.get_heartbeat("engine")
+        hb_data = dict(hb.get("status") or {}) if hb else {}
+        hb_ts = int(hb.get("ts", 0)) if hb else 0
+        alive = bool(hb_ts and (now_ms() - hb_ts) < 120_000)
+
+        epoch_meta = db.get_meta("epoch")
+        epoch_label = (epoch_meta.get("label", "unknown")
+                       if isinstance(epoch_meta, dict) else "unknown")
+
+        host = cfg.dashboard_host
+        publicly_reachable = host in ("0.0.0.0", "::", "")
+        if publicly_reachable:
+            sec_reco = ("Dashboard binds all interfaces — bind DASHBOARD_HOST to "
+                        "127.0.0.1 and reach it via SSH tunnel, or put it behind a "
+                        "reverse proxy with auth/HTTPS; add a firewall allowlist.")
+        else:
+            sec_reco = ("Bound to a specific host; still prefer an SSH tunnel or an "
+                        "authenticated reverse proxy + firewall allowlist for access.")
+
+        return jsonify({
+            "engine": {"alive": alive, "kill_switch": bool(hb_data.get("kill_switch", False))},
+            "mode": cfg.mode,
+            "live": "disabled" if not cfg.live_enabled else "ENABLED",
+            "live_enabled": cfg.live_enabled,
+            "risk_profile": cfg.risk_profile,
+            "balance": round(db.get_balance(), 4),
+            "initial_balance": cfg.initial_paper_balance,
+            "risk_pct": cfg.risk_pct,
+            "risk_band": [cfg.min_risk_pct, cfg.max_risk_pct],
+            "daily_loss_limit_pct": cfg.max_daily_loss_pct,
+            "max_open_trades": cfg.max_open_trades,
+            "shadow": "observer (report-only)",
+            "shadow_apply": cfg.shadow_apply,
+            "governor": cfg.governor_mode,
+            "quality_layer": "label_only",
+            "score_as_gate": cfg.score_as_gate,
+            "risk_modulation_enabled": cfg.risk_modulation_enabled,
+            "leverage_policy": cfg.leverage_policy,
+            "data_quality": {
+                "provider": cfg.data_provider,
+                "ltf": cfg.ltf, "htf": cfg.htf,
+                "data_age_ms": hb_data.get("data_age_ms"),
+                "cycle_ms": hb_data.get("cycle_ms"),
+            },
+            "epoch": epoch_label,
+            "security": {
+                "dashboard_host": host,
+                "dashboard_port": cfg.dashboard_port,
+                "publicly_reachable": publicly_reachable,
+                "write_controls": "none (dashboard is strictly read-only)",
+                "secret_exposure": "none (no token/key/chat-id in any endpoint)",
+                "recommendation": sec_reco,
+            },
+        })
+
     @app.route("/api/setup_health")
     def setup_health_panel():
         """REPORT-ONLY per-setup health + risk-throttle suggestion.
