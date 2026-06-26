@@ -121,14 +121,27 @@ def _run_walkforward(cfg) -> int:
 
 
 def _run_reset(cfg) -> int:
-    """Clear trading data, preserve shadow learner rows, seed a new epoch."""
-    from aurvex.storage import Storage
+    """Clear trading data, preserve shadow learner rows, seed a new epoch.
+
+    Writes a redacted rollback artifact (env_redacted, config snapshot, git HEAD,
+    DB backup) BEFORE clearing anything, so the prior epoch is always recoverable.
+    """
+    from aurvex.storage import Storage, write_rollback_artifact
 
     print("=== AurvexAI Epoch Reset ===")
     print(f"DB             : {cfg.db_path}")
     print(f"Shadows        : KEPT (learning history preserved)")
     print(f"Trades / funnel / signals / ledger : CLEARED")
     print(f"New balance    : {cfg.initial_paper_balance} USDT")
+    print()
+
+    # Rollback artifact first — never delete an existing backup; failure here must
+    # not block the reset, but we surface the path so it can be used to roll back.
+    try:
+        art_dir = write_rollback_artifact(cfg, cfg.db_path, epoch_label=cfg.epoch_label)
+        print(f"✓ Rollback artifact : {art_dir}")
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"! Rollback artifact FAILED (continuing reset): {exc}")
     print()
 
     db = Storage(cfg.db_path)
