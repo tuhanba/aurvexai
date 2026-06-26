@@ -21,11 +21,124 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import sqlite3
+import subprocess
 import time
+from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, List, Optional
 
 from .models import (CLOSED, OPEN, Trade, TPTarget, FunnelStats, Decision, new_id)
+
+
+# Env keys / Config field names whose VALUES are secrets and must be redacted
+# from any rollback artifact. Matches the task spec (*KEY*/*TOKEN*/*SECRET*) plus
+# the human-confirm token and chat id (treated as sensitive, never trade-relevant).
+_SECRET_KEY_RE = re.compile(r"KEY|TOKEN|SECRET|CONFIRM|CHAT_ID", re.IGNORECASE)
+
+
+def _git_head(repo_dir: str) -> Dict[str, str]:
+    """Best-effort current git HEAD SHA + branch. Never raises."""
+    def _run(args: List[str]) -> str:
+        try:
+            out = subprocess.run(args, cwd=repo_dir, capture_output=True,
+                                 text=True, timeout=10)
+            return out.stdout.strip() if out.returncode == 0 else ""
+        except Exception:
+            return ""
+    return {
+        "sha": _run(["git", "rev-parse", "HEAD"]) or "unknown",
+        "branch": _run(["git", "rev-parse", "--abbrev-ref", "HEAD"]) or "unknown",
+    }
+
+
+def _redact_env_text(text: str) -> str:
+    """Redact secret VALUES from raw .env text, preserving keys + comments.
+
+    A line ``KEY=value`` whose KEY matches the secret pattern has its value
+    replaced with ``<redacted>``. Comment / blank / non-assignment lines pass
+    through untouched so the artifact stays human-readable for a rollback.
+    """
+    out_lines: List[str] = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            out_lines.append(line)
+            continue
+        key = line.split("=", 1)[0].strip()
+        if _SECRET_KEY_RE.search(key):
+            out_lines.append(f"{key}=<redacted>")
+        else:
+            out_lines.append(line)
+    return "\n".join(out_lines) + ("\n" if text.endswith("\n") else "")
+
+
+def _redact_config(cfg: Any) -> Dict[str, Any]:
+    """Resolved-config dict with secret fields excluded (replaced by <redacted>)."""
+    raw = asdict(cfg) if is_dataclass(cfg) else dict(getattr(cfg, "__dict__", {}))
+    redacted: Dict[str, Any] = {}
+    for k, v in raw.items():
+        if _SECRET_KEY_RE.search(k):
+            redacted[k] = "<redacted>" if v else ""
+        else:
+            redacted[k] = v
+    return redacted
+
+
+def write_rollback_artifact(cfg: Any, db_path: str, *, epoch_label: str = "epoch",
+                            backups_root: str = "backups",
+                            env_path: str = ".env") -> str:
+    """Write a redacted rollback artifact BEFORE an epoch reset clears anything.
+
+    Produces ``<backups_root>/<epoch_label>_<ts>/`` containing:
+      * ``env_redacted.txt``   — copy of ``.env`` with secret values redacted
+      * ``config_snapshot.json`` — resolved Config (secret fields excluded)
+      * ``git_head.json``      — current HEAD SHA + branch
+      * ``db_backup/``         — copy of the SQLite DB file (+ WAL/SHM if present)
+
+    Never deletes or overwrites an existing backup (the ``<ts>`` makes the dir
+    unique). Returns the artifact directory path. This is the one explicit
+    rollback piece the plain reset did not previously produce; it is read-only
+    with respect to the live DB (it only copies it).
+    """
+    ts = int(time.time() * 1000)
+    art_dir = os.path.join(backups_root, f"{epoch_label}_{ts}")
+    os.makedirs(art_dir, exist_ok=True)
+
+    # 1) Redacted .env copy (skip silently if no .env on this host).
+    if env_path and os.path.exists(env_path):
+        try:
+            with open(env_path, "r", encoding="utf-8") as fh:
+                env_text = fh.read()
+            with open(os.path.join(art_dir, "env_redacted.txt"), "w",
+                      encoding="utf-8") as fh:
+                fh.write(_redact_env_text(env_text))
+        except Exception:
+            pass
+
+    # 2) Resolved Config snapshot (secrets excluded).
+    with open(os.path.join(art_dir, "config_snapshot.json"), "w",
+              encoding="utf-8") as fh:
+        json.dump(_redact_config(cfg), fh, indent=2, default=str, sort_keys=True)
+
+    # 3) git HEAD SHA + branch.
+    repo_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    with open(os.path.join(art_dir, "git_head.json"), "w", encoding="utf-8") as fh:
+        json.dump(_git_head(repo_dir), fh, indent=2)
+
+    # 4) DB backup (copy, never move). Include WAL/SHM so the snapshot is complete.
+    db_backup_dir = os.path.join(art_dir, "db_backup")
+    os.makedirs(db_backup_dir, exist_ok=True)
+    for suffix in ("", "-wal", "-shm"):
+        src = db_path + suffix
+        if os.path.exists(src):
+            try:
+                shutil.copy2(src, os.path.join(db_backup_dir, os.path.basename(src)))
+            except Exception:
+                pass
+
+    return art_dir
 
 
 SCHEMA = """
@@ -165,8 +278,19 @@ def _row_to_trade(r: sqlite3.Row) -> Trade:
 
 
 class Storage:
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, read_only: bool = False):
         self.db_path = db_path
+        self.read_only = read_only
+        if read_only:
+            # Structural read-only: open the SQLite file in mode=ro so ANY write
+            # attempt raises. No schema create, no migration, no PRAGMA writes.
+            # Used by the Governor (a separate read-only reporting process) so it
+            # cannot — by construction — mutate trades, config, risk or live state.
+            uri = f"file:{os.path.abspath(db_path)}?mode=ro"
+            self.conn = sqlite3.connect(uri, uri=True, check_same_thread=False,
+                                        timeout=30)
+            self.conn.row_factory = sqlite3.Row
+            return
         d = os.path.dirname(db_path)
         if d:
             os.makedirs(d, exist_ok=True)
@@ -277,6 +401,16 @@ class Storage:
             CREATE TABLE IF NOT EXISTS shadow_reject_reason (
                 shadow_id TEXT PRIMARY KEY,
                 reason TEXT
+            );
+        """)
+        # Observe-only LABEL side table (additive): the quality grade attached to
+        # each shadowed signal at track time. Lets the missed-opportunity outcome
+        # breakdown report a "quality C/D" bucket WITHOUT the grade ever being a
+        # gate. Kept out of the shadows table so its positional layout is intact.
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS shadow_quality (
+                shadow_id TEXT PRIMARY KEY,
+                grade TEXT
             );
         """)
         # The unique index dedups new-epoch rows. Legacy rows have signal_bar_ts=0
@@ -531,8 +665,28 @@ class Storage:
                 self.conn.execute(
                     "INSERT OR REPLACE INTO shadow_reject_reason(shadow_id, reason) "
                     "VALUES(?,?)", (row["id"], reason))
+            grade = (row.get("quality_grade") or "").strip()
+            if grade:
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO shadow_quality(shadow_id, grade) "
+                    "VALUES(?,?)", (row["id"], grade))
         self.conn.commit()
         return inserted
+
+    def set_shadow_reject_reason(self, shadow_id: str, reason: str) -> None:
+        """Observe-only: stamp/replace the reason bucket for an existing shadow.
+
+        Used by the engine to record WHY a tradeable (ALLOW) candidate did not
+        actually open — e.g. it lost the slot race (max_open_trades) — so the
+        missed-opportunity outcome breakdown can measure what that miss cost.
+        Pure metadata: never affects sizing or the decision path.
+        """
+        if not shadow_id or not reason:
+            return
+        self.conn.execute(
+            "INSERT OR REPLACE INTO shadow_reject_reason(shadow_id, reason) "
+            "VALUES(?,?)", (shadow_id, reason.strip()))
+        self.conn.commit()
 
     def insert_shadow_ab(self, row: Dict[str, Any]) -> None:
         """Log a champion/challenger A/B entry for a resolved shadow episode."""

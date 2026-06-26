@@ -35,6 +35,44 @@ SL = "SL"
 EXPIRED = "EXPIRED"
 
 
+def missed_reason_bucket(reason: str) -> str:
+    """Normalise a free-text reject/slot-loss reason into a stable bucket.
+
+    Observe-only: groups the engine's reasons so the dashboard + governor can
+    show WHICH constraint turned a (later-resolved) signal away. Order matters —
+    "exposure cap" is checked before the generic notional/min checks because the
+    exposure-cap reason also mentions notional.
+    """
+    r = (reason or "").lower()
+    if not r:
+        return "other"
+    if "max_open_trades" in r or "max open" in r or "slots_full" in r:
+        return "max_open_trades"
+    if "cluster_cap" in r:
+        return "cluster_cap"
+    if "same_side_cap" in r:
+        return "same_side_cap"
+    if "exposure cap" in r or "exposure_cap" in r:
+        return "exposure_cap"
+    if "< min" in r or "min notional" in r:
+        return "min_notional"
+    if "no free margin" in r:
+        return "no_free_margin"
+    if "collapses under margin" in r:
+        return "margin_collapse"
+    if "lower score than selected" in r or "not_selected" in r:
+        return "not_selected"
+    if r.startswith("score "):
+        return "score_threshold"
+    if "spread" in r:
+        return "spread"
+    if "slippage" in r:
+        return "slippage"
+    if "stop dist" in r:
+        return "stop_distance"
+    return "other"
+
+
 class ShadowLearner:
     def __init__(self, cfg: Config, storage: Storage):
         self.cfg = cfg
@@ -92,6 +130,9 @@ class ShadowLearner:
             # Observe-only: copy the engine's reject reason so resolved rejected
             # shadows can be grouped by reason on the dashboard. "" for paper rows.
             "reject_reason": (decision.reject_reason or "") if source != "paper" else "",
+            # Observe-only LABEL: the quality grade (A/B/C/D), copied from decision
+            # metadata. Enables the quality C/D missed-opportunity bucket; never a gate.
+            "quality_grade": (decision.metadata or {}).get("quality_grade", ""),
         })
         return sid if inserted else None
 
@@ -558,6 +599,96 @@ class ShadowLearner:
         if rows["n"] == 0:
             return None
         return float(rows["r"])
+
+    def missed_opportunity_outcomes(self, epoch: Optional[str] = None
+                                    ) -> Dict[str, Dict[str, Any]]:
+        """Per-reason missed-opportunity OUTCOME breakdown (decision-grade).
+
+        For every resolved shadow that did NOT become an open trade — risk/filter
+        rejects AND tradeable candidates that lost the slot race — aggregates the
+        realised result by reason bucket:
+
+            count, avg_r, win_pct, pf_estimate
+
+        Plus a label-only ``missed_by_quality_C_D`` bucket over resolved rejected
+        shadows graded C or D (from the LABEL, never a gate). Empty buckets report
+        ``insufficient_data`` rather than a misleading zero.
+
+        This is the evidence required BEFORE anyone considers raising slots or
+        leverage. Read-only: it never adjusts anything.
+        """
+        ep = epoch if epoch is not None else self._current_epoch()
+        # Resolved, non-opened shadows that carry a reason bucket. Rejected rows
+        # have risk/filter reasons; slot-lost paper rows are stamped by the engine.
+        rows = self.db.conn.execute(
+            "SELECT s.outcome AS outcome, s.r_multiple AS r, rr.reason AS reason, "
+            "q.grade AS grade, s.source AS source "
+            "FROM shadows s "
+            "LEFT JOIN shadow_reject_reason rr ON rr.shadow_id = s.id "
+            "LEFT JOIN shadow_quality q ON q.shadow_id = s.id "
+            "WHERE s.outcome != ? AND s.epoch = ?",
+            (OPEN, ep)).fetchall()
+
+        buckets: Dict[str, List[Dict[str, Any]]] = {}
+        for r in rows:
+            reason = r["reason"]
+            if reason:
+                buckets.setdefault(missed_reason_bucket(reason), []).append(dict(r))
+            # Label-only quality bucket: weak-graded MISSES (rejected rows).
+            if r["source"] == "rejected" and r["grade"] in ("C", "D"):
+                buckets.setdefault("quality_C_D", []).append(dict(r))
+
+        def _agg(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+            n = len(items)
+            if n == 0:
+                return {"count": 0, "avg_r": None, "win_pct": None,
+                        "pf_estimate": None, "note": "insufficient_data"}
+            rs = [float(it["r"] or 0.0) for it in items]
+            wins = sum(1 for it in items if it["outcome"] == TP)
+            gp = sum(x for x in rs if x > 0)
+            gl = abs(sum(x for x in rs if x < 0))
+            pf = round(gp / gl, 2) if gl > 0 else None
+            return {
+                "count": n,
+                "avg_r": round(sum(rs) / n, 3),
+                "win_pct": round(wins / n * 100.0, 1),
+                "pf_estimate": pf,
+            }
+
+        # Always surface the canonical buckets the report cites, even when empty.
+        canonical = ["max_open_trades", "no_free_margin", "spread",
+                     "quality_C_D", "not_selected"]
+        out: Dict[str, Dict[str, Any]] = {}
+        for b in canonical:
+            out[b] = _agg(buckets.get(b, []))
+        # Plus any other observed buckets (exposure_cap, min_notional, ...).
+        for b, items in buckets.items():
+            if b not in out:
+                out[b] = _agg(items)
+        return out
+
+    def setup_outcome_summary(self, setup: str,
+                              epoch: Optional[str] = None) -> Dict[str, Any]:
+        """Resolved-shadow outcome summary for one setup, current epoch by default.
+
+        Read-only helper consumed by the LABEL-ONLY quality grader: returns the
+        net avg R, win rate and resolved sample size so the grade can reflect the
+        setup's MEASURED recent edge. Never influences sizing or the decision.
+        """
+        ep = epoch if epoch is not None else self._current_epoch()
+        row = self.db.conn.execute(
+            "SELECT COUNT(*) AS n, COALESCE(AVG(r_multiple),0) AS avg_r, "
+            "SUM(CASE WHEN outcome=? THEN 1 ELSE 0 END) AS wins FROM shadows "
+            "WHERE outcome != ? AND setup_type=? AND epoch=?",
+            (TP, OPEN, setup, ep)).fetchone()
+        n = int(row["n"]) if row else 0
+        if n == 0:
+            return {"n": 0, "avg_r": None, "win_pct": None}
+        return {
+            "n": n,
+            "avg_r": float(row["avg_r"]),
+            "win_pct": round(int(row["wins"] or 0) / n * 100.0, 1),
+        }
 
     def score_delta(self, setup: str) -> float:
         """Advisory score nudge in [-5, +5] based on realised edge. Soft stage+.

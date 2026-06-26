@@ -272,6 +272,18 @@ tr:last-child td{border-bottom:none}
     </div>
   </div>
 
+  <!-- System State + Security posture -->
+  <div class="grid g2">
+    <div class="card">
+      <div class="card-title">System State</div>
+      <div id="sysState" style="font-size:12px;line-height:1.9"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Security posture (read-only dashboard)</div>
+      <div id="secPosture" style="font-size:12px;line-height:1.9"></div>
+    </div>
+  </div>
+
   <!-- Activity section -->
   <div class="section-label">Activity</div>
 
@@ -362,6 +374,33 @@ tr:last-child td{border-bottom:none}
     </div>
   </div>
 
+  <!-- Observability (label-only / report-only) -->
+  <div class="grid g3">
+    <div class="card">
+      <div class="card-title">Quality grade (LABEL ONLY — blocks nothing)</div>
+      <div id="qualityPanel" style="font-size:12px;line-height:1.9"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Missed-opportunity outcomes (evidence only)</div>
+      <div class="tbl-wrap" style="max-height:240px;overflow-y:auto">
+        <table id="missedTbl">
+          <thead><tr><th>bucket</th><th>n</th><th>avgR</th><th>win%</th><th>PF</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Setup health + risk throttle (REPORT-ONLY)</div>
+      <div class="tbl-wrap" style="max-height:200px;overflow-y:auto">
+        <table id="setupHealthTbl">
+          <thead><tr><th>setup</th><th>n</th><th>avgR</th><th>status</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="kpi-sub" id="throttleNote" style="margin-top:8px;font-size:10px">—</div>
+    </div>
+  </div>
+
   <!-- Diagnostics section -->
   <div class="section-label">Diagnostics</div>
 
@@ -408,12 +447,14 @@ async function getJSON(u){const r=await fetch(u);return r.json();}
 
 async function refresh(){
   try{
-    const [st,fn,me,op,cl,sg,sh,ac,tg,pm,sv] = await Promise.all([
+    const [st,fn,me,op,cl,sg,sh,ac,tg,pm,sv,ss,qp,mo,shl] = await Promise.all([
       getJSON('/api/status'), getJSON('/api/funnel'), getJSON('/api/metrics'),
       getJSON('/api/trades/open'), getJSON('/api/trades/closed'),
       getJSON('/api/signals'), getJSON('/api/shadow'),
       getJSON('/api/accounting'), getJSON('/api/telegram'),
-      getJSON('/api/portfolio_metrics'), getJSON('/api/score_validity')
+      getJSON('/api/portfolio_metrics'), getJSON('/api/score_validity'),
+      getJSON('/api/system_state'), getJSON('/api/quality'),
+      getJSON('/api/missed_opportunity'), getJSON('/api/setup_health')
     ]);
 
     // ── Header pills ──
@@ -711,6 +752,64 @@ async function refresh(){
     document.getElementById('tgHealthy').className = 'row-val '+(tg.healthy?'pos':tg.healthy===false?'neg':'neu');
     document.getElementById('tgBot').textContent = tg.bot_username?('@'+tg.bot_username):'—';
     document.getElementById('tgSends').textContent = (tg.sends_ok||0)+' ok / '+(tg.sends_failed||0)+' fail';
+
+    // ── System State ──
+    const row = (k,v)=>`<div><span class="row-label">${k} </span><span class="row-val">${v}</span></div>`;
+    document.getElementById('sysState').innerHTML = [
+      row('engine', ss.engine&&ss.engine.alive?'alive':'down'),
+      row('mode', (ss.mode||'paper').toUpperCase()),
+      row('live', ss.live),
+      row('risk profile', ss.risk_profile),
+      row('balance', fmt(ss.balance,2)+' USDT'),
+      row('risk %', ss.risk_pct+'% (band '+(ss.risk_band||[]).join('–')+')'),
+      row('daily loss limit', ss.daily_loss_limit_pct+'%'),
+      row('shadow', ss.shadow),
+      row('governor', ss.governor),
+      row('quality layer', ss.quality_layer),
+      row('leverage policy', ss.leverage_policy),
+      row('epoch', ss.epoch)
+    ].join('');
+    const sec = ss.security||{};
+    document.getElementById('secPosture').innerHTML = [
+      row('dashboard host', sec.dashboard_host),
+      row('publicly reachable', sec.publicly_reachable?'<span class="neg">YES</span>':'<span class="pos">no</span>'),
+      row('write controls', sec.write_controls),
+      row('secret exposure', sec.secret_exposure),
+      `<div class="kpi-sub" style="margin-top:8px;font-size:10px;line-height:1.5">${sec.recommendation||''}</div>`
+    ].join('');
+
+    // ── Quality grade (label only) ──
+    const qd = (qp&&qp.distribution)||{A:0,B:0,C:0,D:0};
+    const qr = (qp&&qp.realised_by_grade)||{};
+    document.getElementById('qualityPanel').innerHTML =
+      ['A','B','C','D'].map(g=>{
+        const rb = qr[g]||{};
+        const rinfo = rb.note?rb.note:(`avgR ${fmt(rb.avg_r,2)} · win ${fmt(rb.win_pct,0)}% (n=${rb.n})`);
+        return row('grade '+g, (qd[g]||0)+' · '+rinfo);
+      }).join('') +
+      `<div class="kpi-sub" style="margin-top:8px;font-size:10px">LABEL ONLY — blocks/routes nothing.</div>`;
+
+    // ── Missed-opportunity outcomes ──
+    const mb = (mo&&mo.buckets)||{};
+    document.querySelector('#missedTbl tbody').innerHTML =
+      Object.keys(mb).map(k=>{
+        const b=mb[k];
+        if(b.note) return `<tr><td>${k}</td><td colspan="4" style="color:var(--muted)">${b.note}</td></tr>`;
+        return `<tr><td>${k}</td><td>${b.count}</td>
+          <td class="${cls(b.avg_r)}">${fmt(b.avg_r,2)}</td>
+          <td>${fmt(b.win_pct,0)}%</td><td>${b.pf_estimate==null?'—':fmt(b.pf_estimate,2)}</td></tr>`;
+      }).join('') || '<tr><td colspan="5" style="color:var(--muted)">none</td></tr>';
+
+    // ── Setup health + throttle (report-only) ──
+    const shRows = (shl&&shl.setups)||[];
+    document.querySelector('#setupHealthTbl tbody').innerHTML =
+      shRows.map(r=>`<tr><td>${r.setup}</td><td>${r.n}</td>
+        <td class="${cls(r.avg_r)}">${r.avg_r==null?'—':fmt(r.avg_r,2)}</td>
+        <td>${r.status}</td></tr>`).join('')
+      || '<tr><td colspan="4" style="color:var(--muted)">none</td></tr>';
+    const thr = (shl&&shl.risk_throttle)||{};
+    document.getElementById('throttleNote').textContent =
+      'risk throttle ('+(thr.mode||'report_only')+', applied='+(thr.applied===false?'false':thr.applied)+'): '+(thr.suggestion||'—');
 
   } catch(e){ console.error(e); }
   document.getElementById('clockTxt').textContent = new Date().toLocaleTimeString();

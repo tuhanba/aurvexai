@@ -78,6 +78,74 @@ def _int_list(key: str, default: List[int]) -> List[int]:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Named risk profiles (config-only)
+# ---------------------------------------------------------------------------
+# A profile supplies the DEFAULTS for a few account-level knobs (balance,
+# risk %, risk band, daily-loss limit, slots, dashboard port). An explicit
+# environment variable ALWAYS wins over the profile default, so a deployment can
+# fine-tune any single knob without abandoning the profile.
+#
+# Profiles change only the sizing INPUTS (balance, risk_pct, daily-loss budget);
+# they NEVER touch DecisionEngine.decide()'s allow/reject logic. Paper/live/
+# backtest parity is preserved because the executors all read the same Config.
+#
+#   aggressive_paper  (DEFAULT for the new epoch): 200 / 2% / 1-3% band / 10%
+#   conservative_paper (legacy paper defaults)   : 1000 / 0.5% / 0.25-1% / 3%
+_PROFILE_DEFAULTS: dict = {
+    "conservative_paper": {
+        "INITIAL_PAPER_BALANCE": 1000.0,
+        "RISK_PCT": 0.5,
+        "MIN_RISK_PCT": 0.25,
+        "MAX_RISK_PCT": 1.0,
+        "MAX_DAILY_LOSS_PCT": 3.0,
+        "MAX_OPEN_TRADES": 4,
+        "DASHBOARD_PORT": 5000,
+    },
+    "aggressive_paper": {
+        "INITIAL_PAPER_BALANCE": 200.0,
+        "RISK_PCT": 2.0,
+        "MIN_RISK_PCT": 1.0,
+        "MAX_RISK_PCT": 3.0,
+        "MAX_DAILY_LOSS_PCT": 10.0,
+        "MAX_OPEN_TRADES": 4,
+        "DASHBOARD_PORT": 5000,
+    },
+}
+_DEFAULT_RISK_PROFILE = "aggressive_paper"
+
+
+def _active_profile() -> str:
+    p = _str("RISK_PROFILE", _DEFAULT_RISK_PROFILE).strip().lower()
+    return p if p in _PROFILE_DEFAULTS else _DEFAULT_RISK_PROFILE
+
+
+def _profile_default(key: str):
+    return _PROFILE_DEFAULTS[_active_profile()][key]
+
+
+def _pfloat(key: str) -> float:
+    """Profile-aware float: an explicit env value wins, else the profile default."""
+    v = os.getenv(key)
+    if v is not None and v != "":
+        try:
+            return float(v)
+        except ValueError:
+            pass
+    return float(_profile_default(key))
+
+
+def _pint(key: str) -> int:
+    """Profile-aware int: an explicit env value wins, else the profile default."""
+    v = os.getenv(key)
+    if v is not None and v != "":
+        try:
+            return int(v)
+        except ValueError:
+            pass
+    return int(_profile_default(key))
+
+
 @dataclass
 class Config:
     # -- Mode --------------------------------------------------------------
@@ -116,10 +184,19 @@ class Config:
     max_spread_pct: float = field(default_factory=lambda: _float("MAX_SPREAD_PCT", 0.06))
     max_slippage_pct: float = field(default_factory=lambda: _float("MAX_SLIPPAGE_PCT", 0.08))
 
+    # -- Risk profile (config-only; supplies the defaults below) ------------
+    # conservative_paper | aggressive_paper. Default aggressive_paper for the
+    # new epoch. Explicit env vars below always override the profile default.
+    risk_profile: str = field(default_factory=_active_profile)
+
     # -- Risk model --------------------------------------------------------
-    risk_pct: float = field(default_factory=lambda: _float("RISK_PCT", 0.5))   # % of balance per trade
-    max_open_trades: int = field(default_factory=lambda: _int("MAX_OPEN_TRADES", 4))
-    max_daily_loss_pct: float = field(default_factory=lambda: _float("MAX_DAILY_LOSS_PCT", 3.0))
+    risk_pct: float = field(default_factory=lambda: _pfloat("RISK_PCT"))   # % of balance per trade
+    # Risk band: sizing-relevant floor/ceiling for the per-trade risk %. The
+    # active risk_pct must sit within [min_risk_pct, max_risk_pct] (validated).
+    min_risk_pct: float = field(default_factory=lambda: _pfloat("MIN_RISK_PCT"))
+    max_risk_pct: float = field(default_factory=lambda: _pfloat("MAX_RISK_PCT"))
+    max_open_trades: int = field(default_factory=lambda: _pint("MAX_OPEN_TRADES"))
+    max_daily_loss_pct: float = field(default_factory=lambda: _pfloat("MAX_DAILY_LOSS_PCT"))
     max_portfolio_exposure_pct: float = field(
         default_factory=lambda: _float("MAX_PORTFOLIO_EXPOSURE_PCT", 200.0)
     )
@@ -176,7 +253,7 @@ class Config:
 
     # -- Paper account -----------------------------------------------------
     initial_paper_balance: float = field(
-        default_factory=lambda: _float("INITIAL_PAPER_BALANCE", 1000.0)
+        default_factory=lambda: _pfloat("INITIAL_PAPER_BALANCE")
     )
 
     # -- Engine loop -------------------------------------------------------
@@ -322,7 +399,7 @@ class Config:
     # to 127.0.0.1 via DASHBOARD_HOST env var and access through SSH tunnel
     # or a reverse proxy with auth/HTTPS.
     dashboard_host: str = field(default_factory=lambda: _str("DASHBOARD_HOST", "0.0.0.0"))
-    dashboard_port: int = field(default_factory=lambda: _int("DASHBOARD_PORT", 5000))
+    dashboard_port: int = field(default_factory=lambda: _pint("DASHBOARD_PORT"))
 
     # -- Telegram (secrets via env only) -----------------------------------
     telegram_enabled: bool = field(default_factory=lambda: _bool("TELEGRAM_ENABLED", True))
@@ -339,6 +416,25 @@ class Config:
     live_order_timeout_sec: float = field(default_factory=lambda: _float("LIVE_ORDER_TIMEOUT_SEC", 5.0))
     live_max_retries: int = field(default_factory=lambda: _int("LIVE_MAX_RETRIES", 2))
 
+    # -- Governor (read-only reporting; NEVER a runtime layer) -------------
+    # The Governor is a separate read-only command (`python main.py report`).
+    # These flags document its report-only intent, but the REAL guarantee is
+    # structural: it runs as its own process over a read-only DB connection and
+    # imports nothing from the order path. It never trades, writes config, sets
+    # any LIVE_*, or changes risk. Auto-apply of any recommendation is OFF.
+    governor_mode: str = field(default_factory=lambda: _str("GOVERNOR_MODE", "report_only"))
+    governor_can_trade: bool = field(
+        default_factory=lambda: _bool("GOVERNOR_CAN_TRADE", False))
+    governor_can_change_live: bool = field(
+        default_factory=lambda: _bool("GOVERNOR_CAN_CHANGE_LIVE", False))
+    governor_can_auto_apply: bool = field(
+        default_factory=lambda: _bool("GOVERNOR_CAN_AUTO_APPLY", False))
+    governor_requires_approval_for_risk_increase: bool = field(
+        default_factory=lambda: _bool("GOVERNOR_REQUIRES_APPROVAL_FOR_RISK_INCREASE", True))
+    # Setup-health / risk-throttle analyzers are REPORT-ONLY (Phase 6).
+    risk_throttle_mode: str = field(
+        default_factory=lambda: _str("RISK_THROTTLE_MODE", "report_only"))
+
     # -- Logging -----------------------------------------------------------
     log_level: str = field(default_factory=lambda: _str("LOG_LEVEL", "INFO"))
 
@@ -352,6 +448,13 @@ class Config:
             "trade_threshold must be >= watchlist_threshold"
         )
         assert 0 < self.risk_pct <= 5, "risk_pct out of sane range"
+        assert self.risk_profile in {"conservative_paper", "aggressive_paper"}, (
+            "RISK_PROFILE must be conservative_paper|aggressive_paper"
+        )
+        assert self.min_risk_pct <= self.risk_pct <= self.max_risk_pct <= 5, (
+            f"require min_risk_pct ({self.min_risk_pct}) <= risk_pct "
+            f"({self.risk_pct}) <= max_risk_pct ({self.max_risk_pct}) <= 5"
+        )
         assert self.mode in {"paper", "live"}, "AX_MODE must be 'paper' or 'live'"
         assert self.strategy_profile in {"bugra_replica", "aurvex_enhanced"}, (
             "STRATEGY_PROFILE must be bugra_replica|aurvex_enhanced"
@@ -365,6 +468,11 @@ class Config:
         assert 0.0 <= self.free_margin_reserve_pct <= 90.0, (
             "free_margin_reserve_pct must be in [0, 90]"
         )
+        # Governor guardrails: it is a read-only report, never an actor. These must
+        # stay false — the Governor has no trade/live/auto-apply authority.
+        assert not self.governor_can_trade, "GOVERNOR_CAN_TRADE must be false"
+        assert not self.governor_can_change_live, "GOVERNOR_CAN_CHANGE_LIVE must be false"
+        assert not self.governor_can_auto_apply, "GOVERNOR_CAN_AUTO_APPLY must be false"
 
     @property
     def is_live(self) -> bool:

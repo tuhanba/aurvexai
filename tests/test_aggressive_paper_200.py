@@ -26,6 +26,8 @@ def _aggr_cfg(tmp_path, profile="aurvex_enhanced") -> Config:
     c.telegram_enabled = False
     c.initial_paper_balance = 200.0
     c.risk_pct = 2.0
+    c.min_risk_pct = 1.0
+    c.max_risk_pct = 3.0
     c.max_daily_loss_pct = 10.0
     c.strategy_profile = profile
     c.trade_hours_utc = []
@@ -92,3 +94,104 @@ def test_paper_full_stop_realises_minus_one_R(tmp_path):
     budget = 200.0 * cfg.risk_pct / 100.0     # 4.00
     assert abs(t.realized_pnl + budget) <= 0.02 * budget
     assert abs(t.realized_pnl_pct + 1.0) <= 0.05
+
+
+# ---------------------------------------------------------------------------
+# Profile resolution (Phase 2): RISK_PROFILE drives the defaults; explicit env
+# always wins; the band assertion holds.
+# ---------------------------------------------------------------------------
+
+def _with_env(**env):
+    """Context-manager-ish helper: set env, return a restore callable."""
+    import os
+    saved = {k: os.environ.get(k) for k in env}
+    for k, v in env.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+    def restore():
+        for k, old in saved.items():
+            if old is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = old
+    return restore
+
+
+def test_default_profile_is_aggressive_paper():
+    """Unset RISK_PROFILE → aggressive_paper defaults (200 / 2% / 1-3% / 10%)."""
+    restore = _with_env(RISK_PROFILE=None, INITIAL_PAPER_BALANCE=None,
+                        RISK_PCT=None, MIN_RISK_PCT=None, MAX_RISK_PCT=None,
+                        MAX_DAILY_LOSS_PCT=None)
+    try:
+        c = Config()
+        assert c.risk_profile == "aggressive_paper"
+        assert c.initial_paper_balance == 200.0
+        assert c.risk_pct == 2.0
+        assert c.min_risk_pct == 1.0
+        assert c.max_risk_pct == 3.0
+        assert c.max_daily_loss_pct == 10.0
+        c.validate()  # band holds: 1.0 <= 2.0 <= 3.0 <= 5
+    finally:
+        restore()
+
+
+def test_conservative_profile_keeps_legacy_defaults():
+    restore = _with_env(RISK_PROFILE="conservative_paper", INITIAL_PAPER_BALANCE=None,
+                        RISK_PCT=None, MIN_RISK_PCT=None, MAX_RISK_PCT=None,
+                        MAX_DAILY_LOSS_PCT=None)
+    try:
+        c = Config()
+        assert c.risk_profile == "conservative_paper"
+        assert c.initial_paper_balance == 1000.0
+        assert c.risk_pct == 0.5
+        assert c.max_daily_loss_pct == 3.0
+        c.validate()
+    finally:
+        restore()
+
+
+def test_explicit_env_overrides_profile_default():
+    """An explicit RISK_PCT beats the aggressive profile default of 2.0."""
+    restore = _with_env(RISK_PROFILE="aggressive_paper", RISK_PCT="1.5",
+                        INITIAL_PAPER_BALANCE="500", MIN_RISK_PCT=None,
+                        MAX_RISK_PCT=None, MAX_DAILY_LOSS_PCT=None)
+    try:
+        c = Config()
+        assert c.risk_pct == 1.5                 # explicit wins
+        assert c.initial_paper_balance == 500.0  # explicit wins
+        assert c.min_risk_pct == 1.0             # still from profile
+        assert c.max_risk_pct == 3.0             # still from profile
+        c.validate()                             # 1.0 <= 1.5 <= 3.0 <= 5
+    finally:
+        restore()
+
+
+def test_band_assertion_rejects_risk_above_max():
+    import pytest
+    restore = _with_env(RISK_PROFILE="aggressive_paper", RISK_PCT="4.0",
+                        MIN_RISK_PCT=None, MAX_RISK_PCT=None)
+    try:
+        c = Config()         # risk_pct 4.0 > max_risk_pct 3.0
+        with pytest.raises(AssertionError):
+            c.validate()
+    finally:
+        restore()
+
+
+def test_leverage_invariant_holds_at_aggressive_balance(tmp_path):
+    """Same notional + stop ⇒ same PnL regardless of leverage (200/2% epoch)."""
+    cfg = _aggr_cfg(tmp_path)
+    rm = RiskManager(cfg)
+    snap = make_snapshot(price=100.0)
+    sig = make_signal(side=LONG, price=100.0, stop_dist_pct=2.0, score=85.0)
+    results = []
+    for max_lev in (3, 5, 10):
+        cfg.max_leverage = max_lev
+        rr = RiskManager(cfg).evaluate(sig, snap, balance=200.0, open_notional=0.0)
+        assert rr.allowed, rr.reason
+        results.append(round(rr.max_loss, 6))
+    # max_loss (≈ -1R) is leverage-invariant.
+    assert len(set(results)) == 1, f"max_loss varied with leverage: {results}"

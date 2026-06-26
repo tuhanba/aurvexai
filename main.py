@@ -10,6 +10,7 @@ Usage:
     python main.py walkforward # Block 6: real-data (or synthetic) OOS walk-forward
                                # decision table per profile, net-of-cost (+funding)
     python main.py reset       # clear trades/funnel/signals, keep shadow data, new epoch
+    python main.py report      # read-only Governor system report (add --telegram to send)
     python main.py telegram-test   # in-container Telegram diagnostic (getMe + send)
 
 All configuration comes from the environment / .env (see .env.example).
@@ -69,6 +70,11 @@ def main(argv: list) -> int:
     if cmd == "reset":
         return _run_reset(cfg)
 
+    if cmd == "report":
+        from aurvex.governor import run_report
+        want_tg = "--telegram" in argv[1:]
+        return run_report(cfg, telegram=want_tg)
+
     if cmd == "balance-reset":
         return _run_balance_reset(cfg)
 
@@ -121,14 +127,31 @@ def _run_walkforward(cfg) -> int:
 
 
 def _run_reset(cfg) -> int:
-    """Clear trading data, preserve shadow learner rows, seed a new epoch."""
-    from aurvex.storage import Storage
+    """Clear trading data, preserve shadow learner rows, seed a new epoch.
+
+    Writes a redacted rollback artifact (env_redacted, config snapshot, git HEAD,
+    DB backup) BEFORE clearing anything, so the prior epoch is always recoverable.
+    """
+    from aurvex.storage import Storage, write_rollback_artifact
 
     print("=== AurvexAI Epoch Reset ===")
     print(f"DB             : {cfg.db_path}")
     print(f"Shadows        : KEPT (learning history preserved)")
     print(f"Trades / funnel / signals / ledger : CLEARED")
     print(f"New balance    : {cfg.initial_paper_balance} USDT")
+    print()
+
+    # Rollback artifact first — never delete an existing backup; failure here must
+    # not block the reset, but we surface the path so it can be used to roll back.
+    # Root the artifact NEXT TO the DB (e.g. data/backups) so it lands on the same
+    # persisted volume in Docker rather than an ephemeral container working dir.
+    backups_root = os.path.join(os.path.dirname(cfg.db_path) or ".", "backups")
+    try:
+        art_dir = write_rollback_artifact(cfg, cfg.db_path, epoch_label=cfg.epoch_label,
+                                          backups_root=backups_root)
+        print(f"✓ Rollback artifact : {art_dir}")
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"! Rollback artifact FAILED (continuing reset): {exc}")
     print()
 
     db = Storage(cfg.db_path)

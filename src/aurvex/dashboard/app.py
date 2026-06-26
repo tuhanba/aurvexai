@@ -19,6 +19,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any, Dict
@@ -31,40 +32,13 @@ from ..config import load_config
 from ..accounting import compute_accounting
 from ..metrics import compute_metrics
 from ..models import now_ms
-from ..shadow import ShadowLearner
+from ..shadow import ShadowLearner, missed_reason_bucket
 from ..storage import Storage
 
-
-def _missed_reason_bucket(reason: str) -> str:
-    """Normalise a free-text reject reason into a stable missed-opportunity bucket.
-
-    Observe-only: groups the engine's reject reasons so the dashboard can show
-    WHICH constraint turned a (later-resolved) signal away. Order matters —
-    "exposure cap" is checked before the generic notional/min checks because the
-    exposure-cap reason also mentions notional.
-    """
-    r = (reason or "").lower()
-    if not r:
-        return "other"
-    if "exposure cap" in r:
-        return "exposure_cap"
-    if "< min" in r or "min notional" in r:
-        return "min_notional"
-    if "no free margin" in r:
-        return "no_free_margin"
-    if "collapses under margin" in r:
-        return "margin_collapse"
-    if "lower score than selected" in r:
-        return "not_selected"
-    if r.startswith("score "):
-        return "score_threshold"
-    if "spread" in r:
-        return "spread"
-    if "slippage" in r:
-        return "slippage"
-    if "stop dist" in r:
-        return "stop_distance"
-    return "other"
+# The canonical reason bucketer now lives in shadow.py (so the governor + shadow
+# aggregation can share it without importing Flask). Re-exported here under the
+# original private name for backward compatibility with existing callers/tests.
+_missed_reason_bucket = missed_reason_bucket
 
 
 def _trade_dict(t, balance: float = 0.0) -> Dict[str, Any]:
@@ -110,6 +84,10 @@ def _trade_dict(t, balance: float = 0.0) -> Dict[str, Any]:
         "risk_multiplier": round(t.metadata.get("risk_multiplier", 1.0), 3),
         "m_shadow": round(t.metadata.get("m_shadow", 1.0), 3),
         "m_score": round(t.metadata.get("m_score", 1.0), 3),
+        # LABEL-ONLY quality grade (blocks nothing; shown for correlation).
+        "quality_grade": t.metadata.get("quality_grade", ""),
+        "quality_score": round(t.metadata.get("quality_score", 0.0) or 0.0, 2),
+        "quality_reasons": t.metadata.get("quality_reasons", []),
         "remaining_fraction": round(t.remaining_fraction, 3),
         "realized_pnl": round(t.realized_pnl, 4),
         "realized_pnl_pct": round(t.realized_pnl_pct, 4),
@@ -423,7 +401,10 @@ def create_app(cfg=None) -> Flask:
             "balance": round(balance, 4),
             # Active risk/profile config surfaced so the dashboard reflects the
             # running 200 USDT / 2% / 10% aggressive epoch, not stale defaults.
+            "risk_profile": cfg.risk_profile,
             "risk_pct": cfg.risk_pct,
+            "min_risk_pct": cfg.min_risk_pct,
+            "max_risk_pct": cfg.max_risk_pct,
             "max_daily_loss_pct": cfg.max_daily_loss_pct,
             "daily_realized_pnl": round(daily_pnl, 4),
             "daily_loss_budget_usdt": round(daily_loss_budget, 4),
@@ -464,6 +445,236 @@ def create_app(cfg=None) -> Flask:
         payload["verdict"] = shadow.predictivity_verdict()
         payload["risk_modulation_enabled"] = cfg.risk_modulation_enabled
         return jsonify(payload)
+
+    @app.route("/api/receipts")
+    def receipts():
+        """Consolidated Decision Receipts for recent opens + important rejections.
+
+        Every field is already in the Trade / signal-event metadata — this only
+        consolidates and renders. Read-only; decides nothing.
+        """
+        from ..models import Decision
+        from ..receipt import opened_receipt, rejected_receipt
+
+        balance = db.get_balance()
+        opened = []
+        for t in db.get_open_trades(mode=cfg.mode):
+            opened.append(opened_receipt(t, balance=balance, cfg=cfg))
+        for t in db.get_closed_trades(limit=20, mode=cfg.mode):
+            opened.append(opened_receipt(t, balance=balance, cfg=cfg))
+
+        rejected = []
+        for s in db.recent_signals(limit=120):
+            if s.get("decision") != "REJECT":
+                continue
+            try:
+                meta = json.loads(s.get("metadata") or "{}")
+            except (TypeError, ValueError):
+                meta = {}
+            d = Decision(
+                symbol=s.get("symbol", ""), side=s.get("side", ""),
+                setup_type=s.get("setup_type", ""), score=s.get("score", 0.0) or 0.0,
+                decision="REJECT", failed_stage=s.get("failed_stage", ""),
+                reject_reason=s.get("reject_reason", ""), metadata=meta)
+            rejected.append(rejected_receipt(d, cfg=cfg))
+
+        return jsonify({"opened": opened[:40], "rejected": rejected[:40]})
+
+    @app.route("/api/shadow_basis")
+    def shadow_basis_view():
+        """Proxy (quick) vs full-ladder (replay) shadow bases, side by side."""
+        from ..receipt import shadow_basis
+        st = shadow.stats()
+        proxy_stats = {
+            "resolved_total": st.get("resolved_total", 0),
+            "by_setup": st.get("by_setup", []),
+            "basis": st.get("basis", ""),
+        }
+        return jsonify(shadow_basis(proxy_stats))
+
+    @app.route("/api/missed_opportunity")
+    def missed_opportunity():
+        """Per-reason missed-opportunity OUTCOME breakdown (count/avgR/winrate/PF).
+
+        Aggregates resolved shadows that did NOT open as trades — risk/filter
+        rejects AND tradeable candidates that lost the slot race — by reason, plus
+        a label-only quality C/D bucket. Empty buckets report insufficient_data.
+
+        Purpose: this is the evidence required BEFORE anyone considers raising
+        slots or leverage. No auto-adjustment is made anywhere from these numbers.
+        """
+        return jsonify({
+            "note": "Evidence only — required before raising slots/leverage. "
+                    "No auto-adjustment. quality_C_D is a LABEL, not a gate.",
+            "buckets": shadow.missed_opportunity_outcomes(),
+        })
+
+    @app.route("/api/system_state")
+    def system_state():
+        """Single-glance System State panel + dashboard security posture.
+
+        Read-only. Surfaces the active mode/profile/policy and confirms the safety
+        stances (live disabled, shadow observer, governor report-only, quality
+        label-only). The security block reports the host binding and whether the
+        dashboard is publicly reachable, and RECOMMENDS (never silently changes) a
+        safer posture. No secret is ever included.
+        """
+        hb = db.get_heartbeat("engine")
+        hb_data = dict(hb.get("status") or {}) if hb else {}
+        hb_ts = int(hb.get("ts", 0)) if hb else 0
+        alive = bool(hb_ts and (now_ms() - hb_ts) < 120_000)
+
+        epoch_meta = db.get_meta("epoch")
+        epoch_label = (epoch_meta.get("label", "unknown")
+                       if isinstance(epoch_meta, dict) else "unknown")
+
+        host = cfg.dashboard_host
+        publicly_reachable = host in ("0.0.0.0", "::", "")
+        if publicly_reachable:
+            sec_reco = ("Dashboard binds all interfaces — bind DASHBOARD_HOST to "
+                        "127.0.0.1 and reach it via SSH tunnel, or put it behind a "
+                        "reverse proxy with auth/HTTPS; add a firewall allowlist.")
+        else:
+            sec_reco = ("Bound to a specific host; still prefer an SSH tunnel or an "
+                        "authenticated reverse proxy + firewall allowlist for access.")
+
+        return jsonify({
+            "engine": {"alive": alive, "kill_switch": bool(hb_data.get("kill_switch", False))},
+            "mode": cfg.mode,
+            "live": "disabled" if not cfg.live_enabled else "ENABLED",
+            "live_enabled": cfg.live_enabled,
+            "risk_profile": cfg.risk_profile,
+            "balance": round(db.get_balance(), 4),
+            "initial_balance": cfg.initial_paper_balance,
+            "risk_pct": cfg.risk_pct,
+            "risk_band": [cfg.min_risk_pct, cfg.max_risk_pct],
+            "daily_loss_limit_pct": cfg.max_daily_loss_pct,
+            "max_open_trades": cfg.max_open_trades,
+            "shadow": "observer (report-only)",
+            "shadow_apply": cfg.shadow_apply,
+            "governor": cfg.governor_mode,
+            "quality_layer": "label_only",
+            "score_as_gate": cfg.score_as_gate,
+            "risk_modulation_enabled": cfg.risk_modulation_enabled,
+            "leverage_policy": cfg.leverage_policy,
+            "data_quality": {
+                "provider": cfg.data_provider,
+                "ltf": cfg.ltf, "htf": cfg.htf,
+                "data_age_ms": hb_data.get("data_age_ms"),
+                "cycle_ms": hb_data.get("cycle_ms"),
+            },
+            "epoch": epoch_label,
+            "security": {
+                "dashboard_host": host,
+                "dashboard_port": cfg.dashboard_port,
+                "publicly_reachable": publicly_reachable,
+                "write_controls": "none (dashboard is strictly read-only)",
+                "secret_exposure": "none (no token/key/chat-id in any endpoint)",
+                "recommendation": sec_reco,
+            },
+        })
+
+    @app.route("/api/setup_health")
+    def setup_health_panel():
+        """REPORT-ONLY per-setup health + risk-throttle suggestion.
+
+        Derived from measured shadow stats. HARD GUARDRAIL: nothing here disables
+        a setup or changes risk_pct — statuses and suggestions are text only.
+        """
+        from ..analyzers import setup_health, risk_throttle
+
+        st = shadow.stats()
+        setups_in = [{"setup": s["setup"], "n": s["n"], "avg_r": s["avg_r"],
+                      "win_pct": s.get("winrate")} for s in st.get("by_setup", [])]
+        rows = setup_health(setups_in, shadow_only=cfg.shadow_only_setups)
+
+        # Risk-throttle inputs (report-only).
+        closed = db.get_closed_trades(limit=20, mode=cfg.mode)
+        recent_rs = [t.realized_pnl_pct for t in closed
+                     if t.realized_pnl_pct is not None]
+        recent_avg_r = (sum(recent_rs) / len(recent_rs)) if recent_rs else None
+        metrics = compute_metrics(db.get_closed_trades(limit=5000, mode=cfg.mode))
+
+        import datetime as _dt
+        _ts = now_ms() / 1000.0
+        _day_start = int(
+            _dt.datetime.fromtimestamp(_ts, _dt.timezone.utc)
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .timestamp() * 1000)
+        balance = db.get_balance()
+        daily_pnl = db.daily_realized_pnl(_day_start)
+        daily_budget = balance * (cfg.max_daily_loss_pct / 100.0)
+        daily_used_pct = (round(max(0.0, -daily_pnl) / daily_budget * 100.0, 2)
+                          if daily_budget > 0 else 0.0)
+
+        throttle = risk_throttle(
+            recent_avg_r=recent_avg_r, recent_n=len(recent_rs),
+            drawdown_pct=metrics.get("max_drawdown"),
+            daily_loss_used_pct=daily_used_pct, mode=cfg.risk_throttle_mode)
+
+        return jsonify({
+            "report_only": True,
+            "note": "Setup health + risk throttle are REPORT-ONLY suggestions. "
+                    "No setup is auto-disabled and risk_pct is never changed here.",
+            "setups": rows,
+            "risk_throttle": throttle,
+        })
+
+    @app.route("/api/quality")
+    def quality_panel():
+        """LABEL-ONLY quality grade panel.
+
+        Shows the A/B/C/D distribution across recent decisions (allowed +
+        rejected) and, for CLOSED trades carrying a grade, the realised avg R and
+        win rate per grade. This is the evidence required BEFORE the grade could
+        ever be promoted from a label to a ranking/sizing input — it blocks
+        nothing today.
+        """
+        order = ["A", "B", "C", "D"]
+        # 1) Distribution across recent decisions (parse signal_events metadata).
+        dist = {g: 0 for g in order}
+        for s in db.recent_signals(limit=500):
+            try:
+                meta = json.loads(s.get("metadata") or "{}")
+            except (TypeError, ValueError):
+                meta = {}
+            g = meta.get("quality_grade")
+            if g in dist:
+                dist[g] += 1
+
+        # 2) Realised outcome per grade from CLOSED trades that carry a grade.
+        agg: Dict[str, Dict[str, float]] = {
+            g: {"n": 0, "wins": 0, "sum_r": 0.0} for g in order}
+        for t in db.get_closed_trades(limit=5000, mode=cfg.mode):
+            g = t.metadata.get("quality_grade")
+            if g not in agg:
+                continue
+            a = agg[g]
+            a["n"] += 1
+            a["sum_r"] += t.realized_pnl_pct or 0.0
+            if (t.realized_pnl or 0.0) > 0:
+                a["wins"] += 1
+        realised = {}
+        for g in order:
+            a = agg[g]
+            if a["n"] == 0:
+                realised[g] = {"n": 0, "avg_r": None, "win_pct": None,
+                               "note": "insufficient_data"}
+            else:
+                realised[g] = {
+                    "n": a["n"],
+                    "avg_r": round(a["sum_r"] / a["n"], 3),
+                    "win_pct": round(a["wins"] / a["n"] * 100.0, 1),
+                }
+
+        return jsonify({
+            "label_only": True,
+            "note": "Quality grade is LABEL ONLY — it blocks/routes nothing. "
+                    "Promotion to ranking/sizing requires shadow proof that the "
+                    "buckets separate expectancy.",
+            "distribution": dist,
+            "realised_by_grade": realised,
+        })
 
     return app
 

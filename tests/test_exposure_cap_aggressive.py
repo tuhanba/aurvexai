@@ -24,6 +24,9 @@ def _cfg(tmp_path, exposure_pct: float) -> Config:
     c.telegram_enabled = False
     c.initial_paper_balance = 200.0
     c.risk_pct = 2.0
+    # Aggressive band so the 2% risk_pct sits inside [min, max] for validate().
+    c.min_risk_pct = 1.0
+    c.max_risk_pct = 3.0
     c.max_portfolio_exposure_pct = exposure_pct
     c.trade_hours_utc = []
     c.min_quote_volume_24h = 0.0
