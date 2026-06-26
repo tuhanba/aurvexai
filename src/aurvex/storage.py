@@ -269,6 +269,16 @@ class Storage:
             );
             CREATE INDEX IF NOT EXISTS idx_shadow_ab_shadow_id ON shadow_ab(shadow_id);
         """)
+        # Observe-only reject-reason side table (additive; mirrors the shadow_ab
+        # pattern). Keyed by shadow id so the dashboard can group resolved
+        # rejected shadows by reason (no_free_margin / exposure_cap / min_notional)
+        # without changing the shadows column layout.
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS shadow_reject_reason (
+                shadow_id TEXT PRIMARY KEY,
+                reason TEXT
+            );
+        """)
         # The unique index dedups new-epoch rows. Legacy rows have signal_bar_ts=0
         # but SQLite treats every NULL/0 group key independently only for NULLs;
         # to avoid a build failure on a contaminated legacy table we create the
@@ -509,8 +519,20 @@ class Storage:
              row.get("r_multiple"), row.get("bars", 0),
              row.get("signal_bar_ts", 0), row.get("last_bar_ts", 0),
              row.get("epoch", "legacy")))
+        inserted = cur.rowcount > 0
+        # Observe-only: record the engine's reject reason in an ADDITIVE side
+        # table (keyed by shadow id) so the dashboard can break missed-opportunity
+        # counts down by reason. Kept out of the shadows table so its column
+        # layout — relied on by positional inserts elsewhere — is unchanged.
+        # Never affects sizing; it is metadata copied from an existing Decision.
+        if inserted:
+            reason = (row.get("reject_reason") or "").strip()
+            if reason:
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO shadow_reject_reason(shadow_id, reason) "
+                    "VALUES(?,?)", (row["id"], reason))
         self.conn.commit()
-        return cur.rowcount > 0
+        return inserted
 
     def insert_shadow_ab(self, row: Dict[str, Any]) -> None:
         """Log a champion/challenger A/B entry for a resolved shadow episode."""
