@@ -250,19 +250,180 @@ def test_paginate_ohlcv_pages_beyond_single_call():
     assert len(set(ts)) == 4000             # de-duplicated
 
 
+class _FakeExchange:
+    """Models a Binance-like exchange with a finite synthetic history.
+
+    ``fetch_ohlcv`` serves consecutive 1m bars from ``hist_start`` up to ``now``
+    and caps every response at ``cap`` rows (mirroring the observed ~1000-row
+    per-call limit). Requests past the end of history return an empty list.
+    """
+    TF_MS = 60_000
+
+    def __init__(self, total_bars: int, cap: int = 1000):
+        self.cap = cap
+        self._now = 1_000_000 * self.TF_MS
+        self.hist_start = self._now - (total_bars - 1) * self.TF_MS
+        self.calls = 0
+
+    def parse_timeframe(self, tf):
+        return 60                              # seconds per bar (1m)
+
+    def milliseconds(self):
+        return self._now
+
+    def fetch_ohlcv(self, symbol, timeframe, since=None, limit=None):
+        self.calls += 1
+        start = max(since, self.hist_start)
+        out = []
+        ts = start - (start % self.TF_MS)
+        if ts < start:
+            ts += self.TF_MS
+        while len(out) < min(limit, self.cap) and ts <= self._now:
+            out.append([ts, 1.0, 1.0, 1.0, 1.0, 1.0])
+            ts += self.TF_MS
+        return out
+
+
+def test_paginate_ohlcv_honors_limit_beyond_one_page():
+    """The core bug: a per-call cap (~1000) must NOT truncate a deep ``limit``.
+
+    With 20,000 bars available and a 1000-row cap, requesting 15,000 must page
+    forward and return ~15,000 strictly-increasing, de-duplicated rows.
+    """
+    from aurvex.walkforward import _paginate_ohlcv
+
+    ex = _FakeExchange(total_bars=20_000, cap=1000)
+    rows = _paginate_ohlcv(ex, "BTC/USDT:USDT", "1m", 15_000)  # default per_call
+    ts = [r[0] for r in rows]
+    assert len(rows) == 15_000             # not truncated to one ~1000 page
+    assert ex.calls > 1                    # required multiple pages
+    assert ts == sorted(ts)                # oldest-first
+    assert len(set(ts)) == 15_000          # de-duplicated
+
+
+def test_paginate_ohlcv_does_not_stop_at_1000():
+    """Regression guard: short-but-non-empty batches must not end the loop."""
+    from aurvex.walkforward import _paginate_ohlcv
+
+    ex = _FakeExchange(total_bars=5_000, cap=1000)
+    rows = _paginate_ohlcv(ex, "X", "1m", 3_000)
+    assert len(rows) == 3_000
+    assert len(rows) > 1000
+
+
 def test_paginate_ohlcv_stops_when_exchange_runs_out():
     from aurvex.walkforward import _paginate_ohlcv
 
-    class ShortEx:
-        def parse_timeframe(self, tf):
-            return 60
-
-        def milliseconds(self):
-            return 10_000 * 60_000
-
-        def fetch_ohlcv(self, symbol, timeframe, since=None, limit=None):
-            return [[since + i * 60_000, 1, 1, 1, 1, 1] for i in range(200)]
-
-    # Asks for 4000 but each call yields 200 (< per_call) → stops after one call.
-    rows = _paginate_ohlcv(ShortEx(), "X", "1m", 4000, per_call=1500)
+    # Only 200 bars of history exist; asking for 4000 returns exactly those 200.
+    ex = _FakeExchange(total_bars=200, cap=1000)
+    rows = _paginate_ohlcv(ex, "X", "1m", 4000)
     assert len(rows) == 200
+
+
+# ---------------------------------------------------------------------------
+# 10. Cache honours limit + freshness (T2)
+# ---------------------------------------------------------------------------
+
+def _write_cache(cache_dir, symbol, timeframe, n_rows, newest_ms):
+    import csv
+    from aurvex.walkforward import _cache_path
+    tf_ms = 60_000
+    path = _cache_path(str(cache_dir), symbol, timeframe)
+    start = newest_ms - (n_rows - 1) * tf_ms
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        for i in range(n_rows):
+            w.writerow([start + i * tf_ms, 1.0, 1.0, 1.0, 1.0, 1.0])
+    return path
+
+
+def test_cache_short_triggers_refetch(tmp_path, monkeypatch):
+    """A cache with fewer rows than ``limit`` must re-fetch, not return the
+    truncated history (the bug that pinned walk-forward at ~1000 bars)."""
+    import time as _time
+    import aurvex.walkforward as wf
+
+    now_ms = int(_time.time() * 1000)      # fresh newest bar
+    _write_cache(tmp_path, "BTC/USDT:USDT", "1m", n_rows=1000, newest_ms=now_ms)
+    monkeypatch.setattr(wf, "_make_exchange",
+                        lambda eid: _FakeExchange(total_bars=20_000, cap=1000))
+
+    rows = wf.load_or_fetch_candles("BTC/USDT:USDT", "1m", limit=15_000,
+                                    cache_dir=str(tmp_path))
+    assert len(rows) == 15_000             # re-fetched, not the cached 1000
+
+
+def test_cache_fresh_and_full_skips_fetch(tmp_path, monkeypatch):
+    """A cache with >= limit fresh rows is trusted; no exchange call is made."""
+    import time as _time
+    import aurvex.walkforward as wf
+
+    now_ms = int(_time.time() * 1000)
+    _write_cache(tmp_path, "BTC/USDT:USDT", "1m", n_rows=2000, newest_ms=now_ms)
+
+    def _boom(eid):
+        raise AssertionError("exchange must not be constructed for a fresh cache")
+    monkeypatch.setattr(wf, "_make_exchange", _boom)
+
+    rows = wf.load_or_fetch_candles("BTC/USDT:USDT", "1m", limit=1500,
+                                    cache_dir=str(tmp_path))
+    assert len(rows) == 1500               # most-recent slice of the cache
+
+
+def test_cache_stale_triggers_refetch(tmp_path, monkeypatch):
+    """A cache whose newest bar is old must re-fetch even if it has enough rows."""
+    import time as _time
+    import aurvex.walkforward as wf
+
+    # Newest cached bar is ~1 day behind now -> stale.
+    stale_newest = int(_time.time() * 1000) - 1_440 * 60_000
+    _write_cache(tmp_path, "BTC/USDT:USDT", "1m", n_rows=5000, newest_ms=stale_newest)
+
+    ex_box = {}
+
+    def _factory(eid):
+        ex_box["ex"] = _FakeExchange(total_bars=20_000, cap=1000)
+        return ex_box["ex"]
+    monkeypatch.setattr(wf, "_make_exchange", _factory)
+
+    rows = wf.load_or_fetch_candles("BTC/USDT:USDT", "1m", limit=3000,
+                                    cache_dir=str(tmp_path))
+    assert ex_box.get("ex") is not None     # refetched despite >= limit rows
+    assert len(rows) == 3000
+
+
+# ---------------------------------------------------------------------------
+# 11. Loud-fail on insufficient data (T3)
+# ---------------------------------------------------------------------------
+
+def test_walkforward_insufficient_data_loud_fails(cfg, capsys):
+    from aurvex.backtest import generate_candles
+    from aurvex.walkforward import run_walkforward_analysis
+
+    # warmup(300)+oos(200)=500 needed, but only 400 bars/symbol provided.
+    data = {s: generate_candles(s, 400, seed=i + 1, start_price=100.0 * (i + 1),
+                                tf="1m") for i, s in enumerate(["AAA", "BBB"])}
+    wf = WalkForwardConfig(warmup_bars=300, oos_bars=200, step_bars=200, mc_sims=20)
+    results, source, used = run_walkforward_analysis(
+        cfg, profiles=["aurvex_enhanced", "bugra_replica"],
+        timeframe="1m", wf_cfg=wf, data_override=data)
+
+    out = capsys.readouterr().out
+    assert "INSUFFICIENT DATA" in out
+    assert all(r.windows == 0 for r in results)
+    assert all("INSUFFICIENT DATA" in r.decision for r in results)
+
+
+def test_walkforward_sufficient_data_normal_path(cfg):
+    from aurvex.backtest import generate_candles
+    from aurvex.walkforward import run_walkforward_analysis
+
+    data = {s: generate_candles(s, 900, seed=i + 1, start_price=100.0 * (i + 1),
+                                tf="1m") for i, s in enumerate(["AAA", "BBB"])}
+    wf = WalkForwardConfig(warmup_bars=300, oos_bars=200, step_bars=200, mc_sims=20)
+    results, source, used = run_walkforward_analysis(
+        cfg, profiles=["aurvex_enhanced", "bugra_replica"],
+        timeframe="1m", wf_cfg=wf, data_override=data)
+
+    assert all(r.windows >= 1 for r in results)
+    assert all("INSUFFICIENT DATA" not in r.decision for r in results)
