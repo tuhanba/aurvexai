@@ -41,17 +41,28 @@ def _cache_path(cache_dir: str, symbol: str, timeframe: str) -> str:
     return os.path.join(cache_dir, f"{sym}_{timeframe}.csv")
 
 
-def _paginate_ohlcv(ex, symbol: str, timeframe: str, limit: int,
-                    per_call: int = 1500) -> List[List]:
-    """Fetch up to ``limit`` OHLCV rows, paging backwards via ``since``.
+def _timeframe_ms(timeframe: str) -> int:
+    """Bar length in ms for a ccxt-style timeframe string (e.g. '1m','15m','1h')."""
+    units = {"s": 1_000, "m": 60_000, "h": 3_600_000, "d": 86_400_000}
+    return int(timeframe[:-1]) * units[timeframe[-1]]
 
-    Binance futures caps a single klines request at ~1500 candles, so deep
-    history needs several calls. Returns oldest-first, de-duplicated rows (the
-    most recent ``limit`` of them). ``ex`` is any ccxt-like exchange exposing
+
+def _paginate_ohlcv(ex, symbol: str, timeframe: str, limit: int,
+                    per_call: int = 1000) -> List[List]:
+    """Fetch up to ``limit`` OHLCV rows, paging forward via ``since``.
+
+    Binance USDT-M / ccxt caps a single ``fetch_ohlcv`` request at ~1000
+    candles, so deep history needs several calls. Pagination advances by
+    **timestamp**, not by ``len(batch) == per_call`` — a short-but-non-empty
+    batch is normal (the exchange often returns fewer rows than requested) and
+    must NOT terminate the loop, otherwise deep ``limit`` values silently
+    truncate to one page. Returns oldest-first, de-duplicated rows (the most
+    recent ``limit`` of them). ``ex`` is any ccxt-like exchange exposing
     ``parse_timeframe``, ``milliseconds`` and ``fetch_ohlcv(since=, limit=)``.
     """
     tf_ms = ex.parse_timeframe(timeframe) * 1000
-    since = ex.milliseconds() - limit * tf_ms
+    now = ex.milliseconds()
+    since = now - limit * tf_ms
     out: List[List] = []
     seen = set()
     while len(out) < limit:
@@ -60,48 +71,83 @@ def _paginate_ohlcv(ex, symbol: str, timeframe: str, limit: int,
         if not batch:
             break
         fresh = [r for r in batch if r[0] not in seen]
+        if not fresh:
+            break                                   # no new rows -> end of history
         for r in fresh:
             seen.add(r[0])
         out.extend(fresh)
-        if len(batch) < per_call:
-            break  # exchange has no more recent data
-        since = batch[-1][0] + tf_ms
+        nxt = batch[-1][0] + tf_ms
+        if nxt <= since:
+            break                                   # cursor not advancing -> stop
+        since = nxt
+        if batch[-1][0] >= now - tf_ms:
+            break                                   # reached the present
     out.sort(key=lambda r: r[0])
     return out[-limit:]
+
+
+def _make_exchange(exchange_id: str):
+    """Construct a markets-loaded ccxt exchange. Seam for tests (monkeypatched)."""
+    import ccxt  # type: ignore
+    ex = getattr(ccxt, exchange_id)({
+        "enableRateLimit": True,
+        "options": {"defaultType": "future"},
+    })
+    ex.load_markets()
+    return ex
+
+
+def _read_cache(path: str) -> List[List]:
+    rows: List[List] = []
+    with open(path, newline="") as f:
+        for row in csv.reader(f):
+            try:
+                rows.append([float(x) for x in row])
+            except ValueError:
+                pass
+    return rows
 
 
 def load_or_fetch_candles(symbol: str, timeframe: str,
                           limit: int = 2000,
                           cache_dir: str = "data/cache",
-                          exchange_id: str = "binanceusdm") -> List[List]:
+                          exchange_id: str = "binanceusdm",
+                          max_staleness_ms: Optional[int] = None) -> List[List]:
     """
     Load OHLCV candles from local CSV cache.  If absent, fetch via ccxt and
     cache.  Returns list of [ts_ms, open, high, low, close, volume] rows.
 
+    The cache is only trusted when it (a) holds at least ``limit`` rows and
+    (b) its newest bar is recent (within ``max_staleness_ms`` of now, default
+    ``2 * tf_ms``). A short or stale cache triggers a re-fetch so a previously
+    truncated history never persists silently across runs — the bug that made
+    walk-forward see ~1000 bars forever. If the re-fetch fails (offline), the
+    cached rows are returned as a best-effort fallback so callers still get
+    whatever history exists.
+
     Offline / test environments: if ccxt is unavailable or the exchange call
-    fails, returns an empty list so callers can fall back to synthetic data
-    without crashing.
+    fails and no cache exists, returns an empty list so callers can fall back
+    to synthetic data without crashing.
     """
+    tf_ms = _timeframe_ms(timeframe)
+    if max_staleness_ms is None:
+        max_staleness_ms = 2 * tf_ms
+
     path = _cache_path(cache_dir, symbol, timeframe)
+    cached: List[List] = []
     if os.path.exists(path):
-        rows = []
-        with open(path, newline="") as f:
-            for row in csv.reader(f):
-                try:
-                    rows.append([float(x) for x in row])
-                except ValueError:
-                    pass
-        if rows:
-            log.info("Loaded %d candles from cache: %s", len(rows), path)
-            return rows
+        cached = _read_cache(path)
+        if cached:
+            newest = cached[-1][0]
+            fresh = (time.time() * 1000.0) - newest <= max_staleness_ms
+            if len(cached) >= limit and fresh:
+                log.info("Loaded %d candles from cache: %s", len(cached), path)
+                return cached[-limit:]
+            log.info("Cache stale/short (%d rows, fresh=%s); re-fetching %s/%s "
+                     "for limit=%d", len(cached), fresh, symbol, timeframe, limit)
 
     try:
-        import ccxt  # type: ignore
-        ex = getattr(ccxt, exchange_id)({
-            "enableRateLimit": True,
-            "options": {"defaultType": "future"},
-        })
-        ex.load_markets()
+        ex = _make_exchange(exchange_id)
         # Page beyond the single-request cap so deep history is available.
         raw = _paginate_ohlcv(ex, symbol, timeframe, limit)
         if raw:
@@ -110,10 +156,12 @@ def load_or_fetch_candles(symbol: str, timeframe: str,
                 for row in raw:
                     w.writerow(row)
             log.info("Fetched & cached %d candles: %s/%s", len(raw), symbol, timeframe)
-        return raw or []
+            return raw
+        return cached or []
     except Exception as exc:
-        log.warning("ccxt fetch failed (%s/%s): %s — returning empty", symbol, timeframe, exc)
-        return []
+        log.warning("ccxt fetch failed (%s/%s): %s — falling back to cache (%d rows)",
+                    symbol, timeframe, exc, len(cached))
+        return cached or []
 
 
 # ---------------------------------------------------------------------------
@@ -540,8 +588,24 @@ def run_walkforward_analysis(cfg, symbols: Optional[Sequence[str]] = None,
     oos = max(1, wf_cfg.oos_bars)
     step = max(1, wf_cfg.step_bars)
     n = min((len(c) for c in data.values()), default=0)
+    need = warmup + oos
     # Multiple-testing penalty: best of N profiles is picked on the same data.
     n_trials = max(wf_cfg.n_trials, len(profiles))
+
+    # Loud-fail: a starved data feed must announce itself, never masquerade as a
+    # clean "no edge" result. Without this, the truncated-data bug read as a
+    # routine REJECTED table for months.
+    if n < need:
+        msg = (f"INSUFFICIENT DATA: have {n} bars/symbol, need >= {need} for one "
+               f"OOS window. Increase WF_LIMIT or lower WF_WARMUP_BARS/WF_OOS_BARS.")
+        log.error(msg)
+        print(msg)
+        results = []
+        for profile in profiles:
+            r = WalkForwardResult(profile=profile, windows=0, total_oos_trades=0)
+            r.decision = "INSUFFICIENT DATA (no OOS window)"
+            results.append(r)
+        return results, source, data
 
     htf = htf or cfg.htf
     results: List[WalkForwardResult] = []
@@ -570,5 +634,12 @@ def run_walkforward_analysis(cfg, symbols: Optional[Sequence[str]] = None,
         res.signals_seen = sig_seen
         res.allows = allows
         res.reject_reasons = dict(sorted(rejects.items(), key=lambda x: -x[1]))
+        # A broken measurement (0 signals despite a full window of bars) must be
+        # distinguishable from a genuine "edge rejected" outcome.
+        if sig_seen == 0:
+            w = (f"WARNING: {profile}: 0 signals on {n}>=window bars — "
+                 f"investigate detector/data path")
+            log.warning(w)
+            print(w)
         results.append(res)
     return results, source, data

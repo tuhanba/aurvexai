@@ -120,7 +120,10 @@ def _run_walkforward(cfg) -> int:
           f"oos={wf.oos_bars} step={wf.step_bars} warmup={wf.warmup_bars}")
     results, source, data = run_walkforward_analysis(
         cfg, symbols=symbols, timeframe=timeframe, limit=limit, wf_cfg=wf, htf=htf)
+    counts = {s: len(c) for s, c in data.items()}
+    n_bars = min(counts.values(), default=0)
     print(f"data source: {source}  symbols: {list(data.keys())}")
+    print(f"bars/symbol: {n_bars}  per-symbol: {counts}")
     if source == "synthetic":
         bar = "!" * 72
         print(f"\n{bar}\nSYNTHETIC DATA — NOT LIVE EVIDENCE (Binance unreachable / "
