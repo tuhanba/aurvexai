@@ -114,12 +114,19 @@ def _run_walkforward(cfg) -> int:
     limit = int(os.environ.get("WF_LIMIT", "3000"))
     timeframe = os.environ.get("WF_TIMEFRAME", cfg.ltf)
     htf = os.environ.get("WF_HTF", cfg.htf)
+    # Swept profiles are configurable. Default (unset) keeps the existing two
+    # momentum profiles so nothing changes; WF_PROFILES=reversion_v1 tests ONLY
+    # the mean-reversion entry.
+    profs = os.environ.get("WF_PROFILES")
+    profiles = [p.strip() for p in profs.split(",") if p.strip()] if profs else None
 
     print("=== AurvexAI Block 6 — walk-forward analysis ===")
     print(f"timeframe={timeframe}  htf={htf}  limit={limit}  "
-          f"oos={wf.oos_bars} step={wf.step_bars} warmup={wf.warmup_bars}")
+          f"oos={wf.oos_bars} step={wf.step_bars} warmup={wf.warmup_bars}  "
+          f"profiles={profiles or 'default'}")
     results, source, data = run_walkforward_analysis(
-        cfg, symbols=symbols, timeframe=timeframe, limit=limit, wf_cfg=wf, htf=htf)
+        cfg, symbols=symbols, timeframe=timeframe, limit=limit, wf_cfg=wf,
+        profiles=profiles, htf=htf)
     counts = {s: len(c) for s, c in data.items()}
     n_bars = min(counts.values(), default=0)
     print(f"data source: {source}  symbols: {list(data.keys())}")

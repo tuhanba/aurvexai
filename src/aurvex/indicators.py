@@ -177,6 +177,24 @@ def roc(values: Sequence[Number], period: int) -> Optional[float]:
     return (values[-1] - values[-period - 1]) / values[-period - 1] * 100.0
 
 
+def bollinger(closes: Sequence[Number], n: int = 20,
+              k: float = 2.0) -> Optional[dict]:
+    """Bollinger bands over the last ``n`` closed bars.
+
+    Returns ``{"mid", "upper", "lower", "std"}`` where ``mid`` is the simple
+    moving average, ``std`` is the POPULATION standard deviation (divides by n,
+    matching :func:`stdev`), and the bands are ``mid ± k·std``. Returns ``None``
+    when fewer than ``n`` closes are available.
+    """
+    if len(closes) < n:
+        return None
+    mid = sma(closes, n)
+    std = stdev(closes, n)
+    if mid is None or std is None:
+        return None
+    return {"mid": mid, "upper": mid + k * std, "lower": mid - k * std, "std": std}
+
+
 # ---------------------------------------------------------------------------
 # Supertrend
 # ---------------------------------------------------------------------------

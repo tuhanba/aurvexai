@@ -36,6 +36,12 @@ SETUP_WEIGHTS: Dict[str, Dict[str, float]] = {
         "adx_strength": 1.2, "ema_spread": 1.1,
         "st_distance": 1.0, "cloud_thickness": 0.9,
     },
+    # Mean-reversion entry (reversion_v1). Single label-only factor: the
+    # Bollinger stretch magnitude. Score is SUPPORT, never a gate — score_as_gate
+    # stays False so this never blocks a reversion candidate.
+    "reversion_v1": {
+        "stretch": 1.0,
+    },
     # --- legacy setups (detectors removed; weights kept harmless for any
     #     historical/shadow re-scoring of old setup_type rows) ---
     "momentum_breakout": {

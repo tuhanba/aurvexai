@@ -331,6 +331,22 @@ class RiskManager:
                        setup_type: str = "") -> List[TPTarget]:
         cfg = self.cfg
         sign = 1 if side == LONG else -1
+        is_reversion = (setup_type == "reversion_v1" or
+                        cfg.strategy_profile == "reversion_v1")
+        if is_reversion:
+            # Reversion v1: a single quick TP at rev_tp_r taking 100% — snap the
+            # mean-reversion bounce and exit (no break-even move, no runner). The
+            # band-mean target is a deliberate v2 refinement; v1 approximates it
+            # with a fixed R-multiple to stay inside the existing exit engine.
+            # Three targets at the SAME price keep the decision/executor 3-slot
+            # contract intact; TP1 (fraction 1.0) closes the position fully first,
+            # so the zero-fraction TP2/TP3 never realise anything.
+            tp = entry + sign * r * cfg.rev_tp_r
+            return [
+                TPTarget(price=tp, fraction=1.0),
+                TPTarget(price=tp, fraction=0.0),
+                TPTarget(price=tp, fraction=0.0),
+            ]
         is_bugra = (setup_type == "bugra_replica" or
                     cfg.strategy_profile == "bugra_replica")
         if is_bugra:
