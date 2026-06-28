@@ -181,6 +181,7 @@ class Backtester:
         fund = funding_cost(trade.position_size, rate, holding_bars, tf_ms)
         if fund:
             trade.realized_pnl -= fund
+            trade.funding_paid += fund   # funding component of cost (Phase 2 decomp)
             risk_amount = trade.metadata.get("risk_amount", trade.max_loss) or 1e-9
             trade.realized_pnl_pct = trade.realized_pnl / risk_amount
         return fund

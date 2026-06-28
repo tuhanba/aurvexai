@@ -8,6 +8,13 @@ data/
 # Epoch rollback artifacts (redacted, but never tracked)
 backups/
 
+# Generated analysis artifacts (produced on the engine host from real data;
+# committing a synthetic/local run would masquerade as real evidence)
+trade_ledger.csv
+decomposition_report.md
+exit_replay_report.md
+execution_experiments_report.md
+
 # Python
 __pycache__/
 *.py[cod]
