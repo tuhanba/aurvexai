@@ -55,8 +55,12 @@ def _risk_amount(t) -> float:
     return (t.metadata or {}).get("risk_amount", t.max_loss) or 1e-9
 
 
+def _utc(ts_ms: int) -> dt.datetime:
+    return dt.datetime.fromtimestamp(ts_ms / 1000.0, tz=dt.timezone.utc)
+
+
 def _session_hour(ts_ms: int) -> int:
-    return dt.datetime.utcfromtimestamp(ts_ms / 1000.0).hour
+    return _utc(ts_ms).hour
 
 
 def _r_gross(t) -> float:
@@ -80,8 +84,8 @@ def build_ledger_rows(trades: List[Tuple[str, str, object]]) -> List[dict]:
             "timeframe": tf,
             "side": t.side,
             "session_hour_utc": _session_hour(open_t) if open_t else "",
-            "entry_time": dt.datetime.utcfromtimestamp(open_t / 1000.0).isoformat() if open_t else "",
-            "exit_time": dt.datetime.utcfromtimestamp(close_t / 1000.0).isoformat() if close_t else "",
+            "entry_time": _utc(open_t).isoformat() if open_t else "",
+            "exit_time": _utc(close_t).isoformat() if close_t else "",
             "hold_bars": hold_bars,
             "exit_reason": t.close_reason or "",
             "R_gross": round(_r_gross(t), 6),
