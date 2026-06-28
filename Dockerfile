@@ -15,6 +15,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Application
 COPY src/ ./src/
 COPY main.py ./
+# Analysis / ops scripts (e.g. scripts/decompose_edge.py — run via
+# `docker compose exec engine python scripts/<name>.py`). Read-only tooling;
+# the engine/dashboard CMDs do not depend on it.
+COPY scripts/ ./scripts/
 
 # Data dir (SQLite WAL lives here; mounted as a volume in compose)
 RUN mkdir -p /app/data
