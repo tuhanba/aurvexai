@@ -128,6 +128,7 @@ class BaseExecutor:
         cost = (entry_notional + exit_notional) * self._cost_frac()
         net = gross - cost
         trade.realized_pnl += net
+        trade.realized_pnl_gross += gross   # zero-cost leg PnL (Phase 2 decomp)
         trade.fees_paid += cost
         trade.remaining_fraction = round(trade.remaining_fraction - fraction, 10)
         risk_amount = trade.metadata.get("risk_amount", trade.max_loss) or 1e-9

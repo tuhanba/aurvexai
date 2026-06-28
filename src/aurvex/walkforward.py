@@ -194,6 +194,11 @@ class TradeResult:
     r_multiple: float      # pnl_net / risk_amount
     duration_bars: int
     win: bool
+    # Gross/net decomposition (Phase 2): PnL/R with ZERO cost. Defaults keep
+    # older constructions (and tests) valid; populated by _trade_to_result.
+    pnl_gross: float = 0.0
+    r_gross: float = 0.0
+    exit_reason: str = ""
 
 
 def _compute_stats(trades: List[TradeResult], base_equity: float = 0.0) -> Dict[str, float]:
@@ -202,6 +207,8 @@ def _compute_stats(trades: List[TradeResult], base_equity: float = 0.0) -> Dict[
             "n": 0, "win_rate": 0.0, "expectancy_r": 0.0,
             "profit_factor": 0.0, "max_drawdown_pct": 0.0,
             "sharpe": 0.0, "avg_bars": 0.0,
+            "expectancy_r_gross": 0.0, "profit_factor_gross": 0.0,
+            "cost_drag_r": 0.0,
         }
     n = len(trades)
     wins = [t for t in trades if t.win]
@@ -213,6 +220,17 @@ def _compute_stats(trades: List[TradeResult], base_equity: float = 0.0) -> Dict[
     gross_profit = sum(t.pnl_net for t in wins)
     gross_loss = abs(sum(t.pnl_net for t in losses)) or 1e-9
     profit_factor = gross_profit / gross_loss
+
+    # Gross (zero-cost) decomposition — the wave's core diagnostic: gross > 0 but
+    # net < 0 ⇒ cost-killed (fixable by execution); gross ≤ 0 ⇒ no-alpha (dead).
+    rs_gross = [t.r_gross for t in trades]
+    expectancy_r_gross = sum(rs_gross) / n
+    g_wins = [t for t in trades if t.pnl_gross > 0]
+    g_losses = [t for t in trades if t.pnl_gross <= 0]
+    g_profit = sum(t.pnl_gross for t in g_wins)
+    g_loss = abs(sum(t.pnl_gross for t in g_losses)) or 1e-9
+    profit_factor_gross = g_profit / g_loss
+    cost_drag_r = expectancy_r_gross - expectancy_r   # R lost to cost per trade
 
     # Running equity drawdown, relative to a capital base. A from-zero cumulative
     # curve drives peak≈0 and makes the ratio explode; seeding equity at the
@@ -247,6 +265,9 @@ def _compute_stats(trades: List[TradeResult], base_equity: float = 0.0) -> Dict[
         "max_drawdown_pct": round(max_dd * 100.0, 3),
         "sharpe": round(sharpe, 4),
         "avg_bars": round(avg_bars, 1),
+        "expectancy_r_gross": round(expectancy_r_gross, 5),
+        "profit_factor_gross": round(profit_factor_gross, 4),
+        "cost_drag_r": round(cost_drag_r, 5),
     }
 
 
@@ -442,14 +463,15 @@ def print_report(results: List[WalkForwardResult]) -> str:
         "=" * 72,
         "WALK-FORWARD DECISION TABLE",
         "=" * 72,
-        f"{'Profile':<20} {'Exp-R':>7} {'PF':>7} {'MaxDD%':>8} {'AvgBars':>8} "
-        f"{'DSR':>7} {'Decision'}",
-        "-" * 72,
+        f"{'Profile':<20} {'gExp-R':>8} {'Exp-R':>7} {'PF':>7} {'MaxDD%':>8} "
+        f"{'AvgBars':>8} {'DSR':>7} {'Decision'}",
+        "-" * 80,
     ]
     for r in results:
         s = r.oos_stats
         lines.append(
             f"{r.profile:<20} "
+            f"{s.get('expectancy_r_gross', 0.0):>8.4f} "  # gross (zero-cost) Exp-R
             f"{s.get('expectancy_r', 0.0):>7.4f} "
             f"{s.get('profit_factor', 0.0):>7.3f} "
             f"{s.get('max_drawdown_pct', 0.0):>8.2f} "
@@ -512,14 +534,18 @@ def plateau_check(grid: Dict[Tuple, float],
 def _trade_to_result(trade, tf_ms: int) -> TradeResult:
     """Convert a closed backtest Trade into a TradeResult (net of fees+funding)."""
     pnl_net = float(getattr(trade, "realized_pnl", 0.0) or 0.0)
+    pnl_gross = float(getattr(trade, "realized_pnl_gross", 0.0) or 0.0)
     meta = getattr(trade, "metadata", None) or {}
     risk_amount = meta.get("risk_amount") or getattr(trade, "max_loss", 0.0) or 1e-9
     r_multiple = pnl_net / risk_amount
+    r_gross = pnl_gross / risk_amount
     open_t = int(getattr(trade, "open_time", 0) or 0)
     close_t = int(getattr(trade, "close_time", 0) or 0)
     dur_bars = int(round((close_t - open_t) / tf_ms)) if (tf_ms and close_t > open_t) else 0
     return TradeResult(pnl_net=pnl_net, r_multiple=r_multiple,
-                       duration_bars=dur_bars, win=pnl_net > 0)
+                       duration_bars=dur_bars, win=pnl_net > 0,
+                       pnl_gross=pnl_gross, r_gross=r_gross,
+                       exit_reason=str(getattr(trade, "close_reason", "") or ""))
 
 
 def load_walkforward_data(cfg, symbols: Sequence[str], timeframe: str,
@@ -554,7 +580,8 @@ def run_walkforward_analysis(cfg, symbols: Optional[Sequence[str]] = None,
                              wf_cfg: Optional[WalkForwardConfig] = None,
                              profiles: Optional[Sequence[str]] = None,
                              data_override: Optional[Dict[str, List]] = None,
-                             htf: Optional[str] = None):
+                             htf: Optional[str] = None,
+                             collect_trades: Optional[List] = None):
     """Segmented out-of-sample walk-forward for each profile.
 
     Returns ``(results, source, data)``. Parameters are FIXED from ``cfg`` (no
@@ -627,6 +654,11 @@ def run_walkforward_analysis(cfg, symbols: Optional[Sequence[str]] = None,
                 rejects[k] = rejects.get(k, 0) + int(v)
             trades_by_window.append([_trade_to_result(t, tf_ms)
                                      for t in bt._last_closed])
+            # Optional raw-trade sink (Phase 1/2 ledger): same windowing as the
+            # OOS stats, so the ledger and the decision table can never diverge.
+            if collect_trades is not None:
+                for t in bt._last_closed:
+                    collect_trades.append((profile, timeframe, t))
             s0 += step
         wfc = dataclasses.replace(wf_cfg, n_trials=n_trials,
                                   base_equity=cfg.initial_paper_balance)

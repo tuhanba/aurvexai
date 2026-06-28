@@ -138,3 +138,46 @@ def test_time_stop_does_not_preempt_tp(cfg):
     ex.simulate_fill(t, high=tp3 + 1.0, low=99.9, close=tp3, bar_ts=120_000)
     assert t.status == CLOSED
     assert t.close_reason == "TP3"        # TP, not TIME
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — gross/net decomposition + reconciliation
+# ---------------------------------------------------------------------------
+def test_gross_and_net_tracked_separately(cfg):
+    ex = PaperExecutor(cfg)
+    t = _open_trade(cfg)
+    tp3 = t.tp_targets[2].price
+    ex.simulate_fill(t, high=tp3 + 1.0, low=99.9, close=tp3, bar_ts=300_000)
+    assert t.status == CLOSED
+    # Gross is the zero-cost PnL; net subtracts fees → gross strictly > net.
+    assert t.realized_pnl_gross > t.realized_pnl
+    assert t.fees_paid > 0
+    # Reconciliation: gross - fees - funding == net (funding=0 in pure paper).
+    assert abs((t.realized_pnl_gross - t.fees_paid - t.funding_paid)
+               - t.realized_pnl) < 1e-9
+    assert t.r_gross > t.r_net
+
+
+def test_decomposition_reconciles_over_backtest():
+    """gross - fees - funding == net for every trade; cost_drag_r >= 0."""
+    import dataclasses
+    from aurvex.config import Config
+    from aurvex.backtest import Backtester, generate_candles, _tf_ms
+    from aurvex.walkforward import _trade_to_result, _compute_stats
+
+    c = dataclasses.replace(Config(), strategy_profile="bugra_replica",
+                            ltf="5m", htf="15m", funding_rate_8h=0.0001)
+    data = {s: generate_candles(s, 1200, seed=7 + i, start_price=100.0 * (i + 1),
+                                tf="5m")
+            for i, s in enumerate(["BTCUSDT", "ETHUSDT"])}
+    bt = Backtester(c)
+    bt.run(data)
+    assert bt._last_closed, "expected some closed trades"
+    for t in bt._last_closed:
+        recon = t.realized_pnl_gross - t.fees_paid - t.funding_paid
+        assert abs(recon - t.realized_pnl) < 1e-6
+    trs = [_trade_to_result(t, _tf_ms("5m")) for t in bt._last_closed]
+    st = _compute_stats(trs, base_equity=200.0)
+    # Cost always drags net below gross (fees+slippage+funding are non-negative).
+    assert st["cost_drag_r"] >= 0
+    assert st["expectancy_r_gross"] >= st["expectancy_r"] - 1e-9

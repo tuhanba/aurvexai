@@ -250,10 +250,29 @@ class Trade:
     close_price: Optional[float] = None
     close_reason: str = ""     # TP1/TP2/TP3/SL/MANUAL/TRAIL
     remaining_fraction: float = 1.0
-    realized_pnl: float = 0.0      # quote currency, fees included
+    realized_pnl: float = 0.0      # quote currency, NET (fees + funding included)
     realized_pnl_pct: float = 0.0  # relative to risk amount (R multiple-ish)
     fees_paid: float = 0.0
+    # Gross/net decomposition (Edge Decomposition wave, Phase 2). Observational
+    # only — never feeds a decision. realized_pnl_gross is PnL with ZERO cost
+    # (no fee, no slippage, no funding); funding_paid is the funding component of
+    # the cost. So: realized_pnl == realized_pnl_gross - fees_paid - funding_paid.
+    # These let the decomposition separate a cost-killed edge from a no-alpha one.
+    realized_pnl_gross: float = 0.0
+    funding_paid: float = 0.0
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def r_gross(self) -> float:
+        """Gross R multiple (zero cost) relative to the trade's risk amount."""
+        risk = self.metadata.get("risk_amount", self.max_loss) or 1e-9
+        return self.realized_pnl_gross / risk
+
+    @property
+    def r_net(self) -> float:
+        """Net R multiple (fees + funding) relative to the trade's risk amount."""
+        risk = self.metadata.get("risk_amount", self.max_loss) or 1e-9
+        return self.realized_pnl / risk
 
     @property
     def current_stop(self) -> float:
