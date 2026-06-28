@@ -292,4 +292,28 @@ time-stop, new tests) *can* be authored and unit-tested here.
 5. Note that **maker fee = 0 today** (F2) — Phase 4A starts from scratch and
    must use the *conservative* fill model the task pack mandates.
 
-**Phase 0 is complete and is a hard gate. Awaiting review before Phase 1.**
+**Phase 0 is complete and is a hard gate.**
+
+---
+
+## 9. Post-gate fixes applied (approved to proceed)
+
+After review, the two code-only prerequisites (F3, F4) were implemented. Both
+are PnL/parity-safe and ship with tests. No data-dependent phase was run (the
+F6 block stands — those still need the engine/operator host).
+
+- **F3 — close_time stamp fixed.** `simulate_fill` now stamps `close_time` with
+  the supplied bar timestamp (`bar_ts`), falling back to `now_ms()` only when no
+  bar_ts is passed (legacy callers). Verified: offline `bugra_replica` AvgBars
+  dropped from the ~744 artifact to a realistic **115 bars**, and per-trade holds
+  are now 32–285 bars. Edge metrics unchanged.
+- **F4 — time-stop added.** New config `TIME_STOP_BARS` (default **0 = off**, so
+  parity holds). When > 0, `simulate_fill` cuts a trade open ≥ N post-entry bars
+  without a TP/SL as a `"TIME"` exit at the bar close. Only active on the
+  bar_ts path. This is the missing piece for Phase 4's reversion "clean shot."
+- **Tests:** `tests/test_execution_fixes.py` (7 tests) covers both fixes plus a
+  parity test (`time_stop_bars==0` ⇒ no behavior change). Full suite: **494
+  passed** (was 487).
+
+**Still open / awaiting operator input** (unchanged from §8): where Phases 1–9
+run (F6 data block), and the 4-vs-5 symbol set.

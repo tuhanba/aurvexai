@@ -231,6 +231,14 @@ class BaseExecutor:
         if trade.status == CLOSED or trade.remaining_fraction <= 0:
             return events
 
+        # Close timestamp: when a bar timestamp is supplied (backtest/replay and
+        # the live engine), stamp the close with THAT bar — the bar that closed
+        # the trade — not wall-clock ``now_ms()``. The old now_ms() stamp made
+        # backtest hold-length (duration_bars / AvgBars) a meaningless artifact of
+        # (wall_clock_now − historical_entry_bar). Legacy callers that pass no
+        # bar_ts keep now_ms() so their behaviour is unchanged.
+        close_ts = int(bar_ts) if bar_ts is not None else now_ms()
+
         if bar_ts is not None:
             entry_bar_ts = int(trade.metadata.get("entry_bar_ts", 0) or 0)
             last_done = int(trade.metadata.get("last_processed_bar_ts", entry_bar_ts) or 0)
@@ -239,6 +247,8 @@ class BaseExecutor:
             if bar_ts <= last_done:
                 return events           # already advanced on this bar
             trade.metadata["last_processed_bar_ts"] = bar_ts
+            # Count genuinely-new post-entry bars for the time-stop (below).
+            trade.metadata["bars_held"] = int(trade.metadata.get("bars_held", 0)) + 1
 
         # Advance trailing BEFORE checking fills (so the tightened stop can be
         # hit on the same bar it advances — conservative, favours the stop).
@@ -257,7 +267,7 @@ class BaseExecutor:
             frac = trade.remaining_fraction
             net = self._close_fraction(trade, cur_stop, frac)
             trade.status = CLOSED
-            trade.close_time = now_ms()
+            trade.close_time = close_ts
             trade.close_price = cur_stop
             be_moved = trade.metadata.get("be_moved")
             trail = trade.metadata.get("trailing")
@@ -283,7 +293,7 @@ class BaseExecutor:
             fully = trade.remaining_fraction <= 1e-9
             if fully:
                 trade.status = CLOSED
-                trade.close_time = now_ms()
+                trade.close_time = close_ts
                 trade.close_price = tp.price
                 trade.close_reason = label
             events.append(FillEvent(label, tp.price, tp.fraction, net, fully))
@@ -313,6 +323,21 @@ class BaseExecutor:
                         trade.metadata["trailing"] = True
             if fully:
                 break
+
+        # 3) Time-stop: cut a trade that has neither hit TP nor SL after N bars,
+        #    closing whatever remains at this bar's close (reason "TIME"). Off by
+        #    default (time_stop_bars == 0) and only active when a bar timestamp is
+        #    supplied, so parity is preserved unless explicitly enabled.
+        if (bar_ts is not None and self.cfg.time_stop_bars > 0
+                and trade.status == OPEN
+                and int(trade.metadata.get("bars_held", 0)) >= self.cfg.time_stop_bars):
+            frac = trade.remaining_fraction
+            net = self._close_fraction(trade, close, frac)
+            trade.status = CLOSED
+            trade.close_time = close_ts
+            trade.close_price = close
+            trade.close_reason = "TIME"
+            events.append(FillEvent("TIME", close, frac, net, True))
         return events
 
     def force_close(self, trade: Trade, price: float, reason: str = "MANUAL") -> FillEvent:

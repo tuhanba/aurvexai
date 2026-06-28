@@ -239,6 +239,14 @@ class Config:
     move_sl_to_be_after_tp1: bool = field(
         default_factory=lambda: _bool("MOVE_SL_TO_BE_AFTER_TP1", True)
     )
+    # Time-stop: force-close a trade that has been open >= this many LTF bars
+    # without hitting TP/SL, at the bar close (exit reason "TIME"). 0 = disabled
+    # (DEFAULT — preserves parity: no profile changes hold behaviour unless this
+    # is set). Needed for the reversion "clean shot" (Phase 4): a mean-reversion
+    # bounce that never reverts should be cut, not ridden to the window force-close.
+    # Only active on the backtest/replay/engine path (callers that pass bar_ts);
+    # legacy fill callers without a bar timestamp are unaffected.
+    time_stop_bars: int = field(default_factory=lambda: _int("TIME_STOP_BARS", 0))
 
     # -- Fees / slippage assumptions (taker, one side) ---------------------
     taker_fee_pct: float = field(default_factory=lambda: _float("TAKER_FEE_PCT", 0.045))
