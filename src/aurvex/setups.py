@@ -67,6 +67,10 @@ class Context:
     ltf_atr: Optional[float] = None
     ltf_adx: Optional[float] = None
     ltf_rsi: Optional[float] = None
+    # Mean-reversion (reversion_v1): Bollinger bands on the LTF closes.
+    # {mid, upper, lower, std} or None. Computed closed-candle only; read only
+    # by mean_reversion_setup, so it never alters the momentum profiles.
+    ltf_bb: Optional[dict] = None
 
     # Block 2: Bugra-replica indicators (cached on LTF)
     ltf_supertrend: Optional[dict] = None    # {line, direction}
@@ -102,6 +106,10 @@ def build_context(cfg: Config, snap: MarketSnapshot) -> Optional[Context]:
     ctx.ltf_atr = ind.atr(ltf.highs, ltf.lows, ltf.closes, 14)
     ctx.ltf_adx = ind.adx(ltf.highs, ltf.lows, ltf.closes, 14)
     ctx.ltf_rsi = ind.rsi(ltf.closes, 14)
+    # Bollinger bands for the mean-reversion entry (closed-candle only). Always
+    # computed (cheap); only mean_reversion_setup reads it, so the momentum
+    # detectors are byte-identical.
+    ctx.ltf_bb = ind.bollinger(ltf.closes, cfg.rev_bb_n, cfg.rev_bb_k)
 
     # Bugra indicator cache — always computed (all profiles use Bugra detectors).
     ctx.ltf_supertrend = ind.supertrend(
@@ -311,13 +319,103 @@ def detect_bugra_replica(ctx: Context) -> Optional[Signal]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# 7. Mean-reversion detector (reversion_v1) — additive, maker-friendly
+# ---------------------------------------------------------------------------
+def mean_reversion_setup(ctx: Context) -> Optional[Signal]:
+    """
+    Intraday mean-reversion entry on efficient majors (additive to the Buğra
+    momentum profiles — it never fires under them).
+
+    Thesis: a price stretched beyond the Bollinger band on a RANGING LTF, with
+    oversold/overbought RSI confirmation and no strong opposing HTF trend, tends
+    to snap back toward the band mean. A reversion entry buys the dip / sells the
+    rip, so a resting limit fills with no adverse selection — structurally
+    maker-compatible, which is the point (it sidesteps the taker cost that killed
+    momentum).
+
+    LONG (all must hold):
+      * entry < lower band            (stretched below −k·σ)
+      * LTF ADX < rev_adx_max         (ranging, not trending)
+      * HTF not strongly bearish      (htf_adx None / < rev_htf_adx_max / ema_fast >= ema_slow)
+      * LTF RSI < rev_rsi_long        (oversold confirmation)
+    SHORT mirrors LONG.
+
+    Stop is fixed-% (rev_sl_pct) and left for the shared stop-normalizer to clamp.
+    Score factor is a label-only stretch magnitude — it never gates.
+    """
+    cfg = ctx.cfg
+    ltf = ctx.ltf
+
+    if len(ltf) < max(cfg.rev_bb_n + 5, 30):
+        return None
+
+    bb = ctx.ltf_bb
+    if (bb is None or ctx.ltf_adx is None or ctx.ltf_atr is None
+            or ctx.ltf_rsi is None):
+        return None
+
+    entry = ctx.last
+    k = cfg.rev_bb_k
+    std = bb["std"]
+    # Label-only stretch magnitude: |entry − mid| / (k·σ), clamped to 0..1.
+    stretch = _clamp01(abs(entry - bb["mid"]) / (k * std + 1e-9))
+
+    adx_ranging = ctx.ltf_adx < cfg.rev_adx_max
+    htf_ema_known = ctx.htf_ema_fast is not None and ctx.htf_ema_slow is not None
+
+    # HTF not strongly bearish (allows a LONG dip-buy).
+    htf_not_bearish = (
+        ctx.htf_adx is None
+        or ctx.htf_adx < cfg.rev_htf_adx_max
+        or (htf_ema_known and ctx.htf_ema_fast >= ctx.htf_ema_slow)
+    )
+    # HTF not strongly bullish (allows a SHORT rip-sell).
+    htf_not_bullish = (
+        ctx.htf_adx is None
+        or ctx.htf_adx < cfg.rev_htf_adx_max
+        or (htf_ema_known and ctx.htf_ema_fast <= ctx.htf_ema_slow)
+    )
+
+    # --- LONG ---
+    if (entry < bb["lower"] and adx_ranging and htf_not_bearish
+            and ctx.ltf_rsi < cfg.rev_rsi_long):
+        stop = entry * (1.0 - cfg.rev_sl_pct / 100.0)
+        return Signal(
+            symbol=ctx.snap.symbol, side=LONG, setup_type="reversion_v1",
+            entry_hint=entry, stop_hint=stop,
+            factors={"stretch": stretch}, base_confidence=0.50,
+            notes=(f"reversion LONG BB{cfg.rev_bb_n}/{k:g} "
+                   f"ADX{ctx.ltf_adx:.0f} RSI{ctx.ltf_rsi:.0f}"),
+        )
+
+    # --- SHORT (mirror) ---
+    if (entry > bb["upper"] and adx_ranging and htf_not_bullish
+            and ctx.ltf_rsi > cfg.rev_rsi_short):
+        stop = entry * (1.0 + cfg.rev_sl_pct / 100.0)
+        return Signal(
+            symbol=ctx.snap.symbol, side=SHORT, setup_type="reversion_v1",
+            entry_hint=entry, stop_hint=stop,
+            factors={"stretch": stretch}, base_confidence=0.50,
+            notes=(f"reversion SHORT BB{cfg.rev_bb_n}/{k:g} "
+                   f"ADX{ctx.ltf_adx:.0f} RSI{ctx.ltf_rsi:.0f}"),
+        )
+    return None
+
+
 def _build_registry(cfg: Config) -> List[Callable[[Context], Optional[Signal]]]:
     """Return the detector list for the configured strategy profile.
 
     bugra_replica   → detect_bugra_replica  (fixed-% stop)
     aurvex_enhanced → detect_aurvex_enhanced (ATR-adaptive stop)
+    reversion_v1    → mean_reversion_setup   (additive mean-reversion entry)
     legacy / other  → aurvex_enhanced (default; legacy detectors removed)
+
+    Exactly one detector runs per profile, so reversion_v1 never fires under the
+    momentum profiles (and vice-versa).
     """
+    if cfg.strategy_profile == "reversion_v1":
+        return [mean_reversion_setup]
     if cfg.strategy_profile == "bugra_replica":
         return [detect_bugra_replica]
     return [detect_aurvex_enhanced]

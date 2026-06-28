@@ -297,9 +297,29 @@ class Config:
     # -- Strategy profile ---------------------------------------------------
     # "aurvex_enhanced": enhanced profile — same TA core + ATR-adaptive SL (default)
     # "bugra_replica"  : Bugra system replica — same 5-condition TA, fixed-% SL/TP
+    # "reversion_v1"   : additive mean-reversion entry (Bollinger stretch + ranging
+    #                    LTF + oversold/overbought RSI); maker-friendly fixed-% SL
+    #                    and a single quick R-multiple TP. Never fires under the
+    #                    momentum profiles; see SCALP_STRATEGY_SPEC / setups.py.
     strategy_profile: str = field(
         default_factory=lambda: _str("STRATEGY_PROFILE", "aurvex_enhanced")
     )
+
+    # -- Mean-reversion (reversion_v1) parameters --------------------------
+    # Additive, independent of the momentum knobs. These fields always exist
+    # (cheap defaults) but only the reversion setup + its exit branch read them,
+    # so a non-reversion run is byte-identical to before. The exit is a single
+    # quick TP at REV_TP_R taking 100% (snap-and-out: no break-even move, no
+    # runner) — structurally enforced in RiskManager._build_targets.
+    rev_bb_n: int = field(default_factory=lambda: _int("REV_BB_N", 20))
+    rev_bb_k: float = field(default_factory=lambda: _float("REV_BB_K", 2.0))
+    rev_adx_max: float = field(default_factory=lambda: _float("REV_ADX_MAX", 22.0))
+    rev_htf_adx_max: float = field(
+        default_factory=lambda: _float("REV_HTF_ADX_MAX", 25.0))
+    rev_rsi_long: float = field(default_factory=lambda: _float("REV_RSI_LONG", 30.0))
+    rev_rsi_short: float = field(default_factory=lambda: _float("REV_RSI_SHORT", 70.0))
+    rev_sl_pct: float = field(default_factory=lambda: _float("REV_SL_PCT", 1.5))
+    rev_tp_r: float = field(default_factory=lambda: _float("REV_TP_R", 1.2))
 
     # -- Bugra replica parameters ------------------------------------------
     bugra_stop_pct: float = field(default_factory=lambda: _float("BUGRA_STOP_PCT", 4.49))
@@ -456,8 +476,9 @@ class Config:
             f"({self.risk_pct}) <= max_risk_pct ({self.max_risk_pct}) <= 5"
         )
         assert self.mode in {"paper", "live"}, "AX_MODE must be 'paper' or 'live'"
-        assert self.strategy_profile in {"bugra_replica", "aurvex_enhanced"}, (
-            "STRATEGY_PROFILE must be bugra_replica|aurvex_enhanced"
+        assert self.strategy_profile in {"bugra_replica", "aurvex_enhanced",
+                                         "reversion_v1"}, (
+            "STRATEGY_PROFILE must be bugra_replica|aurvex_enhanced|reversion_v1"
         )
         assert self.leverage_policy in {"efficient", "conservative"}, (
             "LEVERAGE_POLICY must be efficient|conservative"
