@@ -47,51 +47,105 @@ def _timeframe_ms(timeframe: str) -> int:
     return int(timeframe[:-1]) * units[timeframe[-1]]
 
 
+def _paginate_since(fetch_page, ts_of, since: int, now: int, step_ms: int,
+                    max_rows: int, per_call: int = 1000) -> List:
+    """Generic forward paginator advancing a ``since`` cursor by timestamp.
+
+    This is the shared core of every windowed fetch in the data layer. It is the
+    exact spot the "break after the first API page" bug lived: a single Binance
+    request caps at ~1000 rows, so deep history needs several calls, and the loop
+    must advance by **timestamp** — never by ``len(batch) == per_call``. A
+    short-but-non-empty batch is normal and must NOT terminate the loop. Both the
+    OHLCV fetcher and the funding fetcher route through here so the fix is written
+    (and regression-guarded) once.
+
+    * ``fetch_page(since, want)`` -> a list of rows of any shape.
+    * ``ts_of(row)`` -> the row's timestamp in ms (used to advance + de-dup).
+    * ``step_ms`` is added to the last timestamp to move the cursor past it. For
+      fixed-cadence series (OHLCV) it is the bar length; for variable-cadence
+      series (funding) pass ``1`` so no settlement is skipped — overlap is removed
+      by the timestamp de-dup anyway.
+
+    Returns oldest-first, de-duplicated rows (the most recent ``max_rows``).
+    """
+    out: List = []
+    seen = set()
+    while len(out) < max_rows:
+        batch = fetch_page(since, min(per_call, max_rows - len(out)))
+        if not batch:
+            break
+        fresh = [r for r in batch if ts_of(r) not in seen]
+        if not fresh:
+            break                                   # no new rows -> end of history
+        for r in fresh:
+            seen.add(ts_of(r))
+        out.extend(fresh)
+        nxt = ts_of(batch[-1]) + step_ms
+        if nxt <= since:
+            break                                   # cursor not advancing -> stop
+        since = nxt
+        if ts_of(batch[-1]) >= now - step_ms:
+            break                                   # reached the present
+    out.sort(key=ts_of)
+    return out[-max_rows:]
+
+
 def _paginate_ohlcv(ex, symbol: str, timeframe: str, limit: int,
                     per_call: int = 1000) -> List[List]:
     """Fetch up to ``limit`` OHLCV rows, paging forward via ``since``.
 
-    Binance USDT-M / ccxt caps a single ``fetch_ohlcv`` request at ~1000
-    candles, so deep history needs several calls. Pagination advances by
-    **timestamp**, not by ``len(batch) == per_call`` — a short-but-non-empty
-    batch is normal (the exchange often returns fewer rows than requested) and
-    must NOT terminate the loop, otherwise deep ``limit`` values silently
-    truncate to one page. Returns oldest-first, de-duplicated rows (the most
-    recent ``limit`` of them). ``ex`` is any ccxt-like exchange exposing
-    ``parse_timeframe``, ``milliseconds`` and ``fetch_ohlcv(since=, limit=)``.
+    Thin wrapper over :func:`_paginate_since` (the shared, bug-guarded core).
+    ``ex`` is any ccxt-like exchange exposing ``parse_timeframe``,
+    ``milliseconds`` and ``fetch_ohlcv(since=, limit=)``.
     """
     tf_ms = ex.parse_timeframe(timeframe) * 1000
     now = ex.milliseconds()
     since = now - limit * tf_ms
-    out: List[List] = []
-    seen = set()
-    while len(out) < limit:
-        batch = ex.fetch_ohlcv(symbol, timeframe, since=since,
-                               limit=min(per_call, limit - len(out)))
-        if not batch:
-            break
-        fresh = [r for r in batch if r[0] not in seen]
-        if not fresh:
-            break                                   # no new rows -> end of history
-        for r in fresh:
-            seen.add(r[0])
-        out.extend(fresh)
-        nxt = batch[-1][0] + tf_ms
-        if nxt <= since:
-            break                                   # cursor not advancing -> stop
-        since = nxt
-        if batch[-1][0] >= now - tf_ms:
-            break                                   # reached the present
-    out.sort(key=lambda r: r[0])
-    return out[-limit:]
+    return _paginate_since(
+        fetch_page=lambda s, want: ex.fetch_ohlcv(symbol, timeframe,
+                                                  since=s, limit=want),
+        ts_of=lambda r: r[0],
+        since=since, now=now, step_ms=tf_ms, max_rows=limit, per_call=per_call,
+    )
 
 
-def _make_exchange(exchange_id: str):
-    """Construct a markets-loaded ccxt exchange. Seam for tests (monkeypatched)."""
+def _paginate_funding(ex, symbol: str, max_rows: int = 200_000,
+                      per_call: int = 1000,
+                      start_ms: Optional[int] = None) -> List[dict]:
+    """Fetch the full realized funding-rate history, paging forward via ``since``.
+
+    Binance USDT-M ``/fapi/v1/fundingRate`` (ccxt ``fetch_funding_rate_history``)
+    caps a single call at ~1000 settlements, so deep history paginates through the
+    same :func:`_paginate_since` core as candles — this is what guards the funding
+    endpoint against the old break-after-first-page bug. Funding cadence is
+    variable (8h for most, 4h for some alts) and unknown up front, so the cursor
+    advances by ``step_ms=1`` (the de-dup removes any boundary overlap). ``ex`` is
+    a ccxt-like exchange exposing ``milliseconds`` and
+    ``fetch_funding_rate_history(symbol, since=, limit=)``; each row is a dict with
+    at least ``timestamp`` (ms) and ``fundingRate``.
+    """
+    now = ex.milliseconds()
+    # No fixed window: funding history can be years deep. Start from the earliest
+    # available (since=start_ms or 0) and page forward to the present.
+    since = int(start_ms) if start_ms is not None else 0
+    return _paginate_since(
+        fetch_page=lambda s, want: ex.fetch_funding_rate_history(
+            symbol, since=s, limit=want),
+        ts_of=lambda r: int(r["timestamp"]),
+        since=since, now=now, step_ms=1, max_rows=max_rows, per_call=per_call,
+    )
+
+
+def _make_exchange(exchange_id: str, default_type: str = "future"):
+    """Construct a markets-loaded ccxt exchange. Seam for tests (monkeypatched).
+
+    ``default_type`` selects the market kind: ``future`` for USDT-M perps
+    (``binanceusdm``) and ``spot`` for the spot leg (``binance``).
+    """
     import ccxt  # type: ignore
     ex = getattr(ccxt, exchange_id)({
         "enableRateLimit": True,
-        "options": {"defaultType": "future"},
+        "options": {"defaultType": default_type},
     })
     ex.load_markets()
     return ex
@@ -162,6 +216,137 @@ def load_or_fetch_candles(symbol: str, timeframe: str,
         log.warning("ccxt fetch failed (%s/%s): %s — falling back to cache (%d rows)",
                     symbol, timeframe, exc, len(cached))
         return cached or []
+
+
+# ---------------------------------------------------------------------------
+# Funding-rate history: fetch + cache (Carry Phase 0, Task A)
+# ---------------------------------------------------------------------------
+
+def _funding_cache_path(cache_dir: str, symbol: str) -> str:
+    """Cache path for a symbol's realized funding history.
+
+    Parallel to the candle cache (``data/cache/funding_{SYMBOL}.csv``); same
+    keying convention, so deleting the file forces a refresh.
+    """
+    os.makedirs(cache_dir, exist_ok=True)
+    sym = symbol.replace("/", "_").replace(":", "_")
+    return os.path.join(cache_dir, f"funding_{sym}.csv")
+
+
+def infer_funding_cadence_hours(timestamps: Sequence[int]) -> Optional[float]:
+    """Infer the funding cadence (hours between settlements) from timestamps.
+
+    Binance settles funding every 8h for most symbols and every 4h for some
+    alts — the cadence is per-symbol and must never be hardcoded. Uses the median
+    consecutive gap so a few missing/extra settlements don't skew it. Returns
+    ``None`` when there are too few points to infer.
+    """
+    ts = sorted(int(t) for t in timestamps)
+    deltas = [ts[i + 1] - ts[i] for i in range(len(ts) - 1) if ts[i + 1] > ts[i]]
+    if not deltas:
+        return None
+    deltas.sort()
+    median_ms = deltas[len(deltas) // 2]
+    return round(median_ms / 3_600_000.0, 3)
+
+
+def _read_funding_cache(path: str) -> List[Tuple[int, float]]:
+    rows: List[Tuple[int, float]] = []
+    with open(path, newline="") as f:
+        for row in csv.reader(f):
+            try:
+                rows.append((int(float(row[0])), float(row[1])))
+            except (ValueError, IndexError):
+                pass  # skip header / malformed lines
+    rows.sort(key=lambda r: r[0])
+    return rows
+
+
+def _write_funding_cache(path: str, rows: Sequence[Tuple[int, float]]) -> None:
+    cadence = infer_funding_cadence_hours([t for t, _ in rows])
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["timestamp", "fundingRate", "cadence_hours"])
+        for ts, rate in rows:
+            w.writerow([ts, rate, cadence if cadence is not None else ""])
+
+
+def load_or_fetch_funding(symbol: str,
+                          cache_dir: str = "data/cache",
+                          exchange_id: str = "binanceusdm",
+                          refresh: bool = False) -> List[Tuple[int, float]]:
+    """Load realized funding history (``[(timestamp_ms, fundingRate), ...]``).
+
+    Reads the CSV cache unless ``refresh`` is set or the cache is absent; on a
+    miss it pages the full history via :func:`_paginate_funding` and writes the
+    cache (timestamp, fundingRate, inferred cadence). Offline / no-ccxt: returns
+    whatever is cached (possibly empty) rather than raising, mirroring
+    :func:`load_or_fetch_candles`.
+    """
+    path = _funding_cache_path(cache_dir, symbol)
+    if not refresh and os.path.exists(path):
+        cached = _read_funding_cache(path)
+        if cached:
+            log.info("Loaded %d funding settlements from cache: %s",
+                     len(cached), path)
+            return cached
+
+    try:
+        ex = _make_exchange(exchange_id)
+        raw = _paginate_funding(ex, symbol)
+        rows = sorted(((int(r["timestamp"]), float(r["fundingRate"]))
+                       for r in raw if r.get("fundingRate") is not None),
+                      key=lambda r: r[0])
+        if rows:
+            _write_funding_cache(path, rows)
+            log.info("Fetched & cached %d funding settlements: %s", len(rows), symbol)
+            return rows
+        return _read_funding_cache(path) if os.path.exists(path) else []
+    except Exception as exc:  # pragma: no cover - network/offline
+        log.warning("funding fetch failed (%s): %s — falling back to cache", symbol, exc)
+        return _read_funding_cache(path) if os.path.exists(path) else []
+
+
+# ---------------------------------------------------------------------------
+# Spot price series: fetch + cache (Carry Phase 0, Task A — hedge leg)
+# ---------------------------------------------------------------------------
+
+def load_or_fetch_spot(symbol: str, timeframe: str = "1d",
+                       limit: int = 1500,
+                       cache_dir: str = "data/cache",
+                       exchange_id: str = "binance",
+                       refresh: bool = False) -> List[List]:
+    """Load a cached spot OHLCV series for the hedge leg / basis stats.
+
+    The spot market (``{BASE}/USDT`` on ``ccxt.binance`` with ``defaultType=spot``)
+    is a *different* market from the USDT-M perp, so it caches under its own key
+    (``BTC_USDT_{tf}.csv`` vs the perp's ``BTC_USDT_USDT_{tf}.csv``). Reuses the
+    shared paginator. Phase 0's frictionless harvest does not need spot PnL, but
+    spot is needed for descriptive basis stats and by the later sim; if the spot
+    market is unreachable from the engine host this returns ``[]`` so the caller
+    can REPORT the gap explicitly (resolving the hedge-availability question)
+    rather than silently skipping.
+    """
+    path = _cache_path(cache_dir, symbol, timeframe)
+    if not refresh and os.path.exists(path):
+        cached = _read_cache(path)
+        if cached:
+            log.info("Loaded %d spot bars from cache: %s", len(cached), path)
+            return cached[-limit:]
+    try:
+        ex = _make_exchange(exchange_id, default_type="spot")
+        raw = _paginate_ohlcv(ex, symbol, timeframe, limit)
+        if raw:
+            with open(path, "w", newline="") as f:
+                w = csv.writer(f)
+                for row in raw:
+                    w.writerow(row)
+            log.info("Fetched & cached %d spot bars: %s/%s", len(raw), symbol, timeframe)
+            return raw
+        return _read_cache(path) if os.path.exists(path) else []
+    except Exception as exc:  # pragma: no cover - network/offline
+        log.warning("spot fetch failed (%s/%s): %s", symbol, timeframe, exc)
+        return _read_cache(path) if os.path.exists(path) else []
 
 
 # ---------------------------------------------------------------------------
