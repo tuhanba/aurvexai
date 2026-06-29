@@ -110,6 +110,35 @@ def test_large_buffer_prevents_liquidation():
     assert res.liquidations == 0
 
 
+def test_cross_margin_spot_backstop_prevents_liquidation():
+    """The decisive architecture finding: in cross mode the spot long's gain
+    backstops the perp margin, so a delta-neutral up-move does NOT liquidate —
+    whereas the same path liquidates in isolated mode."""
+    cm = cs.CostModel()
+    N = 10_000.0
+    marks = [100.0, 110.0, 130.0, 150.0, 160.0, 160.0]   # perp == spot path
+    iso = cs.CollateralModel(leverage=3.0, mmr=0.005, buffer_frac=0.0,
+                             margin_mode="isolated")
+    cross = cs.CollateralModel(leverage=3.0, mmr=0.005, buffer_frac=0.0,
+                               margin_mode="cross")
+    res_iso = cs.simulate_static_hold([0.0001] * 5, marks, marks,
+                                      notional=N, cm=cm, col=iso)
+    res_cross = cs.simulate_static_hold([0.0001] * 5, marks, marks,
+                                        notional=N, cm=cm, col=cross)
+    assert res_iso.liquidations >= 1
+    assert res_cross.liquidations == 0
+
+
+def test_cross_margin_equity_includes_spot_gain():
+    iso = cs.CollateralModel(leverage=2.0, mmr=0.01, buffer_frac=0.0, margin_mode="isolated")
+    cross = cs.CollateralModel(leverage=2.0, mmr=0.01, buffer_frac=0.0, margin_mode="cross")
+    N = 1_000.0
+    # 60% up-move: isolated short equity = -100 -> liquidated; cross adds the
+    # spot +600 gain -> equity ~500 -> safe.
+    assert iso.is_liquidated(N, 100.0, 160.0)
+    assert not cross.is_liquidated(N, 100.0, 160.0, spot_entry=100.0, spot_now=160.0)
+
+
 def test_liquidation_equity_formula():
     col = cs.CollateralModel(leverage=2.0, mmr=0.01, buffer_frac=0.0)
     N = 1_000.0

@@ -151,9 +151,17 @@ def evaluate_gate(per_symbol: Dict[str, dict], controls: Dict[str, dict],
     sig_pos = [s for s in alive
                if (per_symbol[s]["sim"]["sig"] or {}).get("boot_positive")
                and (per_symbol[s]["sim"]["sig"] or {}).get("nw_t", 0) > 2.0]
-    controls_ok = all(
-        c.get("sim") is None or c["sim"]["annual_on_capital"] <= 0
-        for c in controls.values())
+    # A control "passes" when it is NOT significantly net-positive. Use the
+    # significance, not the raw annual sign: a marginally-positive annual with a
+    # non-significant (or negative) t-stat is noise, not an edge.
+    def _control_ok(c: dict) -> bool:
+        sim = c.get("sim")
+        if not sim:
+            return True
+        sig = sim.get("sig") or {}
+        sig_pos = sig.get("boot_positive") and sig.get("nw_t", 0) > 2.0
+        return not sig_pos
+    controls_ok = all(_control_ok(c) for c in controls.values())
 
     c1 = len(meaningful) >= max(2, len(alive) // 2)     # net meaningful, broad
     c2 = len(no_liq) >= max(2, len(alive) // 2)         # survives without ruin
@@ -205,7 +213,13 @@ def build_report(per_symbol, controls, universe, holdout, gate, gate2, args,
     p.append(f"> Cost model: maker {cm.maker_fee:.4f}, taker {cm.taker_fee:.4f}, "
              f"slippage {cm.slippage:.4f}, half-spread {cm.half_spread:.4f} per leg "
              f"(4 legs). Collateral: leverage {col.leverage}, MMR {col.mmr}, buffer "
-             f"{col.buffer_frac} of notional, liq-penalty {col.liq_penalty}.\n\n")
+             f"{col.buffer_frac} of notional, liq-penalty {col.liq_penalty}, "
+             f"**margin-mode {col.margin_mode}**.\n\n")
+    if col.margin_mode == "isolated":
+        p.append("> `margin-mode=isolated` is the harsh default: the perp short "
+                 "stands alone, so a sharp up-move can liquidate it even though the "
+                 "spot leg gained. Re-run with `--margin-mode cross` to model the "
+                 "realistic backstop (spot collateralises the perp) and compare.\n\n")
     p.append("> **Return is on DEPLOYED CAPITAL** (spot notional + perp margin + "
              "buffer), not notional. The spot leg is unlevered, so capital >= "
              "notional — this is why net-on-capital is well below Phase-0's "
@@ -327,6 +341,8 @@ def main() -> None:
     ap.add_argument("--notional", type=float, default=10_000.0)
     ap.add_argument("--leverage", type=float, default=3.0)
     ap.add_argument("--buffer", type=float, default=0.5, help="collateral buffer frac of notional")
+    ap.add_argument("--margin-mode", default="isolated", choices=["isolated", "cross"],
+                    help="isolated (perp stands alone) | cross (spot gain backstops perp margin)")
     ap.add_argument("--exit-run", type=int, default=3, help="Task E: N consecutive neg settlements")
     ap.add_argument("--refresh", action="store_true")
     ap.add_argument("--out", default=os.path.join(ROOT, "CARRY_PHASE1_FINDINGS.md"))
@@ -335,7 +351,8 @@ def main() -> None:
     args.controls = [b.strip().upper() for b in args.controls.split(",") if b.strip()]
 
     cm = cs.CostModel()
-    col = cs.CollateralModel(leverage=args.leverage, buffer_frac=args.buffer)
+    col = cs.CollateralModel(leverage=args.leverage, buffer_frac=args.buffer,
+                             margin_mode=args.margin_mode)
 
     per_symbol: Dict[str, dict] = {}
     controls: Dict[str, dict] = {}
@@ -360,7 +377,8 @@ def main() -> None:
     with open(args.out, "w") as fh:
         fh.write(report)
 
-    print(f"any_data={any_data}")
+    print(f"any_data={any_data}  margin_mode={args.margin_mode}  "
+          f"leverage={args.leverage}  buffer={args.buffer}")
     for base in args.universe + args.controls:
         d = per_symbol.get(base) or controls.get(base) or {}
         sim = d.get("sim")

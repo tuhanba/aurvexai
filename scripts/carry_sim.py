@@ -47,11 +47,22 @@ class CostModel:
 
 @dataclass
 class CollateralModel:
-    """Perp-short margin + buffer. ``buffer_frac`` and margins are of notional."""
+    """Perp-short margin + buffer. ``buffer_frac`` and margins are of notional.
+
+    ``margin_mode`` is the decisive collateral-architecture choice:
+      * ``"isolated"`` — the perp short stands on its own margin + buffer. A sharp
+        up-move marks it to a loss and the spot gain (in a separate wallet) does
+        NOT rescue it. The conservative, harsh default.
+      * ``"cross"`` — the spot long's offsetting gain backstops the perp margin
+        (one portfolio). For a delta-neutral pair the gains cancel the losses, so
+        liquidation from price moves is rare; the position bleeds only on negative
+        funding. This is how cash-and-carry is actually run.
+    """
     leverage: float = 3.0          # perp short leverage (initial margin = N/lev)
     mmr: float = 0.005             # maintenance margin rate (0.5%)
     buffer_frac: float = 0.5       # extra collateral posted, as a fraction of N
     liq_penalty: float = 0.0010    # extra slippage realized on a forced unwind
+    margin_mode: str = "isolated"  # "isolated" | "cross"
 
     def initial_margin(self, notional: float) -> float:
         return notional / self.leverage
@@ -65,17 +76,26 @@ class CollateralModel:
         """
         return notional * (1.0 + 1.0 / self.leverage + self.buffer_frac)
 
-    def perp_equity(self, notional: float, perp_entry: float, perp_now: float) -> float:
-        """Margin-account equity of the short leg as price moves.
+    def perp_equity(self, notional: float, perp_entry: float, perp_now: float,
+                    spot_entry: Optional[float] = None,
+                    spot_now: Optional[float] = None) -> float:
+        """Margin equity backing the short leg as price moves.
 
-        Short PnL = N*(1 - perp_now/perp_entry) (negative when price rises). Equity
-        = initial margin + buffer + short unrealized PnL. The spot gain is NOT here.
+        Isolated: initial margin + buffer + short unrealized PnL. Cross: also adds
+        the spot long's unrealized gain (the realistic backstop), which for a
+        delta-neutral pair offsets the short loss.
         """
         short_pnl = notional * (1.0 - perp_now / perp_entry)
-        return self.initial_margin(notional) + self.buffer_frac * notional + short_pnl
+        eq = self.initial_margin(notional) + self.buffer_frac * notional + short_pnl
+        if self.margin_mode == "cross" and spot_entry and spot_now:
+            eq += notional * (spot_now / spot_entry - 1.0)
+        return eq
 
-    def is_liquidated(self, notional: float, perp_entry: float, perp_now: float) -> bool:
-        return self.perp_equity(notional, perp_entry, perp_now) <= notional * self.mmr
+    def is_liquidated(self, notional: float, perp_entry: float, perp_now: float,
+                      spot_entry: Optional[float] = None,
+                      spot_now: Optional[float] = None) -> bool:
+        return self.perp_equity(notional, perp_entry, perp_now,
+                                spot_entry, spot_now) <= notional * self.mmr
 
 
 # ---------------------------------------------------------------------------
@@ -216,9 +236,13 @@ def simulate_static_hold(funding_rates: Sequence[float],
             _open(i)
             continue
 
-        # Held: liquidation check on the short leg at this settlement's mark.
+        # Held: liquidation check on the short leg at this settlement's mark. In
+        # cross mode the spot long's gain backstops the perp margin, so the spot
+        # mark is needed too.
         p = perp_marks[i]
-        if p is not None and col.is_liquidated(notional, open_perp_entry, p):
+        s_now = spot_marks[i]
+        if p is not None and col.is_liquidated(notional, open_perp_entry, p,
+                                               open_spot_entry, s_now):
             _close(i, taker=True, liq=True)
             continue
 
