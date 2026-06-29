@@ -67,6 +67,26 @@ class FakeFundingEx:
         return out
 
 
+class FakeBinanceFundingEx(FakeFundingEx):
+    """Models Binance's real quirk: ``fetch_funding_rate_history`` with a falsy
+    ``since`` (0/None) returns the most-RECENT page, not the oldest. A forward
+    walk that starts at ``since=0`` therefore sees only the last page(s) and
+    silently truncates deep history — the exact failure observed on the engine
+    host (every symbol pinned to ~200 recent settlements). Anchoring the walk to
+    a real early epoch (the fix) makes the full history page in.
+    """
+
+    def fetch_funding_rate_history(self, symbol, since=None, limit=None):
+        self.calls += 1
+        cap = min(limit or self.cap, self.cap)
+        if not since:                       # Binance: falsy since -> recent page
+            i0 = max(0, self.total - cap)
+            return [{"timestamp": self.start + i * self.cad,
+                     "fundingRate": self.rate, "symbol": symbol}
+                    for i in range(i0, self.total)]
+        return super().fetch_funding_rate_history(symbol, since=since, limit=limit)
+
+
 class FakeSpotEx:
     """Minimal spot OHLCV feed for the spot-leg smoke test."""
     TF_MS = 86_400_000  # 1d
@@ -114,6 +134,24 @@ def test_funding_paginate_stops_when_history_exhausted():
     ex = FakeFundingEx(total=300, cap=1000)
     rows = _paginate_funding(ex, "X")
     assert len(rows) == 300
+
+
+def test_funding_walk_anchors_at_epoch_not_since_zero():
+    """Regression: with the real Binance quirk (falsy ``since`` -> recent page),
+    the default walk must anchor at the early epoch and page in the FULL history.
+    Passing ``start_ms=0`` reproduces the truncation bug (recent page only)."""
+    full = _paginate_funding(FakeBinanceFundingEx(total=3000, cap=1000),
+                             "BTC/USDT:USDT")
+    assert len(full) == 3000                # full history paged in
+    ts = [int(r["timestamp"]) for r in full]
+    assert ts == sorted(ts) and len(set(ts)) == 3000
+
+    # start_ms=0 hits the quirk and truncates to the most-recent page — the bug
+    # observed on the engine host (every symbol pinned to a tiny recent window).
+    truncated = _paginate_funding(FakeBinanceFundingEx(total=3000, cap=1000),
+                                  "BTC/USDT:USDT", start_ms=0)
+    assert len(truncated) == 1000
+    assert len(truncated) < len(full)
 
 
 # ---------------------------------------------------------------------------

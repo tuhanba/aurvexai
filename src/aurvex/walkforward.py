@@ -109,6 +109,14 @@ def _paginate_ohlcv(ex, symbol: str, timeframe: str, limit: int,
     )
 
 
+# Binance USDT-M perpetuals launched 2019-09 (BTCUSDT perp 2019-09-13). Anchoring
+# the funding walk to a real early epoch — never ``since=0`` — is what makes deep
+# history actually page in: with ``since=0`` Binance returns the most-RECENT page,
+# so a forward walk from 0 can only ever see the last ~1-2 pages (the truncation
+# the spot/candle path avoids by anchoring ``since = now - limit*tf_ms``).
+FUNDING_EPOCH_MS = 1_567_296_000_000  # 2019-09-01T00:00:00Z
+
+
 def _paginate_funding(ex, symbol: str, max_rows: int = 200_000,
                       per_call: int = 1000,
                       start_ms: Optional[int] = None) -> List[dict]:
@@ -125,9 +133,10 @@ def _paginate_funding(ex, symbol: str, max_rows: int = 200_000,
     at least ``timestamp`` (ms) and ``fundingRate``.
     """
     now = ex.milliseconds()
-    # No fixed window: funding history can be years deep. Start from the earliest
-    # available (since=start_ms or 0) and page forward to the present.
-    since = int(start_ms) if start_ms is not None else 0
+    # Funding history can be years deep. Anchor the walk to a real early epoch and
+    # page forward to the present — NOT ``since=0`` (which makes Binance return the
+    # most-recent page and silently truncates the history to ~1-2 pages).
+    since = int(start_ms) if start_ms is not None else FUNDING_EPOCH_MS
     return _paginate_since(
         fetch_page=lambda s, want: ex.fetch_funding_rate_history(
             symbol, since=s, limit=want),
