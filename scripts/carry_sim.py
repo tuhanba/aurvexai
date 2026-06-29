@@ -104,11 +104,12 @@ class CollateralModel:
 
 def align_marks_to_funding(funding_rows: Sequence[Tuple[int, float]],
                            mark_candles: Sequence[Sequence[float]],
-                           tolerance_ms: int) -> List[Optional[float]]:
-    """For each funding settlement, the close of the nearest mark candle.
+                           tolerance_ms: int, field: int = 4) -> List[Optional[float]]:
+    """For each funding settlement, ``field`` of the nearest mark candle.
 
-    ``mark_candles`` are ``[ts, o, h, l, c, v]`` rows (perp or spot). Returns one
-    close per funding row, or ``None`` when no candle falls within
+    ``mark_candles`` are ``[ts, o, h, l, c, v]`` rows (perp or spot); ``field`` is
+    the OHLCV index (4=close default, 2=high for the intra-settlement extreme).
+    Returns one value per funding row, or ``None`` when no candle falls within
     ``tolerance_ms`` (a gap the caller must handle, never silently zero-fill).
     """
     if not mark_candles:
@@ -126,7 +127,7 @@ def align_marks_to_funding(funding_rows: Sequence[Tuple[int, float]],
                 d = abs(ts[j] - f_ts)
                 if d < best_d:
                     best_d = d
-                    best = float(marks[j][4])
+                    best = float(marks[j][field])
         out.append(best if best_d <= tolerance_ms else None)
     return out
 
@@ -165,7 +166,9 @@ def simulate_static_hold(funding_rates: Sequence[float],
                          notional: float,
                          cm: CostModel,
                          col: CollateralModel,
-                         exit_on_negative_run: int = 0) -> SimResult:
+                         exit_on_negative_run: int = 0,
+                         perp_highs: Optional[Sequence[Optional[float]]] = None,
+                         basis_stress: float = 0.0) -> SimResult:
     """Continuously-held hedged carry across aligned settlements.
 
     Opens the pair at the first usable settlement, accrues funding each
@@ -178,6 +181,14 @@ def simulate_static_hold(funding_rates: Sequence[float],
     that many consecutive negative-funding settlements and re-open after an equal
     run of positive ones. 0 = pure static hold. This is a DESCRIPTIVE switch, not
     a tuned parameter.
+
+    Tail-microstructure stress (the Phase-1 review's binding caveat): when
+    ``perp_highs`` is supplied, liquidation is checked at the intra-settlement
+    perp HIGH, not just the close — and the high is inflated by ``basis_stress``
+    to model a squeeze where the perp decouples ABOVE spot (basis blowout). In
+    cross margin the spot gain is still credited only at the spot close, so the
+    basis gap is a real hit to the pair. This is exactly the moment an 8h-close
+    check misses and the moment a cross-margined short actually dies.
     """
     n = len(funding_rates)
     cap = col.deployed_capital(notional)
@@ -241,6 +252,15 @@ def simulate_static_hold(funding_rates: Sequence[float],
         # mark is needed too.
         p = perp_marks[i]
         s_now = spot_marks[i]
+        # Tail stress: check the intra-settlement perp HIGH, decoupled above spot
+        # by basis_stress (the spot gain is still only at its close). This is the
+        # squeeze case an 8h-close check cannot see.
+        if perp_highs is not None and perp_highs[i] is not None and open_perp_entry:
+            eff_perp = perp_highs[i] * (1.0 + basis_stress)
+            if col.is_liquidated(notional, open_perp_entry, eff_perp,
+                                 open_spot_entry, s_now):
+                _close(i, taker=True, liq=True)
+                continue
         if p is not None and col.is_liquidated(notional, open_perp_entry, p,
                                                open_spot_entry, s_now):
             _close(i, taker=True, liq=True)

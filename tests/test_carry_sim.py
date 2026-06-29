@@ -152,6 +152,28 @@ def test_liquidation_equity_formula():
 # 5. Negative control: structurally-negative funding loses
 # ---------------------------------------------------------------------------
 
+def test_tail_stress_intra_settlement_high_liquidates_cross():
+    """Tail-microstructure stress: a cross-margined short survives on CLOSES
+    (perp == spot, gains cancel), but an intra-settlement perp HIGH decoupled
+    above spot (basis blowout) breaches margin. The stress check must catch the
+    squeeze the 8h-close check misses."""
+    cm = cs.CostModel()
+    col = cs.CollateralModel(leverage=3.0, mmr=0.005, buffer_frac=0.2,
+                             margin_mode="cross")
+    N = 10_000.0
+    # Closes are flat (perp==spot) -> no liquidation without stress.
+    closes = [100.0] * 6
+    base = cs.simulate_static_hold([0.0001] * 5, closes, closes,
+                                   notional=N, cm=cm, col=col)
+    assert base.liquidations == 0
+    # A big intra-settlement perp wick + basis blowout at i=2 -> stress liquidation.
+    highs = [100.0, 100.0, 165.0, 100.0, 100.0, 100.0]
+    stressed = cs.simulate_static_hold([0.0001] * 5, closes, closes,
+                                       notional=N, cm=cm, col=col,
+                                       perp_highs=highs, basis_stress=0.05)
+    assert stressed.liquidations >= 1
+
+
 def test_negative_funding_series_loses():
     cm = cs.CostModel()
     col = cs.CollateralModel()

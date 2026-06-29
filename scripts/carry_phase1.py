@@ -80,10 +80,11 @@ def load_symbol(base: str, cache_dir: str, refresh: bool) -> dict:
     tol = int((cadence_h or 8.0) * 3_600_000)
     perp_marks = cs.align_marks_to_funding(funding, perp, tol)
     spot_marks = cs.align_marks_to_funding(funding, spot, tol)
+    perp_highs = cs.align_marks_to_funding(funding, perp, tol, field=2)  # intra-settlement extreme
     return {
         "n": len(funding), "cadence_h": cadence_h,
         "rates": [r for _, r in funding],
-        "perp_marks": perp_marks, "spot_marks": spot_marks,
+        "perp_marks": perp_marks, "spot_marks": spot_marks, "perp_highs": perp_highs,
         "first": funding[0][0], "last": funding[-1][0],
         "marks_ok": sum(1 for m in perp_marks if m is not None),
     }
@@ -95,10 +96,12 @@ def years_span(first_ms: int, last_ms: int) -> float:
 
 def simulate(base: str, data: dict, notional: float,
              cm: cs.CostModel, col: cs.CollateralModel,
-             exit_run: int = 0) -> dict:
+             exit_run: int = 0, stress_basis: Optional[float] = None) -> dict:
     res = cs.simulate_static_hold(
         data["rates"], data["perp_marks"], data["spot_marks"],
-        notional=notional, cm=cm, col=col, exit_on_negative_run=exit_run)
+        notional=notional, cm=cm, col=col, exit_on_negative_run=exit_run,
+        perp_highs=(data.get("perp_highs") if stress_basis is not None else None),
+        basis_stress=(stress_basis or 0.0))
     yrs = years_span(data["first"], data["last"])
     annual = res.net_return_on_capital / yrs
     rets = res.capital_returns
@@ -220,6 +223,12 @@ def build_report(per_symbol, controls, universe, holdout, gate, gate2, args,
                  "stands alone, so a sharp up-move can liquidate it even though the "
                  "spot leg gained. Re-run with `--margin-mode cross` to model the "
                  "realistic backstop (spot collateralises the perp) and compare.\n\n")
+    if getattr(args, "stress", False):
+        p.append(f"> **Tail-microstructure stress ON** (basis blowout "
+                 f"{args.stress_basis:.3f}): liquidation is checked at the "
+                 f"intra-settlement perp HIGH decoupled above spot, the squeeze "
+                 f"case an 8h-close check misses. Liquidations here are the honest "
+                 f"tail risk a cross-margined short still carries.\n\n")
     p.append("> **Return is on DEPLOYED CAPITAL** (spot notional + perp margin + "
              "buffer), not notional. The spot leg is unlevered, so capital >= "
              "notional — this is why net-on-capital is well below Phase-0's "
@@ -344,6 +353,10 @@ def main() -> None:
     ap.add_argument("--margin-mode", default="isolated", choices=["isolated", "cross"],
                     help="isolated (perp stands alone) | cross (spot gain backstops perp margin)")
     ap.add_argument("--exit-run", type=int, default=3, help="Task E: N consecutive neg settlements")
+    ap.add_argument("--stress", action="store_true",
+                    help="tail-microstructure stress: liquidation at intra-settlement perp HIGH")
+    ap.add_argument("--stress-basis", type=float, default=0.02,
+                    help="basis blowout: perp decoupling above spot at the squeeze (default 2%%)")
     ap.add_argument("--refresh", action="store_true")
     ap.add_argument("--out", default=os.path.join(ROOT, "CARRY_PHASE1_FINDINGS.md"))
     args = ap.parse_args()
@@ -354,18 +367,22 @@ def main() -> None:
     col = cs.CollateralModel(leverage=args.leverage, buffer_frac=args.buffer,
                              margin_mode=args.margin_mode)
 
+    stress = args.stress_basis if args.stress else None
     per_symbol: Dict[str, dict] = {}
     controls: Dict[str, dict] = {}
     for base in args.universe:
         d = load_symbol(base, args.cache_dir, args.refresh)
         if d.get("n", 0) > 0:
-            d["sim"] = simulate(base, d, args.notional, cm, col, exit_run=0)
-            d["sim_exit"] = simulate(base, d, args.notional, cm, col, exit_run=args.exit_run)
+            d["sim"] = simulate(base, d, args.notional, cm, col, exit_run=0,
+                                stress_basis=stress)
+            d["sim_exit"] = simulate(base, d, args.notional, cm, col,
+                                     exit_run=args.exit_run, stress_basis=stress)
         per_symbol[base] = d
     for base in args.controls:
         d = load_symbol(base, args.cache_dir, args.refresh)
         if d.get("n", 0) > 0:
-            d["sim"] = simulate(base, d, args.notional, cm, col, exit_run=0)
+            d["sim"] = simulate(base, d, args.notional, cm, col, exit_run=0,
+                                stress_basis=stress)
         controls[base] = d
 
     any_data = any(d.get("sim") for d in {**per_symbol, **controls}.values())
@@ -378,7 +395,8 @@ def main() -> None:
         fh.write(report)
 
     print(f"any_data={any_data}  margin_mode={args.margin_mode}  "
-          f"leverage={args.leverage}  buffer={args.buffer}")
+          f"leverage={args.leverage}  buffer={args.buffer}  "
+          f"stress={'off' if stress is None else f'basis={stress}'}")
     for base in args.universe + args.controls:
         d = per_symbol.get(base) or controls.get(base) or {}
         sim = d.get("sim")
