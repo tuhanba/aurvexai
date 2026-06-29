@@ -15,6 +15,7 @@ decomposition_report.md
 exit_replay_report.md
 execution_experiments_report.md
 trend_sweep_report.md
+holdout_report.md
 
 # Python
 __pycache__/
