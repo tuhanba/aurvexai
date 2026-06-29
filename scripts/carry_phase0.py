@@ -84,13 +84,18 @@ def autocorr(series: Sequence[float], lag: int) -> float:
     return num / denom
 
 
-def autocorr_horizon(series: Sequence[float], max_lag: int = 50,
+def autocorr_horizon(series: Sequence[float], max_lag: int = 200,
                      threshold: float = 0.2) -> int:
     """Smallest lag at which |acf| first falls below ``threshold``.
 
     Used as the block-bootstrap block length: blocks must be at least as long as
     the horizon over which settlements stay correlated, otherwise the bootstrap
     understates the variance of the mean. Floored at 1, capped at ``max_lag``.
+
+    The cap is 200 (not 50): on the engine-host run the majors (BTC/ETH/XRP/LINK)
+    saturated a 50-lag cap, i.e. funding stayed correlated past ~16 days, so a
+    50-block bootstrap would still understate the variance of the mean. 200
+    (~66 days at 8h) gives the crossing room to actually appear.
     """
     n = len(series)
     hi = min(max_lag, n - 1)
