@@ -267,10 +267,11 @@ def build_report(per_symbol, controls, universe, holdout, gate, gate2, args,
             "funding_pnl": round(r.funding_pnl, 2),
             "costs": round(r.cost_entry + r.cost_exit + r.cost_liq, 2),
             "liq": r.liquidations,
+            "gaps": r.gap_settlements,
             "control": "yes" if s in args.controls else "",
         })
     p.append(_md(rows, ["symbol", "n", "net_on_capital", "annual_on_capital",
-                        "max_drawdown", "funding_pnl", "costs", "liq", "control"]))
+                        "max_drawdown", "funding_pnl", "costs", "liq", "gaps", "control"]))
     p.append("\n`annual_on_capital` = total net-on-capital / years. `max_drawdown` "
              "is the peak-to-trough drop of cumulative return on capital — the ruin "
              "measure. `liq` is informational (a delta-neutral liquidation is a "
@@ -424,8 +425,10 @@ def main() -> None:
             continue
         r = sim["res"]
         tag = "[control]" if base in args.controls else ""
+        cov = d.get("marks_ok", 0)
         print(f"  {base:<6} annual_on_capital={_f(sim['annual_on_capital'],4)} "
               f"maxDD={_f(r.max_drawdown,3)} liq={r.liquidations} "
+              f"gaps={r.gap_settlements}/{d.get('n')} marks_ok={cov} "
               f"nw_t={_f((sim['sig'] or {}).get('nw_t'),2)} {tag}")
     if any_data:
         print(f"HOLDOUT: {'PASS' if holdout.get('passes') else 'FAIL/na'}")

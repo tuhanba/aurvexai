@@ -148,6 +148,10 @@ class SimResult:
     basis_pnl: float = 0.0
     liquidations: int = 0
     settlements_held: int = 0
+    # Settlements where a leg's mark was missing and had to be carried forward from
+    # the last valid bar (a data-coverage gap). A high count means the stress
+    # result for this symbol is not trustworthy — never a silent isolated fallback.
+    gap_settlements: int = 0
     # Peak-to-trough drawdown of cumulative net return ON CAPITAL. This — not the
     # liquidation count — is the ruin measure: a delta-neutral pair whose perp is
     # liquidated and re-entered has taken a COST (the basis gap + fees), not a
@@ -215,6 +219,38 @@ def simulate_static_hold(funding_rates: Sequence[float],
     neg_run = 0
     pos_run = 0
     waiting_to_reenter = False
+    # Last valid marks, carried forward across data gaps so a missing spot bar can
+    # NEVER silently drop the cross-margin backstop (which would revert the check
+    # to isolated and manufacture a fake liquidation on a rally).
+    last_perp: Optional[float] = None
+    last_spot: Optional[float] = None
+    last_perp_high: Optional[float] = None
+    last_spot_high: Optional[float] = None
+
+    def _cf(i: int) -> Tuple[Optional[float], Optional[float], Optional[float],
+                             Optional[float]]:
+        """Marks for settlement ``i`` with carry-forward; counts a gap if any
+        leg had to be filled from a prior bar."""
+        nonlocal last_perp, last_spot, last_perp_high, last_spot_high
+        p = perp_marks[i] if perp_marks[i] is not None else last_perp
+        s = spot_marks[i] if spot_marks[i] is not None else last_spot
+        ph = (perp_highs[i] if perp_highs is not None and perp_highs[i] is not None
+              else last_perp_high)
+        sh = (spot_highs[i] if spot_highs is not None and spot_highs[i] is not None
+              else last_spot_high)
+        if (perp_marks[i] is None or spot_marks[i] is None
+                or (perp_highs is not None and perp_highs[i] is None)
+                or (spot_highs is not None and spot_highs[i] is None)):
+            res.gap_settlements += 1
+        if perp_marks[i] is not None:
+            last_perp = perp_marks[i]
+        if spot_marks[i] is not None:
+            last_spot = spot_marks[i]
+        if perp_highs is not None and perp_highs[i] is not None:
+            last_perp_high = perp_highs[i]
+        if spot_highs is not None and spot_highs[i] is not None:
+            last_spot_high = spot_highs[i]
+        return p, s, ph, sh
 
     def _open(i: int) -> bool:
         nonlocal open_perp_entry, open_spot_entry
@@ -273,27 +309,26 @@ def simulate_static_hold(funding_rates: Sequence[float],
             _open(i)
             continue
 
-        # Held: liquidation check on the short leg at this settlement's mark. In
-        # cross mode the spot long's gain backstops the perp margin, so the spot
-        # mark is needed too.
-        p = perp_marks[i]
-        s_now = spot_marks[i]
+        # Held: liquidation check. Marks are carried forward across gaps so the
+        # cross-margin spot backstop is NEVER silently dropped (which would revert
+        # the check to isolated and fake a liquidation on a rally). In cross mode,
+        # if no spot mark has ever been seen, skip the check — we cannot value the
+        # hedge and must not force-liquidate on ignorance.
+        p, s_now, ph, sh = _cf(i)
+        cross_blind = (col.margin_mode == "cross" and s_now is None)
         # Tail stress: check the intra-settlement perp HIGH, decoupled above spot
-        # by basis_stress (the spot gain is still only at its close). This is the
-        # squeeze case an 8h-close check cannot see.
-        if perp_highs is not None and perp_highs[i] is not None and open_perp_entry:
-            eff_perp = perp_highs[i] * (1.0 + basis_stress)
-            # Spot moves with the perp during the wick; the pair's loss is only the
-            # basis gap, so back the cross margin with the SPOT high (not its close).
-            s_high = (spot_highs[i] if spot_highs is not None
-                      and spot_highs[i] is not None else s_now)
+        # by basis_stress. Both legs wick together, so back the margin with the
+        # SPOT high; the realized loss is only the basis gap.
+        if ph is not None and not cross_blind:
+            eff_perp = ph * (1.0 + basis_stress)
+            s_high = sh if sh is not None else s_now
             if col.is_liquidated(notional, open_perp_entry, eff_perp,
                                  open_spot_entry, s_high):
                 _close(i, taker=True, liq=True, perp_price=eff_perp, spot_price=s_high)
                 continue
-        if p is not None and col.is_liquidated(notional, open_perp_entry, p,
-                                               open_spot_entry, s_now):
-            _close(i, taker=True, liq=True, perp_price=p)
+        if p is not None and not cross_blind and col.is_liquidated(
+                notional, open_perp_entry, p, open_spot_entry, s_now):
+            _close(i, taker=True, liq=True, perp_price=p, spot_price=s_now)
             continue
 
         # Accrue funding (short receives funding_rate * notional).
