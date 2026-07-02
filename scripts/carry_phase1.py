@@ -82,10 +82,12 @@ def load_symbol(base: str, cache_dir: str, refresh: bool) -> dict:
     perp_marks = cs.align_marks_to_funding(funding, perp, tol)
     spot_marks = cs.align_marks_to_funding(funding, spot, tol)
     perp_highs = cs.align_marks_to_funding(funding, perp, tol, field=2)  # intra-settlement extreme
+    spot_highs = cs.align_marks_to_funding(funding, spot, tol, field=2)
     return {
         "n": len(funding), "cadence_h": cadence_h,
         "rates": [r for _, r in funding],
-        "perp_marks": perp_marks, "spot_marks": spot_marks, "perp_highs": perp_highs,
+        "perp_marks": perp_marks, "spot_marks": spot_marks,
+        "perp_highs": perp_highs, "spot_highs": spot_highs,
         "first": funding[0][0], "last": funding[-1][0],
         "marks_ok": sum(1 for m in perp_marks if m is not None),
     }
@@ -102,6 +104,7 @@ def simulate(base: str, data: dict, notional: float,
         data["rates"], data["perp_marks"], data["spot_marks"],
         notional=notional, cm=cm, col=col, exit_on_negative_run=exit_run,
         perp_highs=(data.get("perp_highs") if stress_basis is not None else None),
+        spot_highs=(data.get("spot_highs") if stress_basis is not None else None),
         basis_stress=(stress_basis or 0.0))
     yrs = years_span(data["first"], data["last"])
     annual = res.net_return_on_capital / yrs

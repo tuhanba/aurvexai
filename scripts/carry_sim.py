@@ -183,6 +183,7 @@ def simulate_static_hold(funding_rates: Sequence[float],
                          col: CollateralModel,
                          exit_on_negative_run: int = 0,
                          perp_highs: Optional[Sequence[Optional[float]]] = None,
+                         spot_highs: Optional[Sequence[Optional[float]]] = None,
                          basis_stress: float = 0.0) -> SimResult:
     """Continuously-held hedged carry across aligned settlements.
 
@@ -228,13 +229,17 @@ def simulate_static_hold(funding_rates: Sequence[float],
         return True
 
     def _close(i: int, taker: bool, liq: bool,
-               perp_price: Optional[float] = None) -> None:
+               perp_price: Optional[float] = None,
+               spot_price: Optional[float] = None) -> None:
         nonlocal open_perp_entry, open_spot_entry
-        # A liquidation realizes the perp leg AT the mark that triggered it (the
-        # stressed high on a squeeze), not the benign settlement close — otherwise
-        # the basis-gap loss is silently understated. Planned closes use the close.
+        # A liquidation realizes BOTH legs at the marks that triggered it (the
+        # intra-settlement highs on a squeeze), not the benign settlement close.
+        # Both legs must move together — perp high AND spot high — so the realized
+        # loss is the BASIS GAP between them, not the full wick amplitude (charging
+        # perp-high vs spot-close would manufacture a fake loss the size of the
+        # whole spike). Planned closes use the settlement close for both.
         p = perp_price if perp_price is not None else perp_marks[i]
-        s = spot_marks[i]
+        s = spot_price if spot_price is not None else spot_marks[i]
         pnl = 0.0
         if p and s and open_perp_entry and open_spot_entry:
             spot_pnl = notional * (s / open_spot_entry - 1.0)
@@ -278,9 +283,13 @@ def simulate_static_hold(funding_rates: Sequence[float],
         # squeeze case an 8h-close check cannot see.
         if perp_highs is not None and perp_highs[i] is not None and open_perp_entry:
             eff_perp = perp_highs[i] * (1.0 + basis_stress)
+            # Spot moves with the perp during the wick; the pair's loss is only the
+            # basis gap, so back the cross margin with the SPOT high (not its close).
+            s_high = (spot_highs[i] if spot_highs is not None
+                      and spot_highs[i] is not None else s_now)
             if col.is_liquidated(notional, open_perp_entry, eff_perp,
-                                 open_spot_entry, s_now):
-                _close(i, taker=True, liq=True, perp_price=eff_perp)
+                                 open_spot_entry, s_high):
+                _close(i, taker=True, liq=True, perp_price=eff_perp, spot_price=s_high)
                 continue
         if p is not None and col.is_liquidated(notional, open_perp_entry, p,
                                                open_spot_entry, s_now):

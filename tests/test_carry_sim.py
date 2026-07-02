@@ -174,6 +174,29 @@ def test_tail_stress_intra_settlement_high_liquidates_cross():
     assert stressed.liquidations >= 1
 
 
+def test_stress_symmetric_highs_bounds_loss_to_basis_gap():
+    """A squeeze wicks BOTH legs together; the delta-neutral loss is only the
+    basis gap, not the full spike. Backing the cross margin with the spot HIGH
+    (symmetric) must be far less lossy than crediting the spot at its close
+    (asymmetric) — the latter manufactures a fake loss the size of the wick."""
+    cm = cs.CostModel()
+    N = 10_000.0
+    col = cs.CollateralModel(leverage=3.0, mmr=0.005, buffer_frac=0.2,
+                             margin_mode="cross")
+    closes = [100.0] * 6
+    perp_highs = [100.0, 100.0, 160.0, 100.0, 100.0, 100.0]
+    # Asymmetric: spot left at its close -> the whole 60% wick is charged.
+    asym = cs.simulate_static_hold([0.0001] * 5, closes, closes, notional=N,
+                                   cm=cm, col=col, perp_highs=perp_highs,
+                                   basis_stress=0.05)
+    # Symmetric: spot wicks with the perp -> only the basis gap bites.
+    sym = cs.simulate_static_hold([0.0001] * 5, closes, closes, notional=N,
+                                  cm=cm, col=col, perp_highs=perp_highs,
+                                  spot_highs=perp_highs, basis_stress=0.05)
+    assert sym.net_pnl > asym.net_pnl
+    assert sym.max_drawdown < asym.max_drawdown
+
+
 def test_max_drawdown_tracks_capital_curve():
     """max_drawdown is the peak-to-trough drop of cumulative capital return —
     positive and bounded for a mostly-positive series, and the ruin measure the
