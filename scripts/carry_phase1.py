@@ -48,6 +48,7 @@ DEFAULT_UNIVERSE = ["BTC", "ETH", "XRP", "LINK", "DOGE", "AVAX"]
 DEFAULT_CONTROLS = ["SOL", "BNB"]
 HOURS_PER_YEAR = 365.25 * 24.0
 MIN_ANNUAL_ON_CAPITAL = 0.02     # token-positive floor: < 2%/yr on capital = NO-GO
+MAX_RUIN_DRAWDOWN = 0.50         # ruin = cumulative capital drawdown >= 50%
 
 
 def cadence_tf(cadence_h: Optional[float]) -> str:
@@ -149,8 +150,13 @@ def evaluate_gate(per_symbol: Dict[str, dict], controls: Dict[str, dict],
     alive = [s for s in universe if per_symbol.get(s, {}).get("sim")]
     meaningful = [s for s in alive
                   if per_symbol[s]["sim"]["annual_on_capital"] > MIN_ANNUAL_ON_CAPITAL]
-    no_liq = [s for s in alive
-              if per_symbol[s]["sim"]["res"].liquidations == 0]
+    # Ruin test, not a liquidation-count test: a delta-neutral pair whose perp is
+    # liquidated and re-entered has taken a COST (basis gap + fees), not a blowup —
+    # the spot leg offsets. The gate is whether the capital drawdown stays below a
+    # ruin threshold AND net-on-capital is still positive after those costs.
+    no_ruin = [s for s in alive
+               if per_symbol[s]["sim"]["res"].max_drawdown < MAX_RUIN_DRAWDOWN
+               and per_symbol[s]["sim"]["res"].net_pnl > 0]
     sig_pos = [s for s in alive
                if (per_symbol[s]["sim"]["sig"] or {}).get("boot_positive")
                and (per_symbol[s]["sim"]["sig"] or {}).get("nw_t", 0) > 2.0]
@@ -167,14 +173,14 @@ def evaluate_gate(per_symbol: Dict[str, dict], controls: Dict[str, dict],
     controls_ok = all(_control_ok(c) for c in controls.values())
 
     c1 = len(meaningful) >= max(2, len(alive) // 2)     # net meaningful, broad
-    c2 = len(no_liq) >= max(2, len(alive) // 2)         # survives without ruin
+    c2 = len(no_ruin) >= max(2, len(alive) // 2)        # survives without ruin (drawdown)
     c3 = bool(holdout.get("passes"))                    # out-of-symbol holdout
     c4 = len(sig_pos) >= max(2, len(alive) // 2)        # net significance
     c5 = controls_ok                                    # negative controls non-positive
     go = c1 and c2 and c3 and c4 and c5
     return {"go": go, "criteria": {
         "net_meaningful_broad": (c1, meaningful),
-        "survives_no_liquidation": (c2, no_liq),
+        "survives_no_ruin_drawdown": (c2, no_ruin),
         "out_of_symbol_holdout": (c3, [] if not c3 else holdout.get("holdout", [])),
         "net_significance": (c4, sig_pos),
         "negative_controls_nonpositive": (c5, [k for k in controls]),
@@ -247,15 +253,18 @@ def build_report(per_symbol, controls, universe, holdout, gate, gate2, args,
             "symbol": s, "n": d.get("n"),
             "net_on_capital": round(r.net_return_on_capital, 5),
             "annual_on_capital": round(sim["annual_on_capital"], 5),
+            "max_drawdown": round(r.max_drawdown, 4),
             "funding_pnl": round(r.funding_pnl, 2),
             "costs": round(r.cost_entry + r.cost_exit + r.cost_liq, 2),
-            "liquidations": r.liquidations,
+            "liq": r.liquidations,
             "control": "yes" if s in args.controls else "",
         })
     p.append(_md(rows, ["symbol", "n", "net_on_capital", "annual_on_capital",
-                        "funding_pnl", "costs", "liquidations", "control"]))
-    p.append("\n`annual_on_capital` = total net-on-capital / years. Compare to "
-             "Phase-0 gross-on-notional to see the shrink from real frictions.\n\n")
+                        "max_drawdown", "funding_pnl", "costs", "liq", "control"]))
+    p.append("\n`annual_on_capital` = total net-on-capital / years. `max_drawdown` "
+             "is the peak-to-trough drop of cumulative return on capital — the ruin "
+             "measure. `liq` is informational (a delta-neutral liquidation is a "
+             "priced cost, not a blowup), not the gate.\n\n")
 
     # 2. Cost breakdown
     p.append("## 2. Four-leg cost + basis breakdown\n\n")
@@ -406,7 +415,8 @@ def main() -> None:
         r = sim["res"]
         tag = "[control]" if base in args.controls else ""
         print(f"  {base:<6} annual_on_capital={_f(sim['annual_on_capital'],4)} "
-              f"liq={r.liquidations} nw_t={_f((sim['sig'] or {}).get('nw_t'),2)} {tag}")
+              f"maxDD={_f(r.max_drawdown,3)} liq={r.liquidations} "
+              f"nw_t={_f((sim['sig'] or {}).get('nw_t'),2)} {tag}")
     if any_data:
         print(f"HOLDOUT: {'PASS' if holdout.get('passes') else 'FAIL/na'}")
         print(f"GATE: {'GO' if gate2['go'] else 'NO-GO'} to paper")

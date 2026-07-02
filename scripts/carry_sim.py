@@ -148,12 +148,27 @@ class SimResult:
     basis_pnl: float = 0.0
     liquidations: int = 0
     settlements_held: int = 0
+    # Peak-to-trough drawdown of cumulative net return ON CAPITAL. This — not the
+    # liquidation count — is the ruin measure: a delta-neutral pair whose perp is
+    # liquidated and re-entered has taken a COST (the basis gap + fees), not a
+    # blowup, because the spot leg offsets. Ruin = a deep drawdown, not an event.
+    max_drawdown: float = 0.0
     # Per-settlement NET return on capital (for block-bootstrap / Newey-West).
     capital_returns: List[float] = field(default_factory=list)
 
     @property
     def net_return_on_capital(self) -> float:
         return self.net_pnl / self.capital if self.capital else 0.0
+
+
+def _max_drawdown_on_capital(returns: Sequence[float]) -> float:
+    """Peak-to-trough drop of the cumulative-return curve (in capital-return space)."""
+    cum = peak = mdd = 0.0
+    for r in returns:
+        cum += r
+        peak = max(peak, cum)
+        mdd = max(mdd, peak - cum)
+    return mdd
 
 
 # ---------------------------------------------------------------------------
@@ -212,15 +227,21 @@ def simulate_static_hold(funding_rates: Sequence[float],
         res.capital_returns.append(-c / cap)        # entry drag on this settlement
         return True
 
-    def _close(i: int, taker: bool, liq: bool) -> None:
+    def _close(i: int, taker: bool, liq: bool,
+               perp_price: Optional[float] = None) -> None:
         nonlocal open_perp_entry, open_spot_entry
-        p, s = perp_marks[i], spot_marks[i]
-        # Basis PnL: spot leg gain + perp short gain (delta-neutral => ~basis move).
+        # A liquidation realizes the perp leg AT the mark that triggered it (the
+        # stressed high on a squeeze), not the benign settlement close — otherwise
+        # the basis-gap loss is silently understated. Planned closes use the close.
+        p = perp_price if perp_price is not None else perp_marks[i]
+        s = spot_marks[i]
+        pnl = 0.0
         if p and s and open_perp_entry and open_spot_entry:
             spot_pnl = notional * (s / open_spot_entry - 1.0)
             perp_pnl = notional * (1.0 - p / open_perp_entry)
-            res.basis_pnl += spot_pnl + perp_pnl
-            res.net_pnl += spot_pnl + perp_pnl
+            pnl = spot_pnl + perp_pnl
+            res.basis_pnl += pnl
+            res.net_pnl += pnl
         c = cm.leg_cost(notional, taker=taker) * 2
         pen = (notional * col.liq_penalty) if liq else 0.0
         if liq:
@@ -229,7 +250,7 @@ def simulate_static_hold(funding_rates: Sequence[float],
         else:
             res.cost_exit += c
         res.net_pnl -= (c + pen)
-        res.capital_returns.append(-(c + pen) / cap)
+        res.capital_returns.append((pnl - c - pen) / cap)
         open_perp_entry = open_spot_entry = None
 
     for i in range(n):
@@ -259,11 +280,11 @@ def simulate_static_hold(funding_rates: Sequence[float],
             eff_perp = perp_highs[i] * (1.0 + basis_stress)
             if col.is_liquidated(notional, open_perp_entry, eff_perp,
                                  open_spot_entry, s_now):
-                _close(i, taker=True, liq=True)
+                _close(i, taker=True, liq=True, perp_price=eff_perp)
                 continue
         if p is not None and col.is_liquidated(notional, open_perp_entry, p,
                                                open_spot_entry, s_now):
-            _close(i, taker=True, liq=True)
+            _close(i, taker=True, liq=True, perp_price=p)
             continue
 
         # Accrue funding (short receives funding_rate * notional).
@@ -285,4 +306,5 @@ def simulate_static_hold(funding_rates: Sequence[float],
     # Close any still-open pair at the last settlement (planned, maker).
     if open_perp_entry is not None:
         _close(n - 1, taker=False, liq=False)
+    res.max_drawdown = _max_drawdown_on_capital(res.capital_returns)
     return res

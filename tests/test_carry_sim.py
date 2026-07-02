@@ -174,6 +174,22 @@ def test_tail_stress_intra_settlement_high_liquidates_cross():
     assert stressed.liquidations >= 1
 
 
+def test_max_drawdown_tracks_capital_curve():
+    """max_drawdown is the peak-to-trough drop of cumulative capital return —
+    positive and bounded for a mostly-positive series, and the ruin measure the
+    gate uses instead of a raw liquidation count."""
+    cm = cs.CostModel(maker_fee=0, taker_fee=0, slippage=0, half_spread=0)
+    col = cs.CollateralModel(margin_mode="cross")
+    # A negative-funding stretch in the middle creates a real drawdown.
+    rates = [0.0002] * 20 + [-0.0004] * 10 + [0.0002] * 20
+    marks = _flat_marks(51)
+    res = cs.simulate_static_hold(rates, marks, marks, notional=10_000.0,
+                                  cm=cm, col=col)
+    assert res.max_drawdown > 0.0
+    # Drawdown cannot exceed the sum of all negative capital moves.
+    assert res.max_drawdown <= sum(abs(r) for r in res.capital_returns if r < 0) + 1e-9
+
+
 def test_negative_funding_series_loses():
     cm = cs.CostModel()
     col = cs.CollateralModel()
