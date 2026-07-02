@@ -78,7 +78,14 @@ def load_symbol(base: str, cache_dir: str, refresh: bool) -> dict:
     perp = load_or_fetch_candles(psym, tf, limit=12000, cache_dir=cache_dir)
     spot = load_or_fetch_spot(ssym, timeframe=tf, limit=12000, cache_dir=cache_dir,
                               refresh=refresh)
-    tol = int((cadence_h or 8.0) * 3_600_000)
+    # Tight tolerance: funding settlements and the perp/spot candle boundaries
+    # both fall on the same UTC cadence (00/08/16), so the coincident bar is ~0ms
+    # away. A full-cadence tolerance let a data GAP grab a neighbouring bar up to
+    # one cadence away — a real price move that manufactured a fake perp-vs-spot
+    # basis gap and, under stress, a fake liquidation. 20% of cadence uniquely
+    # matches the coincident bar and turns a gap into a skipped check (None).
+    cadence_ms = int((cadence_h or 8.0) * 3_600_000)
+    tol = int(cadence_ms * 0.2)
     perp_marks = cs.align_marks_to_funding(funding, perp, tol)
     spot_marks = cs.align_marks_to_funding(funding, spot, tol)
     perp_highs = cs.align_marks_to_funding(funding, perp, tol, field=2)  # intra-settlement extreme
