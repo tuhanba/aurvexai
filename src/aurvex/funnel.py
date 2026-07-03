@@ -18,6 +18,7 @@ from .models import ALLOW, REJECT, WATCH, Decision, FunnelStats
 # Any stage name NOT in this set is treated as a quality/strategy reject.
 CAPACITY_STAGES = frozenset({
     "daily_loss_kill_switch",
+    "daily_profit_lock",
     "max_open_trades",
     "duplicate",
     "cooldown",

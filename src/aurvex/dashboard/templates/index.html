@@ -34,6 +34,30 @@ header{
 .pill.gold{color:var(--gold);border-color:var(--gold-dim)}
 .pill.warn{color:#f0a800;border-color:#7a5400}
 
+/* ── Mode banner (Task 4) ── */
+.mode-banner{
+  width:100%;padding:8px 16px;text-align:center;font-size:13px;
+  letter-spacing:3px;font-weight:700;border-bottom:1px solid var(--line);
+}
+.mode-banner.PAPER{background:linear-gradient(90deg,#0c2038,#132c46);color:var(--gold);border-bottom:1px solid var(--gold-dim)}
+.mode-banner.DRY_RUN{background:#3a2a08;color:#f0a800}
+.mode-banner.TESTNET{background:#241a3a;color:#b48aff}
+.mode-banner.LIVE{background:#7a1020;color:#ffffff;font-size:16px;letter-spacing:5px;animation:pulse 1.2s infinite}
+
+/* ── Status badges (Task 4: four independent truths) ── */
+.badges{display:grid;grid-template-columns:repeat(4,1fr);gap:var(--gap)}
+.badge-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:10px 14px}
+.badge-card.ok{border-color:var(--green)}
+.badge-card.err{border-color:var(--red)}
+.badge-card.warn{border-color:#f0a800}
+.badge-label{font-size:9px;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted)}
+.badge-val{font-size:14px;margin-top:4px}
+.badge-val.ok{color:var(--green)}
+.badge-val.err{color:var(--red)}
+.badge-val.warn{color:#f0a800}
+.badge-sub{font-size:10px;color:var(--muted);margin-top:2px}
+@media(max-width:700px){.badges{grid-template-columns:1fr 1fr}}
+
 /* ── Layout ── */
 main{padding:var(--gap);display:flex;flex-direction:column;gap:var(--gap);max-width:1280px;margin:0 auto}
 .grid{display:grid;gap:var(--gap)}
@@ -148,7 +172,35 @@ tr:last-child td{border-bottom:none}
   </div>
 </header>
 
+<!-- Mode banner (Task 4): PAPER / DRY_RUN / TESTNET / LIVE — full width -->
+<div class="mode-banner PAPER" id="modeBanner">PAPER</div>
+
 <main>
+
+  <!-- Four independent status badges (Task 4). The old single "engine down"
+       boolean is dead: each truth renders on its own, fed by separate fields. -->
+  <div class="badges">
+    <div class="badge-card" id="bEngineCard">
+      <div class="badge-label">Engine loop</div>
+      <div class="badge-val" id="bEngine">—</div>
+      <div class="badge-sub" id="bEngineSub">heartbeat age —</div>
+    </div>
+    <div class="badge-card" id="bDataCard">
+      <div class="badge-label">Data freshness</div>
+      <div class="badge-val" id="bData">—</div>
+      <div class="badge-sub" id="bDataSub">—</div>
+    </div>
+    <div class="badge-card" id="bKillCard">
+      <div class="badge-label">Kill switch</div>
+      <div class="badge-val" id="bKill">—</div>
+      <div class="badge-sub" id="bKillSub">—</div>
+    </div>
+    <div class="badge-card" id="bModeCard">
+      <div class="badge-label">Mode</div>
+      <div class="badge-val" id="bMode">—</div>
+      <div class="badge-sub" id="bModeSub">—</div>
+    </div>
+  </div>
 
   <!-- System Health Strip (Block E-1) -->
   <div class="health-strip" id="healthStrip">
@@ -233,7 +285,61 @@ tr:last-child td{border-bottom:none}
       <div>
         <div class="row-label">Max daily loss</div>
         <div style="font-size:18px" id="maxDailyLoss">—</div>
-        <div class="kpi-sub">of balance</div>
+        <div class="kpi-sub" id="killRemaining">remaining budget —</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Daily Profit Lock (Task 1 surfaces) + PnL split -->
+  <div class="card">
+    <div class="card-title">Daily Profit Lock — banked profit protection</div>
+    <div class="grid g4" style="gap:14px">
+      <div>
+        <div class="row-label">Status</div>
+        <div style="font-size:16px;margin-top:4px" id="lockStatus">—</div>
+        <div class="kpi-sub" id="lockPct">target — % of balance</div>
+      </div>
+      <div>
+        <div class="row-label">Target</div>
+        <div style="font-size:18px" id="lockTarget">—</div>
+        <div class="kpi-sub">realized PnL to lock</div>
+      </div>
+      <div>
+        <div class="row-label">Room to lock</div>
+        <div style="font-size:18px" id="lockRoom">—</div>
+        <div class="bar" style="margin-top:6px"><div class="bar-fill green" id="lockBar" style="width:0%"></div></div>
+      </div>
+      <div>
+        <div class="row-label">Daily PnL (realized / unrealized)</div>
+        <div style="font-size:15px;margin-top:4px"><span id="pnlRealized">—</span> / <span id="pnlUnrealized">—</span></div>
+        <div class="kpi-sub">realized locks; unrealized never does</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Binance read-only account (Live Stage 1) -->
+  <div class="card">
+    <div class="card-title">Binance account (read-only — Stage 1)</div>
+    <div class="grid g4" style="gap:14px">
+      <div>
+        <div class="row-label">Adapter status</div>
+        <div style="font-size:15px;margin-top:4px" id="bnStatus">—</div>
+        <div class="kpi-sub" id="bnNote" style="max-width:240px">—</div>
+      </div>
+      <div>
+        <div class="row-label">Futures / spot USDT</div>
+        <div style="font-size:15px;margin-top:4px" id="bnBalances">—</div>
+        <div class="kpi-sub" id="bnFees">fees —</div>
+      </div>
+      <div>
+        <div class="row-label">Positions / orders</div>
+        <div style="font-size:15px;margin-top:4px" id="bnPositions">—</div>
+        <div class="kpi-sub" id="bnFilters">filters cached —</div>
+      </div>
+      <div>
+        <div class="row-label">Server-time drift</div>
+        <div style="font-size:15px;margin-top:4px" id="bnDrift">—</div>
+        <div class="kpi-sub" id="bnLastOk">last ok —</div>
       </div>
     </div>
   </div>
@@ -454,7 +560,7 @@ async function getJSON(u){const r=await fetch(u);return r.json();}
 
 async function refresh(){
   try{
-    const [st,fn,me,op,cl,sg,sh,ac,tg,pm,sv,ss,qp,mo,shl,dg] = await Promise.all([
+    const [st,fn,me,op,cl,sg,sh,ac,tg,pm,sv,ss,qp,mo,shl,dg,bn] = await Promise.all([
       getJSON('/api/status'), getJSON('/api/funnel'), getJSON('/api/metrics'),
       getJSON('/api/trades/open'), getJSON('/api/trades/closed'),
       getJSON('/api/signals'), getJSON('/api/shadow'),
@@ -462,8 +568,41 @@ async function refresh(){
       getJSON('/api/portfolio_metrics'), getJSON('/api/score_validity'),
       getJSON('/api/system_state'), getJSON('/api/quality'),
       getJSON('/api/missed_opportunity'), getJSON('/api/setup_health'),
-      getJSON('/api/diagnosis')
+      getJSON('/api/diagnosis'), getJSON('/api/binance')
     ]);
+
+    // ── Mode banner (Task 4): PAPER / DRY_RUN / TESTNET / LIVE ──
+    const banner = st.mode_banner || ((st.mode==='live')?(st.live_enabled?'LIVE':'DRY_RUN'):'PAPER');
+    const mb = document.getElementById('modeBanner');
+    mb.textContent = banner==='LIVE' ? '🔴 LIVE — REAL ORDERS' : banner;
+    mb.className = 'mode-banner '+banner;
+
+    // ── Four independent status badges (Task 4) ──
+    const setBadge=(card,val,sub,state)=>{
+      document.getElementById(card).className='badge-card '+state;
+      const v=document.getElementById(card.replace('Card',''));
+      v.textContent=val; v.className='badge-val '+state;
+      document.getElementById(card.replace('Card','Sub')).textContent=sub;
+    };
+    const hbAge = st.heartbeat_age_ms;
+    const hbAgeTxt = (hbAge===null||hbAge===undefined)?'no heartbeat':Math.round(hbAge/1000)+'s';
+    setBadge('bEngineCard',
+      st.heartbeat_fresh?'RUNNING':'DOWN',
+      'heartbeat age '+hbAgeTxt+' (stale ≥ '+Math.round((st.heartbeat_stale_ms||120000)/1000)+'s)',
+      st.heartbeat_fresh?'ok':'err');
+    const daMs = st.data_age_ms;
+    setBadge('bDataCard',
+      st.data_fresh?'FRESH':'STALE',
+      (daMs===null||daMs===undefined)?'no data seen yet':'last closed bar '+Math.round(daMs/1000)+'s ago',
+      st.data_fresh?'ok':'err');
+    setBadge('bKillCard',
+      st.kill_switch?'TRIPPED':'ARMED',
+      st.kill_switch?'entries paused — open trades still managed':'daily loss budget intact',
+      st.kill_switch?'err':'ok');
+    setBadge('bModeCard',
+      (st.engine_mode||st.mode||'paper').toUpperCase(),
+      st.mode_ok?'engine and config agree':'MISMATCH: config='+st.config_mode,
+      st.mode_ok?(banner==='LIVE'?'err':'ok'):'warn');
 
     // ── Loss Diagnosis (report-only) ──
     document.getElementById('diagMain').textContent = dg.main_issue||'—';
@@ -561,6 +700,53 @@ async function refresh(){
       ksEl.className = 'pos';
     }
     document.getElementById('maxDailyLoss').textContent = fmt(maxLossPct,1)+'%';
+    const remBudget = Math.max(0, lossLimit + Math.min(0, dailyPnl));
+    document.getElementById('killRemaining').textContent =
+      'remaining budget '+fmt(remBudget)+' USDT';
+
+    // ── Daily Profit Lock (Task 1 surfaces) ──
+    const lockActive = st.daily_profit_lock_active;
+    const lockEnabled = st.daily_profit_lock_enabled;
+    const lockTarget = st.daily_profit_target_usdt||0;
+    const lockRoom = st.daily_profit_room_usdt||0;
+    const lsEl = document.getElementById('lockStatus');
+    if(!lockEnabled){ lsEl.textContent='disabled'; lsEl.className='neu'; }
+    else if(lockActive){ lsEl.textContent='🔒 LOCKED — entries paused'; lsEl.className='pos'; }
+    else { lsEl.textContent='✓ inactive'; lsEl.className='neu'; }
+    document.getElementById('lockPct').textContent =
+      'target '+fmt(st.daily_profit_lock_pct,1)+'% of balance';
+    document.getElementById('lockTarget').textContent = '+'+fmt(lockTarget)+' USDT';
+    document.getElementById('lockRoom').textContent = fmt(lockRoom)+' USDT to go';
+    const lockProgress = lockTarget>0?Math.min(100,Math.max(0,(lockTarget-lockRoom)/lockTarget*100)):0;
+    document.getElementById('lockBar').style.width = lockProgress+'%';
+    const pr = document.getElementById('pnlRealized');
+    pr.textContent = signed(dailyPnl); pr.className = cls(dailyPnl);
+    const pu = document.getElementById('pnlUnrealized');
+    pu.textContent = signed(ac.unrealized_open); pu.className = cls(ac.unrealized_open);
+
+    // ── Binance read-only account panel (Stage 1) ──
+    if(bn){
+      const bs = document.getElementById('bnStatus');
+      const stt = bn.status||'unknown';
+      bs.textContent = stt==='unsafe_key' ? '🚨 UNSAFE KEY' : stt;
+      bs.className = stt==='connected'?'pos':stt==='unsafe_key'?'neg':stt==='error'?'neg':'neu';
+      document.getElementById('bnNote').textContent = bn.note||bn.error||'';
+      const fb=bn.futures_balance, sb=bn.spot_balance;
+      document.getElementById('bnBalances').textContent =
+        fb?fmt(fb.total)+' / '+(sb?fmt(sb.total):'—')+' USDT':'—';
+      document.getElementById('bnFees').textContent =
+        bn.fees?('maker '+bn.fees.maker+' · taker '+bn.fees.taker):'fees —';
+      document.getElementById('bnPositions').textContent =
+        (bn.open_positions?bn.open_positions.length:'—')+' pos · '+
+        (bn.open_orders?bn.open_orders.length:'—')+' orders';
+      document.getElementById('bnFilters').textContent =
+        'filters cached '+(bn.symbol_filters_cached??'—');
+      const dr = document.getElementById('bnDrift');
+      if(bn.server_time_drift_ms===null||bn.server_time_drift_ms===undefined){dr.textContent='—';dr.className='neu';}
+      else{dr.textContent=bn.server_time_drift_ms+' ms'+(bn.drift_warning?' ⚠':'');dr.className=bn.drift_warning?'neg':'pos';}
+      document.getElementById('bnLastOk').textContent =
+        bn.last_ok_ts?('last ok '+new Date(bn.last_ok_ts).toLocaleTimeString()):'never ok yet';
+    }
 
     // ── KPIs ──
     const balEl = document.getElementById('balance');
@@ -574,7 +760,7 @@ async function refresh(){
     np.textContent = (me.net_pnl>=0?'+':'')+fmt(me.net_pnl)+' USDT';
     np.className = 'kpi-val '+cls(me.net_pnl);
     document.getElementById('expectancy').textContent =
-      'exp '+fmt(me.expectancy,4)+' USDT ('+fmt(me.expectancy_r,3)+'R)';
+      'exp '+fmt(me.expectancy,4)+' USDT ('+fmt(me.expectancy_r,3)+'R) · fees '+fmt(me.total_fees)+' USDT';
 
     document.getElementById('winrate').textContent = fmt(me.winrate,1)+'%';
     document.getElementById('tradeCount').textContent = me.total_trades+' trades';
@@ -603,7 +789,8 @@ async function refresh(){
       document.getElementById('liqSafety').textContent =
         pm.liq_safety_min!==null?'liq safety ×'+fmt(pm.liq_safety_min,1):'liq safety —';
       document.getElementById('missedOpp').textContent =
-        'missed opp: '+(pm.missed_opportunity_resolved_n||0)+' resolved';
+        'missed opp: '+(pm.missed_opportunity_resolved_n||0)+' resolved · '+
+        'exposure '+fmt(pm.exposure_pct,0)+'% / cap '+fmt(pm.max_portfolio_exposure_pct,0)+'%';
     }
 
     // ── Funnel ──
@@ -691,9 +878,12 @@ async function refresh(){
         </div>`).join('');
     }
 
-    // ── Shadow ──
-    document.getElementById('shadowStage').textContent =
-      'stage: '+sh.stage+' · resolved '+sh.resolved_total+' · open '+sh.open_total;
+    // ── Shadow (Task 4: report-only label hardcoded + verdict + suggestion) ──
+    const shVerdict = (sh.predictivity_verdict&&sh.predictivity_verdict.label)||'—';
+    document.getElementById('shadowStage').innerHTML =
+      '<b>report-only</b> · resolved '+sh.resolved_total+' · open '+sh.open_total+
+      ' · predictivity: '+shVerdict+
+      '<br>action: '+(sh.suggested_action||'—');
     document.getElementById('shadowBasis').textContent = sh.basis||'';
     document.querySelector('#shadowTbl tbody').innerHTML = (sh.by_setup||[]).map(r=>
       `<tr><td>${r.setup}</td><td>${r.n}</td><td>${fmt(r.winrate,1)}</td>

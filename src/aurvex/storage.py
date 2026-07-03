@@ -227,6 +227,16 @@ CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS symbol_filters (
+    symbol TEXT PRIMARY KEY,
+    tick_size REAL,
+    step_size REAL,
+    min_notional REAL,
+    max_leverage REAL,
+    margin_rules_json TEXT,
+    fetched_ts INTEGER
+);
 """
 
 
@@ -411,6 +421,19 @@ class Storage:
             CREATE TABLE IF NOT EXISTS shadow_quality (
                 shadow_id TEXT PRIMARY KEY,
                 grade TEXT
+            );
+        """)
+        # Task 2 (LIVE-READY sprint): Binance exchangeInfo symbol-filter cache.
+        # Additive-only; consumed by the Task-3 dry-run payload validator.
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS symbol_filters (
+                symbol TEXT PRIMARY KEY,
+                tick_size REAL,
+                step_size REAL,
+                min_notional REAL,
+                max_leverage REAL,
+                margin_rules_json TEXT,
+                fetched_ts INTEGER
             );
         """)
         # The unique index dedups new-epoch rows. Legacy rows have signal_bar_ts=0
@@ -746,6 +769,35 @@ class Storage:
         rows = self.conn.execute("SELECT * FROM heartbeat").fetchall()
         return [{"component": r["component"], "ts": r["ts"],
                  "status": json.loads(r["status"])} for r in rows]
+
+    # -- symbol filters (Binance exchangeInfo cache; Task 2) -----------------
+    def upsert_symbol_filters(self, rows: List[Dict[str, Any]]) -> None:
+        """Upsert exchangeInfo filter rows fetched by the read-only adapter."""
+        for r in rows:
+            self.conn.execute(
+                "INSERT INTO symbol_filters(symbol,tick_size,step_size,"
+                "min_notional,max_leverage,margin_rules_json,fetched_ts) "
+                "VALUES(?,?,?,?,?,?,?) "
+                "ON CONFLICT(symbol) DO UPDATE SET "
+                "tick_size=excluded.tick_size, step_size=excluded.step_size, "
+                "min_notional=excluded.min_notional, "
+                "max_leverage=excluded.max_leverage, "
+                "margin_rules_json=excluded.margin_rules_json, "
+                "fetched_ts=excluded.fetched_ts",
+                (r["symbol"], r.get("tick_size", 0.0), r.get("step_size", 0.0),
+                 r.get("min_notional", 0.0), r.get("max_leverage", 0.0),
+                 r.get("margin_rules_json", "[]"), r.get("fetched_ts", 0)))
+        self.conn.commit()
+
+    def get_symbol_filters(self, symbol: str) -> Optional[Dict[str, Any]]:
+        row = self.conn.execute(
+            "SELECT * FROM symbol_filters WHERE symbol=?", (symbol,)).fetchone()
+        return dict(row) if row else None
+
+    def all_symbol_filters(self) -> List[Dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM symbol_filters ORDER BY symbol").fetchall()
+        return [dict(r) for r in rows]
 
     # -- coin profile library -----------------------------------------------
 

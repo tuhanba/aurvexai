@@ -99,6 +99,7 @@ _PROFILE_DEFAULTS: dict = {
         "MIN_RISK_PCT": 0.25,
         "MAX_RISK_PCT": 1.0,
         "MAX_DAILY_LOSS_PCT": 3.0,
+        "DAILY_PROFIT_LOCK_PCT": 10.0,
         "MAX_OPEN_TRADES": 4,
         "DASHBOARD_PORT": 5000,
     },
@@ -108,6 +109,7 @@ _PROFILE_DEFAULTS: dict = {
         "MIN_RISK_PCT": 1.0,
         "MAX_RISK_PCT": 3.0,
         "MAX_DAILY_LOSS_PCT": 10.0,
+        "DAILY_PROFIT_LOCK_PCT": 10.0,
         "MAX_OPEN_TRADES": 4,
         "DASHBOARD_PORT": 5000,
     },
@@ -197,6 +199,14 @@ class Config:
     max_risk_pct: float = field(default_factory=lambda: _pfloat("MAX_RISK_PCT"))
     max_open_trades: int = field(default_factory=lambda: _pint("MAX_OPEN_TRADES"))
     max_daily_loss_pct: float = field(default_factory=lambda: _pfloat("MAX_DAILY_LOSS_PCT"))
+    # Daily profit lock (mirror of the daily-loss kill switch, profit side):
+    # once today's UTC REALIZED PnL reaches balance * pct/100, new entries are
+    # rejected (reason "daily_profit_lock"). Open trades keep their normal exit
+    # management; the lock resets automatically at UTC day rollover.
+    daily_profit_lock_enabled: bool = field(
+        default_factory=lambda: _bool("DAILY_PROFIT_LOCK_ENABLED", True))
+    daily_profit_lock_pct: float = field(
+        default_factory=lambda: _pfloat("DAILY_PROFIT_LOCK_PCT"))
     max_portfolio_exposure_pct: float = field(
         default_factory=lambda: _float("MAX_PORTFOLIO_EXPOSURE_PCT", 200.0)
     )
@@ -428,11 +438,35 @@ class Config:
     # or a reverse proxy with auth/HTTPS.
     dashboard_host: str = field(default_factory=lambda: _str("DASHBOARD_HOST", "0.0.0.0"))
     dashboard_port: int = field(default_factory=lambda: _pint("DASHBOARD_PORT"))
+    # Heartbeat staleness cut for the ENGINE LOOP badge (ms). The heartbeat is
+    # written at cycle END, so a slow scan cycle must not read as "engine down":
+    # default = max(120s, 6 × cycle interval).
+    heartbeat_stale_ms: int = field(default_factory=lambda: _int(
+        "HEARTBEAT_STALE_MS",
+        max(120_000, int(6 * _float("CYCLE_INTERVAL_SEC", 20.0) * 1000))))
+    # Optional HTTP Basic auth (Task 4): when BOTH are set, every dashboard
+    # route requires credentials EXCEPT /health (docker healthcheck hits it
+    # from localhost). Unset (default) = behaviour unchanged.
+    dashboard_auth_user: str = field(
+        default_factory=lambda: _str("DASHBOARD_AUTH_USER", ""))
+    dashboard_auth_pass: str = field(
+        default_factory=lambda: _str("DASHBOARD_AUTH_PASS", ""))
 
     # -- Telegram (secrets via env only) -----------------------------------
     telegram_enabled: bool = field(default_factory=lambda: _bool("TELEGRAM_ENABLED", True))
     telegram_bot_token: str = field(default_factory=lambda: _str("TELEGRAM_BOT_TOKEN", ""))
     telegram_chat_id: str = field(default_factory=lambda: _str("TELEGRAM_CHAT_ID", ""))
+
+    # -- Binance read-only account adapter (Live Stage 1) --------------------
+    # Keys are OPTIONAL: absent → adapter reports "keys_absent" and the engine
+    # behaves exactly as today. Present → GET-class account reads only (balance,
+    # positions, open orders, exchangeInfo filters, leverage brackets, fees,
+    # time drift, permission self-check). NEVER used to send orders.
+    binance_api_key: str = field(default_factory=lambda: _str("BINANCE_API_KEY", ""))
+    binance_api_secret: str = field(default_factory=lambda: _str("BINANCE_API_SECRET", ""))
+    # Slow refresh timer (seconds) — runs OUTSIDE the trade cycle's critical path.
+    binance_account_refresh_sec: float = field(
+        default_factory=lambda: _float("BINANCE_ACCOUNT_REFRESH_SEC", 300.0))
 
     # -- Live safety gate --------------------------------------------------
     # LIVE_ENABLED must be explicitly true AND a human confirmation token set

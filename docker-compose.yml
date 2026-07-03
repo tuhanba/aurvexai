@@ -21,6 +21,10 @@ services:
     env_file: .env
     command: ["python", "main.py", "dashboard"]
     ports:
+      # The owner reaches the dashboard directly by IP — keep the open publish.
+      # Set DASHBOARD_AUTH_USER/PASS in .env to require Basic auth on it.
+      # Safer alternative (requires an SSH tunnel; see DEPLOYMENT.md) — swap to:
+      # - "127.0.0.1:5000:5000"
       - "5000:5000"
     volumes:
       - aurvex-data:/app/data

@@ -149,9 +149,31 @@ def f_daily_loss(cfg, signal, snap, pf) -> FilterResult:
     return FilterResult(True)
 
 
+def f_daily_profit_lock(cfg, signal, snap, pf) -> FilterResult:
+    """Daily profit lock — the profit-side mirror of the kill switch.
+
+    Basis: UTC-day REALIZED PnL only (the same ``pf.daily_realized_pnl`` the
+    kill switch reads — symmetry is deliberate). Once today's banked profit
+    reaches ``balance * daily_profit_lock_pct / 100`` (``>=``, not ``>``), new
+    entries are rejected with reason exactly ``daily_profit_lock``. Open trades
+    are NOT touched: exit management runs untouched, the lock never chases the
+    target. Resets automatically at UTC day rollover, exactly like the kill
+    switch, because the engine recomputes daily_realized_pnl from the UTC day
+    start each cycle.
+    """
+    if not cfg.daily_profit_lock_enabled:
+        return FilterResult(True)
+    target = pf.balance * (cfg.daily_profit_lock_pct / 100.0)
+    if target > 0 and pf.daily_realized_pnl >= target:
+        return FilterResult(False, "daily_profit_lock",
+                            f"daily PnL {pf.daily_realized_pnl:.2f} >= +{target:.2f} (profit lock)")
+    return FilterResult(True)
+
+
 # Order matters only for which reason surfaces first; cheapest / most common first.
 FILTERS: List[FilterFn] = [
     f_daily_loss,
+    f_daily_profit_lock,
     f_max_open,
     f_duplicate,
     f_cooldown,

@@ -25,6 +25,7 @@ import logging
 import signal as os_signal
 from typing import Dict, List, Optional
 
+from .binance_account import build_binance_adapter
 from .config import Config
 from .decision import DecisionEngine
 from .executors import PaperExecutor
@@ -66,10 +67,19 @@ class Engine:
         self.notifier = build_notifier(cfg)
         self.commander = build_commander(cfg)
         self.commander.set_engine(self)
+        # Task 2 (LIVE-READY sprint): read-only Binance account adapter.
+        # Optional + fail-soft; with no keys it reports "keys_absent" and the
+        # engine behaves exactly as before. Refreshed on a slow timer OUTSIDE
+        # the trade cycle's critical path. Never sends orders.
+        self.binance = build_binance_adapter(cfg, self.db,
+                                             alert_hook=self._on_binance_status)
+        self._binance_next_refresh_ms = 0
+        self._binance_task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
         self._cycles = 0
         self._last_summary_day = -1
         self._kill_switch_fired_day: int = -1
+        self._profit_lock_fired_day: int = -1
         self._last_error: str = ""
         self._start_ms = now_ms()
         self.db.ensure_balance(cfg.initial_paper_balance)
@@ -106,6 +116,7 @@ class Engine:
                 log.info("applying queued mode request: %s → %s",
                          self.cfg.mode, requested)
                 self.cfg.mode = requested
+                self.notifier.set_mode(requested)   # keep the [MODE] tag truthful
                 self.notifier.send(
                     f"ℹ️ Mode applied from queued request: {requested.upper()}")
         try:
@@ -125,6 +136,9 @@ class Engine:
                     self._last_error = str(exc)[:200]
                     self.notifier.health_warning(f"cycle error: {exc}")
                 self._cycles += 1
+                # Task 2: slow-timer Binance read-only refresh, spawned as a
+                # background thread task OUTSIDE the trade cycle's critical path.
+                self._maybe_refresh_binance()
                 if max_cycles is not None and self._cycles >= max_cycles:
                     break
                 elapsed = (now_ms() - started) / 1000.0
@@ -145,6 +159,37 @@ class Engine:
             await asyncio.wait_for(self._stop.wait(), timeout=seconds)
         except asyncio.TimeoutError:
             pass
+
+    def _on_binance_status(self, status: str, detail: str) -> None:
+        """Adapter status transition → Telegram (edge-triggered in the adapter)."""
+        try:
+            self.notifier.binance_status_changed(status, detail)
+        except Exception as exc:
+            log.debug("binance status notify error: %s", exc)
+
+    def _maybe_refresh_binance(self) -> None:
+        """Kick a read-only account refresh when the slow timer is due (Task 2).
+
+        Runs in a worker thread so the network round-trips never delay a cycle;
+        the adapter is fail-soft by contract (exceptions degrade to status
+        "error" with last_ok_ts). Skips silently while a refresh is in flight.
+        """
+        interval_ms = self.cfg.binance_account_refresh_sec * 1000.0
+        if interval_ms <= 0:
+            return
+        if self._binance_task is not None and not self._binance_task.done():
+            return
+        if now_ms() < self._binance_next_refresh_ms:
+            return
+        self._binance_next_refresh_ms = now_ms() + int(interval_ms)
+        symbols = list(self.scanner.last_universe or [])
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:      # no running loop (sync unit tests)
+            self.binance.refresh(symbols)
+            return
+        self._binance_task = loop.create_task(
+            asyncio.to_thread(self.binance.refresh, symbols))
 
     def _persist_telegram_health(self) -> None:
         """Write the notifier's (secret-free) health to storage for the dashboard."""
@@ -563,6 +608,17 @@ class Engine:
                 except Exception as exc:
                     log.debug("kill_switch notification error: %s", exc)
 
+        # Daily profit lock state (Task 1). Computation only — the actual gate
+        # lives in filters.f_daily_profit_lock; this just surfaces it.
+        profit_target = bal * (self.cfg.daily_profit_lock_pct / 100.0)
+        profit_lock_active = bool(
+            self.cfg.daily_profit_lock_enabled and profit_target > 0
+            and daily_pnl >= profit_target)
+        # Task 5: edge-triggered notification, once per activation (day-keyed,
+        # mirroring the kill-switch dedup above).
+        self._maybe_notify_daily_profit_lock(profit_lock_active, daily_pnl,
+                                             profit_target)
+
         # Heartbeat (enriched — Block F).
         self.db.set_heartbeat("engine", {
             "ts": now_ms(), "cycle": self._cycles, "balance": bal,
@@ -574,6 +630,9 @@ class Engine:
             "last_trade_min_ago": last_min_ago,
             "kill_switch": kill_switch_active,
             "daily_realized_pnl": round(daily_pnl, 4),
+            "daily_profit_lock_active": profit_lock_active,
+            "daily_profit_target_usdt": round(profit_target, 4),
+            "daily_profit_room_usdt": round(max(0.0, profit_target - daily_pnl), 4),
             "last_error": self._last_error,
         })
 
@@ -587,6 +646,24 @@ class Engine:
                  self._cycles, len(symbols), candidates, stats.setup_detected_count,
                  stats.decision_allow_count, stats.executed_count, open_count,
                  self.db.get_balance())
+
+    def _maybe_notify_daily_profit_lock(self, active: bool, daily_pnl: float,
+                                        target: float) -> None:
+        """Fire daily_profit_lock_activated once per activation (Task 5).
+
+        Day-keyed dedup, one-for-one with the kill-switch pattern: consecutive
+        locked cycles never repeat the message; the UTC rollover re-arms it.
+        """
+        if not active:
+            return
+        today = dt.datetime.now(dt.timezone.utc).toordinal()
+        if today == self._profit_lock_fired_day:
+            return
+        self._profit_lock_fired_day = today
+        try:
+            self.notifier.daily_profit_lock_activated(daily_pnl, target)
+        except Exception as exc:
+            log.debug("profit lock notification error: %s", exc)
 
     async def _manage_open_trades(self, snapshots: Dict[str, MarketSnapshot]) -> None:
         opens = self.db.get_open_trades(mode=self.cfg.mode)

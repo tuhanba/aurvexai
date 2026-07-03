@@ -94,6 +94,33 @@ If the server has a firewall, allow port 5000 (example for ufw):
 sudo ufw allow 5000/tcp
 ```
 
+### 4a. Dashboard access security (recommended)
+
+Two additive protections exist; neither changes default behaviour:
+
+1. **HTTP Basic auth** — set both `DASHBOARD_AUTH_USER` and
+   `DASHBOARD_AUTH_PASS` in `.env`. Every route then requires the credentials
+   except `/health` (the docker healthcheck hits it from localhost). Leave
+   them unset and the dashboard stays open as before.
+
+2. **Localhost-only publish + SSH tunnel** — in `docker-compose.yml`, swap the
+   port line to the commented alternative:
+
+   ```
+   # - "127.0.0.1:5000:5000"
+   ```
+
+   The dashboard is then reachable only through an SSH tunnel. From your
+   machine (one command, one line):
+
+   ```
+   ssh -L 5000:127.0.0.1:5000 user@<server-ip>
+   ```
+
+   then open `http://127.0.0.1:5000` locally. Do NOT switch to the
+   localhost-only publish while you still rely on direct-IP access — it would
+   lock you out until the tunnel is set up.
+
 ## 5. Logs
 
 All services:
