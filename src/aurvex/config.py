@@ -438,6 +438,19 @@ class Config:
     # or a reverse proxy with auth/HTTPS.
     dashboard_host: str = field(default_factory=lambda: _str("DASHBOARD_HOST", "0.0.0.0"))
     dashboard_port: int = field(default_factory=lambda: _pint("DASHBOARD_PORT"))
+    # Heartbeat staleness cut for the ENGINE LOOP badge (ms). The heartbeat is
+    # written at cycle END, so a slow scan cycle must not read as "engine down":
+    # default = max(120s, 6 × cycle interval).
+    heartbeat_stale_ms: int = field(default_factory=lambda: _int(
+        "HEARTBEAT_STALE_MS",
+        max(120_000, int(6 * _float("CYCLE_INTERVAL_SEC", 20.0) * 1000))))
+    # Optional HTTP Basic auth (Task 4): when BOTH are set, every dashboard
+    # route requires credentials EXCEPT /health (docker healthcheck hits it
+    # from localhost). Unset (default) = behaviour unchanged.
+    dashboard_auth_user: str = field(
+        default_factory=lambda: _str("DASHBOARD_AUTH_USER", ""))
+    dashboard_auth_pass: str = field(
+        default_factory=lambda: _str("DASHBOARD_AUTH_PASS", ""))
 
     # -- Telegram (secrets via env only) -----------------------------------
     telegram_enabled: bool = field(default_factory=lambda: _bool("TELEGRAM_ENABLED", True))

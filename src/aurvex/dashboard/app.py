@@ -104,11 +104,71 @@ def _trade_dict(t, balance: float = 0.0) -> Dict[str, Any]:
     }
 
 
+def _mode_banner(cfg) -> str:
+    """PAPER / DRY_RUN / LIVE banner label from config mode + LIVE_ENABLED.
+
+    (TESTNET is reserved for a future sandbox config; nothing sets it yet.)
+    """
+    if cfg.mode == "live":
+        return "LIVE" if cfg.live_enabled else "DRY_RUN"
+    return "PAPER"
+
+
+def _shadow_suggested_action(stats: Dict[str, Any],
+                             verdict: Dict[str, Any]) -> str:
+    """REPORT-ONLY suggestion from the closed vocabulary
+    {no action, reduce risk, pause setup, watch symbol, collect more data}.
+    Always suffixed "suggestion only — not applied" — nothing consumes it.
+    """
+    suffix = " (suggestion only — not applied)"
+    if (stats.get("resolved_total", 0) or 0) < 100 or \
+            verdict.get("verdict") == "INSUFFICIENT":
+        return "collect more data" + suffix
+    if verdict.get("verdict") == "ANTI_PREDICTIVE":
+        return "reduce risk" + suffix
+    worst_setup = None
+    for s in stats.get("by_setup", []):
+        if (s.get("n", 0) or 0) >= 30 and (s.get("avg_r") or 0.0) < -0.3:
+            if worst_setup is None or s["avg_r"] < worst_setup["avg_r"]:
+                worst_setup = s
+    if worst_setup:
+        return f"pause setup {worst_setup.get('setup', '?')}" + suffix
+    worst_symbol = None
+    for s in stats.get("by_symbol", []):
+        if (s.get("n", 0) or 0) >= 20 and (s.get("avg_r") or 0.0) < -0.5:
+            if worst_symbol is None or s["avg_r"] < worst_symbol["avg_r"]:
+                worst_symbol = s
+    if worst_symbol:
+        return f"watch symbol {worst_symbol.get('symbol', '?')}" + suffix
+    return "no action" + suffix
+
+
 def create_app(cfg=None) -> Flask:
     cfg = cfg or load_config()
     app = Flask(__name__)
     db = Storage(cfg.db_path)
     shadow = ShadowLearner(cfg, db)
+
+    # Optional HTTP Basic auth (Task 4). Active ONLY when both envs are set;
+    # /health stays open because the docker healthcheck hits it from localhost.
+    if cfg.dashboard_auth_user and cfg.dashboard_auth_pass:
+        import hmac
+        from flask import Response, request
+
+        @app.before_request
+        def _require_basic_auth():
+            if request.path == "/health":
+                return None
+            auth = request.authorization
+            if (auth is None or auth.type != "basic"
+                    or not hmac.compare_digest(auth.username or "",
+                                               cfg.dashboard_auth_user)
+                    or not hmac.compare_digest(auth.password or "",
+                                               cfg.dashboard_auth_pass)):
+                return Response(
+                    "Authentication required", 401,
+                    {"WWW-Authenticate": 'Basic realm="AurvexAI dashboard"'})
+            return None
 
     @app.route("/")
     def index():
@@ -126,8 +186,11 @@ def create_app(cfg=None) -> Flask:
         hb_data = dict(hb.get("status") or {}) if hb else {}
         hb_ts = int(hb.get("ts", 0)) if hb else 0
 
+        # Task 4: env-driven staleness cut (HEARTBEAT_STALE_MS; default
+        # max(120s, 6 × cycle interval)) — the heartbeat is written at cycle END.
         ts_age = now_ms() - hb_ts if hb_ts else None
-        heartbeat_fresh = bool(hb and ts_age is not None and ts_age < 120_000)
+        heartbeat_fresh = bool(hb and ts_age is not None
+                               and ts_age < cfg.heartbeat_stale_ms)
 
         data_age_ms = hb_data.get("data_age_ms")
         cycle_interval_ms = cfg.cycle_interval_sec * 1000
@@ -150,12 +213,20 @@ def create_app(cfg=None) -> Flask:
         if not mode_ok:
             reasons.append(f"mode mismatch: engine={engine_mode} config={cfg.mode}")
 
+        # "ok" is kept for backward compat, but the four truths it folds are
+        # exposed SEPARATELY so the UI renders four independent badges.
         return jsonify({
             "ok": ok,
             "engine_alive": heartbeat_fresh,
+            "heartbeat_fresh": heartbeat_fresh,
+            "heartbeat_age_ms": ts_age,
+            "heartbeat_stale_ms": cfg.heartbeat_stale_ms,
+            "data_fresh": data_fresh,
             "data_age_ms": data_age_ms,
             "kill_switch": kill_switch,
             "mode_ok": mode_ok,
+            "engine_mode": engine_mode,
+            "config_mode": cfg.mode,
             "reasons": reasons,
             "heartbeat": hb_data,
         }), 200
@@ -186,22 +257,53 @@ def create_app(cfg=None) -> Flask:
         )
         daily_pnl = db.daily_realized_pnl(_day_start)
 
+        # Task 4: the four independent status truths (never folded into one
+        # boolean for the UI) + env-driven heartbeat staleness cut.
+        hb_ts = int(hb.get("ts", 0) or 0) if hb else 0
+        hb_age_ms = (now_ms() - hb_ts) if hb_ts else None
+        heartbeat_fresh = bool(hb_age_ms is not None
+                               and hb_age_ms < cfg.heartbeat_stale_ms)
+        data_age_ms = hb.get("data_age_ms")
+        data_fresh = (data_age_ms is None
+                      or data_age_ms < cfg.cycle_interval_sec * 1000 * 5)
+        engine_mode = hb.get("mode", cfg.mode)
+
         return jsonify({
             "mode": cfg.mode,
             "balance": balance,
             "initial_balance": cfg.initial_paper_balance,
             "open_trades": len(opens),
             "heartbeat": hb,
-            "engine_alive": bool(hb and (now_ms() - int(hb.get("ts", 0))) < 120_000),
+            "engine_alive": heartbeat_fresh,
             "live_enabled": cfg.live_enabled,
             # Block F additions:
             "epoch_label": epoch_label,
             "kill_switch": hb.get("kill_switch", False),
-            "data_age_ms": hb.get("data_age_ms"),
+            "data_age_ms": data_age_ms,
             "cycle_ms": hb.get("cycle_ms"),
             "last_error": hb.get("last_error", ""),
             "daily_realized_pnl": round(daily_pnl, 4),
             "max_daily_loss_pct": cfg.max_daily_loss_pct,
+            # Task 4 — four independent badges (raw values, no folding):
+            "heartbeat_fresh": heartbeat_fresh,
+            "heartbeat_age_ms": hb_age_ms,
+            "heartbeat_stale_ms": cfg.heartbeat_stale_ms,
+            "data_fresh": data_fresh,
+            "mode_ok": engine_mode == cfg.mode,
+            "engine_mode": engine_mode,
+            "mode_banner": _mode_banner(cfg),
+            # Task 1 — daily profit lock surfaces (from the engine heartbeat;
+            # config supplies the static knobs when the heartbeat is missing).
+            "daily_profit_lock_enabled": cfg.daily_profit_lock_enabled,
+            "daily_profit_lock_pct": cfg.daily_profit_lock_pct,
+            "daily_profit_lock_active": hb.get("daily_profit_lock_active", False),
+            "daily_profit_target_usdt": hb.get(
+                "daily_profit_target_usdt",
+                round(balance * cfg.daily_profit_lock_pct / 100.0, 4)),
+            "daily_profit_room_usdt": hb.get(
+                "daily_profit_room_usdt",
+                round(max(0.0, balance * cfg.daily_profit_lock_pct / 100.0
+                          - daily_pnl), 4)),
         })
 
     @app.route("/api/funnel")
@@ -233,7 +335,17 @@ def create_app(cfg=None) -> Flask:
 
     @app.route("/api/shadow")
     def shadow_stats():
-        return jsonify(shadow.stats())
+        """Shadow panel (Task 4): report-only label HARDCODED, resolved count,
+        predictivity verdict, and a closed-vocabulary suggested action that is
+        always suffixed "suggestion only — not applied". Read-only aggregation
+        over existing shadow stats — shadow decision logic untouched."""
+        st = dict(shadow.stats())
+        verdict = shadow.predictivity_verdict()
+        st["report_only"] = True
+        st["label"] = "report-only"          # hardcoded by design (never a veto)
+        st["predictivity_verdict"] = verdict
+        st["suggested_action"] = _shadow_suggested_action(st, verdict)
+        return jsonify(st)
 
     @app.route("/api/balance")
     def balance():
@@ -588,7 +700,7 @@ def create_app(cfg=None) -> Flask:
         hb = db.get_heartbeat("engine")
         hb_data = dict(hb.get("status") or {}) if hb else {}
         hb_ts = int(hb.get("ts", 0)) if hb else 0
-        alive = bool(hb_ts and (now_ms() - hb_ts) < 120_000)
+        alive = bool(hb_ts and (now_ms() - hb_ts) < cfg.heartbeat_stale_ms)
 
         epoch_meta = db.get_meta("epoch")
         epoch_label = (epoch_meta.get("label", "unknown")

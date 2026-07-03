@@ -82,6 +82,9 @@ def test_no_endpoint_leaks_secret_values(tmp_path):
     cfg.telegram_chat_id = FAKE_CHAT
     Storage(cfg.db_path).ensure_epoch(cfg.epoch_label)
 
+    cfg.binance_api_key = FAKE_KEY
+    cfg.binance_api_secret = FAKE_KEY + "secret"
+
     client = create_app(cfg).test_client()
     endpoints = [
         "/health", "/api/status", "/api/funnel", "/api/signals",
@@ -89,7 +92,7 @@ def test_no_endpoint_leaks_secret_values(tmp_path):
         "/api/balance", "/api/accounting", "/api/portfolio_metrics",
         "/api/telegram", "/api/score_validity", "/api/system_state",
         "/api/setup_health", "/api/quality", "/api/missed_opportunity",
-        "/api/receipts", "/api/shadow_basis", "/api/diagnosis",
+        "/api/receipts", "/api/shadow_basis", "/api/diagnosis", "/api/binance",
     ]
     for ep in endpoints:
         body = client.get(ep).get_data(as_text=True)
@@ -162,6 +165,123 @@ def test_trade_dict_surfaces_configured_vs_applied(tmp_path):
     assert d["configured_risk_pct"] == 2.0
     assert d["applied_risk_pct"] != d["configured_risk_pct"]
     assert d["clip_reason"] == "exposure_cap"
+
+
+# ---------------------------------------------------------------------------
+# Task 4 — risk terminal: four independent status flags, mode banner,
+# profit-lock surfaces, optional Basic auth, /api/binance states.
+# ---------------------------------------------------------------------------
+
+def test_status_exposes_four_flags_separately(tmp_path):
+    """The four truths render independently — never only the folded 'ok'."""
+    from aurvex.dashboard.app import create_app
+    from aurvex.storage import Storage
+
+    cfg = _cfg(tmp_path)
+    db = Storage(cfg.db_path)
+    db.ensure_epoch(cfg.epoch_label)
+    db.set_heartbeat("engine", {"ts": 1, "mode": "paper", "kill_switch": False,
+                                "data_age_ms": 5_000})
+    client = create_app(cfg).test_client()
+
+    st = client.get("/api/status").get_json()
+    for key in ("heartbeat_fresh", "heartbeat_age_ms", "heartbeat_stale_ms",
+                "data_fresh", "kill_switch", "mode_ok", "engine_mode",
+                "mode_banner"):
+        assert key in st, f"/api/status missing {key}"
+    assert st["mode_banner"] == "PAPER"
+    # Profit-lock surfaces (Task 1) present too.
+    for key in ("daily_profit_lock_enabled", "daily_profit_lock_pct",
+                "daily_profit_lock_active", "daily_profit_target_usdt",
+                "daily_profit_room_usdt"):
+        assert key in st, f"/api/status missing {key}"
+
+    hl = client.get("/health").get_json()
+    assert "ok" in hl                       # backward compat retained
+    for key in ("heartbeat_fresh", "heartbeat_age_ms", "data_fresh",
+                "kill_switch", "mode_ok"):
+        assert key in hl, f"/health missing {key}"
+
+
+def test_mode_banner_values(tmp_path):
+    from aurvex.dashboard.app import _mode_banner
+
+    cfg = _cfg(tmp_path)
+    assert _mode_banner(cfg) == "PAPER"
+    cfg.mode = "live"
+    cfg.live_enabled = False
+    assert _mode_banner(cfg) == "DRY_RUN"
+    cfg.live_enabled = True
+    assert _mode_banner(cfg) == "LIVE"
+
+
+def test_heartbeat_stale_ms_env_driven(tmp_path, monkeypatch):
+    from aurvex.config import Config
+
+    monkeypatch.setenv("CYCLE_INTERVAL_SEC", "60")
+    assert Config().heartbeat_stale_ms == 360_000     # 6 x 60s
+    monkeypatch.setenv("CYCLE_INTERVAL_SEC", "5")
+    assert Config().heartbeat_stale_ms == 120_000     # floor wins
+    monkeypatch.setenv("HEARTBEAT_STALE_MS", "999000")
+    assert Config().heartbeat_stale_ms == 999_000     # explicit env wins
+
+
+def test_auth_off_by_default(tmp_path):
+    from aurvex.dashboard.app import create_app
+    from aurvex.storage import Storage
+
+    cfg = _cfg(tmp_path)
+    Storage(cfg.db_path).ensure_epoch(cfg.epoch_label)
+    client = create_app(cfg).test_client()
+    assert client.get("/api/status").status_code == 200
+    assert client.get("/health").status_code == 200
+
+
+def test_auth_on_when_both_envs_set(tmp_path):
+    """401 without credentials; /health stays open for the docker healthcheck."""
+    import base64
+
+    from aurvex.dashboard.app import create_app
+    from aurvex.storage import Storage
+
+    cfg = _cfg(tmp_path)
+    cfg.dashboard_auth_user = "owner"
+    cfg.dashboard_auth_pass = "hunter2"
+    Storage(cfg.db_path).ensure_epoch(cfg.epoch_label)
+    client = create_app(cfg).test_client()
+
+    assert client.get("/api/status").status_code == 401
+    assert client.get("/").status_code == 401
+    assert client.get("/health").status_code == 200   # healthcheck exempt
+
+    good = base64.b64encode(b"owner:hunter2").decode()
+    ok = client.get("/api/status", headers={"Authorization": f"Basic {good}"})
+    assert ok.status_code == 200
+
+    bad = base64.b64encode(b"owner:wrong").decode()
+    denied = client.get("/api/status", headers={"Authorization": f"Basic {bad}"})
+    assert denied.status_code == 401
+
+
+def test_shadow_panel_report_only_label_and_suggestion(tmp_path):
+    from aurvex.dashboard.app import create_app
+    from aurvex.storage import Storage
+
+    cfg = _cfg(tmp_path)
+    Storage(cfg.db_path).ensure_epoch(cfg.epoch_label)
+    client = create_app(cfg).test_client()
+    data = client.get("/api/shadow").get_json()
+
+    assert data["report_only"] is True
+    assert data["label"] == "report-only"                 # hardcoded by design
+    assert "resolved_total" in data
+    assert data["predictivity_verdict"]["verdict"] in (
+        "PREDICTIVE", "ANTI_PREDICTIVE", "INSUFFICIENT")
+    action = data["suggested_action"]
+    assert action.endswith("(suggestion only — not applied)")
+    vocab = ("no action", "reduce risk", "pause setup", "watch symbol",
+             "collect more data")
+    assert any(action.startswith(v) for v in vocab)
 
 
 def test_trade_dict_surfaces_rank_and_risk_multiplier(tmp_path):
