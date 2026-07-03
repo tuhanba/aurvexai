@@ -122,7 +122,30 @@ Conclusion: no instability found in the engine. The remaining stability
 questions are host-runtime ones (cycle p95 under real ccxt latency, long-run
 memory) — measured by §4 on the host, not reproducible offline.
 
-## 8. Frozen-path assertion
+## 8. Stage-3 wave (owner-authorized, 2026-07-03)
+
+- New floor: **618 passed** (596 + 22 Stage-3 tests in
+  `test_stage3_live_orders.py`); nothing removed or weakened.
+- Gate proof: stock config → `DISARMED`, zero exchange calls; each of the
+  five gate factors individually keeps the adapter disarmed; a tripped
+  adapter refuses even when fully armed.
+- Behavior proof (fake exchange): full group placement (entry + SL
+  closePosition + reduce-only TPs), partial fills accumulated across
+  cancel-replace generations, protections sized to the ACTUAL filled qty,
+  cancel-failure → trip, timeout hard-cap → trip, protection failure →
+  flatten + trip, reconcile drift detection, emergency stop.
+- Profitability measurement (honest): synthetic pipeline backtest PF 1.42 /
+  net +30.5 (proves the pipeline, NOT edge — data has embedded patterns);
+  REAL-data verdict unchanged: directional TA **NO-GO** (gross-negative
+  bugra 5m, cost-killed reversion, lone 15m/4h cell fails robustness —
+  `PAPER_PERFORMANCE_REPORT.md`). Live arming stays blocked on evidence.
+- Limits verified live in config: kill switch 10% (−20 USDT @ 200) and
+  daily profit lock 10% (+20 USDT @ 200), both enabled, covered by
+  `test_daily_profit_lock.py` / `test_aggressive_paper_200.py`.
+- Schema audit on a 400-cycle DB: `PRAGMA integrity_check` ok, zero FK
+  violations, all 12 tables populated as expected.
+
+## 9. Frozen-path assertion
 
 This wave touched only: `src/aurvex/dashboard/templates/index.html`
 (presentation + the `const mb` fix), `RISK_MODEL.md`, and the three report

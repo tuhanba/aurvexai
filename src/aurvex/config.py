@@ -470,10 +470,13 @@ class Config:
 
     # -- Live safety gate --------------------------------------------------
     # LIVE_ENABLED must be explicitly true AND a human confirmation token set
-    # for the live executor to even *attempt* (it still never sends real
-    # orders in this build - the order call is a stub).
+    # for the live executor to even *attempt*. Real order sending (Stage 3)
+    # additionally requires LIVE_SEND_ORDERS=true — the arming switch exists
+    # so setups that relied on the pre-Stage-3 promise ("all three factors
+    # set, orders still simulated") stay safe until this new, explicit opt-in.
     live_enabled: bool = field(default_factory=lambda: _bool("LIVE_ENABLED", False))
     live_human_confirm: str = field(default_factory=lambda: _str("LIVE_HUMAN_CONFIRM", ""))
+    live_send_orders: bool = field(default_factory=lambda: _bool("LIVE_SEND_ORDERS", False))
     live_canary_risk_pct: float = field(default_factory=lambda: _float("LIVE_CANARY_RISK_PCT", 0.1))
     live_order_timeout_sec: float = field(default_factory=lambda: _float("LIVE_ORDER_TIMEOUT_SEC", 5.0))
     live_max_retries: int = field(default_factory=lambda: _int("LIVE_MAX_RETRIES", 2))

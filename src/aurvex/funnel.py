@@ -71,6 +71,13 @@ class FunnelLogger:
     def mark_executed(self) -> None:
         self.stats.executed_count += 1
 
+    def mark_live_send_refused(self) -> None:
+        """Stage 3: an ALLOW decision whose live order send was refused by the
+        adapter (gate/validation/exchange). Capacity-bucketed — the signal was
+        fine; only the execution side effect was blocked."""
+        self.stats.capacity_reject_count += 1
+        self.stats.add_reject("live_send_refused")
+
     def mark_ranked_out(self, reason: str = "ranked_out") -> None:
         """A candidate qualified (ALLOW) but lost the slot race (slots full / cap).
 
