@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import math
 import random
+import zlib
 from typing import Dict, List, Optional
 
 from .config import Config
@@ -160,8 +161,10 @@ class SyntheticProvider(MarketDataProvider):
         self._tick += n
 
     def _gen_series(self, symbol: str, tf: str, n: int) -> List[Candle]:
-        rng = random.Random(hash((symbol, tf, self.seed)) & 0xFFFFFFFF)
-        base = self.BASE_PRICE.get(symbol, 100.0 + (hash(symbol) % 900))
+        # zlib.crc32, not hash(): str hash() is salted per process
+        # (PYTHONHASHSEED), which silently broke run-to-run reproducibility.
+        rng = random.Random(zlib.crc32(f"{symbol}|{tf}|{self.seed}".encode()))
+        base = self.BASE_PRICE.get(symbol, 100.0 + (zlib.crc32(symbol.encode()) % 900))
         price = base
         # Per-symbol regime: trend strength and sweep propensity.
         drift = (rng.random() - 0.45) * 0.0008          # net drift per bar
@@ -181,7 +184,7 @@ class SyntheticProvider(MarketDataProvider):
             hi = max(o, c) + abs(noise) * 0.8
             lo = min(o, c) - abs(noise) * 0.8
             # Inject a liquidity sweep wick occasionally on the last few bars
-            if i >= n - 3 and (hash((symbol, "sweep")) % 5 == 0):
+            if i >= n - 3 and (zlib.crc32(f"{symbol}|sweep".encode()) % 5 == 0):
                 lo = lo - vol * 3.0
             v = 1000 * (1.0 + rng.random()) * (1.0 + (3.0 if i >= n - 2 else 0.0) * rng.random())
             candles.append(Candle(ts0 + t * step_ms, o, hi, lo, c, v))
