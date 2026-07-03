@@ -99,6 +99,7 @@ _PROFILE_DEFAULTS: dict = {
         "MIN_RISK_PCT": 0.25,
         "MAX_RISK_PCT": 1.0,
         "MAX_DAILY_LOSS_PCT": 3.0,
+        "DAILY_PROFIT_LOCK_PCT": 10.0,
         "MAX_OPEN_TRADES": 4,
         "DASHBOARD_PORT": 5000,
     },
@@ -108,6 +109,7 @@ _PROFILE_DEFAULTS: dict = {
         "MIN_RISK_PCT": 1.0,
         "MAX_RISK_PCT": 3.0,
         "MAX_DAILY_LOSS_PCT": 10.0,
+        "DAILY_PROFIT_LOCK_PCT": 10.0,
         "MAX_OPEN_TRADES": 4,
         "DASHBOARD_PORT": 5000,
     },
@@ -197,6 +199,14 @@ class Config:
     max_risk_pct: float = field(default_factory=lambda: _pfloat("MAX_RISK_PCT"))
     max_open_trades: int = field(default_factory=lambda: _pint("MAX_OPEN_TRADES"))
     max_daily_loss_pct: float = field(default_factory=lambda: _pfloat("MAX_DAILY_LOSS_PCT"))
+    # Daily profit lock (mirror of the daily-loss kill switch, profit side):
+    # once today's UTC REALIZED PnL reaches balance * pct/100, new entries are
+    # rejected (reason "daily_profit_lock"). Open trades keep their normal exit
+    # management; the lock resets automatically at UTC day rollover.
+    daily_profit_lock_enabled: bool = field(
+        default_factory=lambda: _bool("DAILY_PROFIT_LOCK_ENABLED", True))
+    daily_profit_lock_pct: float = field(
+        default_factory=lambda: _pfloat("DAILY_PROFIT_LOCK_PCT"))
     max_portfolio_exposure_pct: float = field(
         default_factory=lambda: _float("MAX_PORTFOLIO_EXPOSURE_PCT", 200.0)
     )

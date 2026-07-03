@@ -563,6 +563,13 @@ class Engine:
                 except Exception as exc:
                     log.debug("kill_switch notification error: %s", exc)
 
+        # Daily profit lock state (Task 1). Computation only — the actual gate
+        # lives in filters.f_daily_profit_lock; this just surfaces it.
+        profit_target = bal * (self.cfg.daily_profit_lock_pct / 100.0)
+        profit_lock_active = bool(
+            self.cfg.daily_profit_lock_enabled and profit_target > 0
+            and daily_pnl >= profit_target)
+
         # Heartbeat (enriched — Block F).
         self.db.set_heartbeat("engine", {
             "ts": now_ms(), "cycle": self._cycles, "balance": bal,
@@ -574,6 +581,9 @@ class Engine:
             "last_trade_min_ago": last_min_ago,
             "kill_switch": kill_switch_active,
             "daily_realized_pnl": round(daily_pnl, 4),
+            "daily_profit_lock_active": profit_lock_active,
+            "daily_profit_target_usdt": round(profit_target, 4),
+            "daily_profit_room_usdt": round(max(0.0, profit_target - daily_pnl), 4),
             "last_error": self._last_error,
         })
 
