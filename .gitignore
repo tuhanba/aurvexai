@@ -18,6 +18,9 @@ trend_sweep_report.md
 holdout_report.md
 CARRY_PHASE0_FINDINGS.md
 CARRY_PHASE1_FINDINGS.md
+DRYRUN_VALIDATION.md
+DAILY_REPORT.md
+aurvex_backup_pre_reset.db*
 
 # Python
 __pycache__/
