@@ -444,6 +444,17 @@ class Config:
     telegram_bot_token: str = field(default_factory=lambda: _str("TELEGRAM_BOT_TOKEN", ""))
     telegram_chat_id: str = field(default_factory=lambda: _str("TELEGRAM_CHAT_ID", ""))
 
+    # -- Binance read-only account adapter (Live Stage 1) --------------------
+    # Keys are OPTIONAL: absent → adapter reports "keys_absent" and the engine
+    # behaves exactly as today. Present → GET-class account reads only (balance,
+    # positions, open orders, exchangeInfo filters, leverage brackets, fees,
+    # time drift, permission self-check). NEVER used to send orders.
+    binance_api_key: str = field(default_factory=lambda: _str("BINANCE_API_KEY", ""))
+    binance_api_secret: str = field(default_factory=lambda: _str("BINANCE_API_SECRET", ""))
+    # Slow refresh timer (seconds) — runs OUTSIDE the trade cycle's critical path.
+    binance_account_refresh_sec: float = field(
+        default_factory=lambda: _float("BINANCE_ACCOUNT_REFRESH_SEC", 300.0))
+
     # -- Live safety gate --------------------------------------------------
     # LIVE_ENABLED must be explicitly true AND a human confirmation token set
     # for the live executor to even *attempt* (it still never sends real

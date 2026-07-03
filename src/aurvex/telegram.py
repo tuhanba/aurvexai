@@ -291,6 +291,19 @@ class BaseNotifier:
         lines = [_esc(line) for line in telegram_lines(receipt)]
         self.send("\n".join(lines))
 
+    def binance_status_changed(self, status: str, detail: str = "") -> None:
+        """Read-only account adapter status transition (Task 2 / Stage 1).
+
+        Edge-triggered by the adapter itself (fires only when the status
+        actually changes), so consecutive same-state cycles never repeat it.
+        """
+        emoji = {"connected": "\U0001F7E2", "keys_absent": "⚪",
+                 "error": "\U0001F7E0", "unsafe_key": "\U0001F6A8"}.get(status, "ℹ️")
+        lines = [f"{emoji} Binance account adapter: {_esc(status)}"]
+        if detail:
+            lines.append(_esc(detail))
+        self.send("\n".join(lines))
+
     def critical(self, message: str) -> None:
         self.send(f"\U0001F6A8 CRITICAL\n{message}")
 

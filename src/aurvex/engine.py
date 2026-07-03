@@ -25,6 +25,7 @@ import logging
 import signal as os_signal
 from typing import Dict, List, Optional
 
+from .binance_account import build_binance_adapter
 from .config import Config
 from .decision import DecisionEngine
 from .executors import PaperExecutor
@@ -66,6 +67,14 @@ class Engine:
         self.notifier = build_notifier(cfg)
         self.commander = build_commander(cfg)
         self.commander.set_engine(self)
+        # Task 2 (LIVE-READY sprint): read-only Binance account adapter.
+        # Optional + fail-soft; with no keys it reports "keys_absent" and the
+        # engine behaves exactly as before. Refreshed on a slow timer OUTSIDE
+        # the trade cycle's critical path. Never sends orders.
+        self.binance = build_binance_adapter(cfg, self.db,
+                                             alert_hook=self._on_binance_status)
+        self._binance_next_refresh_ms = 0
+        self._binance_task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
         self._cycles = 0
         self._last_summary_day = -1
@@ -125,6 +134,9 @@ class Engine:
                     self._last_error = str(exc)[:200]
                     self.notifier.health_warning(f"cycle error: {exc}")
                 self._cycles += 1
+                # Task 2: slow-timer Binance read-only refresh, spawned as a
+                # background thread task OUTSIDE the trade cycle's critical path.
+                self._maybe_refresh_binance()
                 if max_cycles is not None and self._cycles >= max_cycles:
                     break
                 elapsed = (now_ms() - started) / 1000.0
@@ -145,6 +157,37 @@ class Engine:
             await asyncio.wait_for(self._stop.wait(), timeout=seconds)
         except asyncio.TimeoutError:
             pass
+
+    def _on_binance_status(self, status: str, detail: str) -> None:
+        """Adapter status transition → Telegram (edge-triggered in the adapter)."""
+        try:
+            self.notifier.binance_status_changed(status, detail)
+        except Exception as exc:
+            log.debug("binance status notify error: %s", exc)
+
+    def _maybe_refresh_binance(self) -> None:
+        """Kick a read-only account refresh when the slow timer is due (Task 2).
+
+        Runs in a worker thread so the network round-trips never delay a cycle;
+        the adapter is fail-soft by contract (exceptions degrade to status
+        "error" with last_ok_ts). Skips silently while a refresh is in flight.
+        """
+        interval_ms = self.cfg.binance_account_refresh_sec * 1000.0
+        if interval_ms <= 0:
+            return
+        if self._binance_task is not None and not self._binance_task.done():
+            return
+        if now_ms() < self._binance_next_refresh_ms:
+            return
+        self._binance_next_refresh_ms = now_ms() + int(interval_ms)
+        symbols = list(self.scanner.last_universe or [])
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:      # no running loop (sync unit tests)
+            self.binance.refresh(symbols)
+            return
+        self._binance_task = loop.create_task(
+            asyncio.to_thread(self.binance.refresh, symbols))
 
     def _persist_telegram_health(self) -> None:
         """Write the notifier's (secret-free) health to storage for the dashboard."""

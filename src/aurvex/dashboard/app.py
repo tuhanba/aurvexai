@@ -437,6 +437,25 @@ def create_app(cfg=None) -> Flask:
         status["heartbeat_ts"] = hb.get("ts")
         return jsonify(status)
 
+    @app.route("/api/binance")
+    def binance_status():
+        """Read-only Binance adapter heartbeat (Task 2 / Live Stage 1).
+
+        Serves ONLY what the engine's adapter wrote under heartbeat key
+        "binance" — the dashboard container never touches API keys and this
+        payload is secret-free by construction (the adapter builds it from
+        fetched data only and sanitises error strings). Covered by the same
+        secret-exposure self-check stance as every other endpoint.
+        """
+        hb = db.get_heartbeat("binance")
+        if not hb:
+            return jsonify({"status": "unknown",
+                            "note": "no binance heartbeat yet "
+                                    "(engine not started or first refresh pending)"})
+        payload = dict(hb.get("status") or {})
+        payload["heartbeat_ts"] = hb.get("ts")
+        return jsonify(payload)
+
     @app.route("/api/score_validity")
     def score_validity():
         """Score-validity panel — buckets by score range, win% and avg-R, plus a
