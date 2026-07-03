@@ -12,18 +12,21 @@ Three pieces:
 
 * `PaperExecutor` - opens virtual trades; lifecycle driven by simulate_fill.
 
-* `LiveExecutor`  - MOCK / STUB ONLY. Runs the live execution-safety layer
-                    (readiness gate, connection check, spread/slippage guards,
-                    canary risk, timeout/retry, kill switch) and then calls a
-                    `_send_order` STUB that NEVER contacts an exchange. It exists
-                    so the safety layer can be unit-tested and so paper/live
-                    decision parity can be proven. No real orders are placed
-                    anywhere in this build.
+* `LiveExecutor`  - runs the live execution-safety layer (readiness gate,
+                    connection check, spread/slippage guards, canary risk,
+                    kill switch). By default `_send_order` is a STUB that
+                    NEVER contacts an exchange. Since the Stage-3 wave it can
+                    delegate to an ARMED `live_orders.LiveOrderAdapter`
+                    (three-factor lock + LIVE_SEND_ORDERS=true + keys); with
+                    the adapter absent or disarmed, behavior is byte-for-byte
+                    the old stub.
 
 CRITICAL: the executor changes side effects only. It must NEVER change the
 trade decision (score/threshold/sizing) - that already happened upstream.
 """
 from __future__ import annotations
+
+import logging
 
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence, Tuple
@@ -31,6 +34,8 @@ from typing import List, Optional, Sequence, Tuple
 from .config import Config
 from .models import (LIVE, LONG, OPEN, PAPER, SHORT, CLOSED, Decision, Trade,
                      TPTarget, now_ms)
+
+_log = logging.getLogger("aurvex.executors")
 
 
 @dataclass
@@ -367,16 +372,25 @@ class LiveSafetyResult:
 
 class LiveExecutor(BaseExecutor):
     """
-    MOCK live executor. Demonstrates the execution-safety layer. It NEVER
-    sends real orders - `_send_order` is a stub. The readiness gate is closed
-    by default and only "opens" if LIVE_ENABLED is true AND a human-confirm
-    token is present; even then orders are simulated.
+    Live executor. The readiness gate is closed by default and only opens if
+    LIVE_ENABLED is true AND a human-confirm token is present.
+
+    Order sending is two-tier (Stage 3):
+    * With no ``order_adapter`` — or with the adapter disarmed — `_send_order`
+      is the same harmless stub as always: it returns a SIMULATED ack and
+      nothing touches an exchange. This is the default everywhere.
+    * With an armed ``live_orders.LiveOrderAdapter`` injected (requires the
+      three-factor lock PLUS ``LIVE_SEND_ORDERS=true`` plus keys), the send is
+      delegated to the adapter, which places the validated entry+SL+TP group
+      for real. Decision/sizing logic is identical either way — parity holds.
     """
 
-    def __init__(self, cfg: Config, connection_ok: bool = True):
+    def __init__(self, cfg: Config, connection_ok: bool = True,
+                 order_adapter=None):
         super().__init__(cfg)
         self.connection_ok = connection_ok
         self.kill_switch = False
+        self.order_adapter = order_adapter
 
     # -- readiness gate ----------------------------------------------------
     def readiness(self) -> LiveSafetyResult:
@@ -403,9 +417,18 @@ class LiveExecutor(BaseExecutor):
                                     f"slippage {est_slippage_pct:.3f}% > max")
         return LiveSafetyResult(True)
 
-    # -- STUB order send (NEVER hits an exchange) --------------------------
+    # -- order send ---------------------------------------------------------
+    # Without an armed adapter this NEVER hits an exchange (simulated ack).
     def _send_order(self, decision: Decision, risk_mult: float) -> dict:
-        # Intentionally does nothing external. Returns a simulated ack.
+        if self.order_adapter is not None:
+            armed, _why = self.order_adapter.engaged()
+            if armed:
+                # Canary shrink must reach the exchange payloads too: scale
+                # the decision's notional before payload construction.
+                import copy
+                scaled = copy.copy(decision)
+                scaled.position_size = decision.position_size * risk_mult
+                return self.order_adapter.send_entry(scaled)
         return {
             "status": "SIMULATED",
             "symbol": decision.symbol,
@@ -429,10 +452,33 @@ class LiveExecutor(BaseExecutor):
         risk_mult = min(1.0, risk_mult)
         ack = self._send_order(decision, risk_mult)
 
+        status = ack.get("status", "SIMULATED")
+        if status not in ("SIMULATED", "LIVE_SENT"):
+            # Real send was attempted and did not result in a position
+            # (REFUSED / FAILED / TRIPPED / DISARMED): no trade exists.
+            return None, LiveSafetyResult(False, "order_send",
+                                          f"{status}: {ack.get('reason', '')}")
+
         trade = self.build_trade(decision, LIVE)
         trade.position_size *= risk_mult
         trade.margin_used *= risk_mult   # canary shrinks notional => shrinks margin too
-        trade.metadata["simulated"] = True
+        trade.metadata["simulated"] = (status == "SIMULATED")
         trade.metadata["order_ack"] = ack
         trade.metadata["canary_risk_mult"] = risk_mult
         return trade, LiveSafetyResult(True)
+
+
+class EngineLiveExecutor(LiveExecutor):
+    """Engine-facing live executor with PaperExecutor's ``.open()`` shape.
+
+    The engine loop expects ``open(decision) -> Trade | None`` and treats
+    ``None`` as "this candidate did not open" (slot not consumed). Gate and
+    send refusals are logged; the decision itself is untouched, so paper/live
+    parity holds — only the side effects differ.
+    """
+
+    def open(self, decision: Decision):  # type: ignore[override]
+        trade, res = LiveExecutor.open(self, decision)
+        if trade is None:
+            _log.warning("live open refused [%s]: %s", res.stage, res.reason)
+        return trade

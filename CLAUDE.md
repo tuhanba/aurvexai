@@ -13,9 +13,14 @@ engine; do **not** reintroduce that complexity (see "Non-negotiables").
 
 ## Non-negotiables (safety)
 
-1. **No real orders.** `LiveExecutor._send_order()` is a stub returning
-   `SIMULATED`. Never make it place a real exchange order without an explicit,
-   separate go-live decision and the Phase-4 plan in `ROADMAP.md`.
+1. **No real orders by default.** Since the owner-authorized Stage-3 wave
+   (2026-07-03) a real order path exists in `live_orders.py`, but it is
+   disarmed unless the FULL five-gate lock is open: `LIVE_ENABLED=true` +
+   `LIVE_HUMAN_CONFIRM` token + engine mode `live` (Telegram confirm +
+   restart) + `LIVE_SEND_ORDERS=true` + API keys. Every default keeps it
+   disarmed; `LiveExecutor._send_order()` without an armed adapter is still
+   the SIMULATED stub. Never weaken a gate, never default any of them on,
+   and never add a second code path that can reach an exchange.
 2. **No secrets in code or git.** Binance keys and the Telegram token live only
    in `.env` (gitignored). `.env.example` holds placeholders. Never commit `.env`
    or a real key.

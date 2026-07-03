@@ -103,14 +103,24 @@ or (b) scale the position smaller (canary). Both are execution concerns.
 - Kill switch, connection failure, spread guard each block.
 - `_send_order` returns `SIMULATED` — proof no real order is ever placed.
 
-## Going live (future, explicit)
+## Going live (Stage 3 — built 2026-07-03, disarmed by default)
 
-Out of scope for this build and intentionally not wired. It would require:
-1. An explicit decision to enable it.
-2. Replacing `_send_order()` with a real ccxt order adapter (private API key in
-   `.env` only) — partial-fill handling, order timeout, retries, reconciliation.
-3. Setting `LIVE_ENABLED=true` and a `LIVE_HUMAN_CONFIRM` token.
-4. Starting in canary mode with minimal size.
-5. A positive-expectancy track record from paper/shadow/backtest first.
+The real order adapter now exists (`live_orders.py`), wired as an
+**executor-only** concern — parity is untouched by construction:
 
-Until all of that, the system stays in paper mode and places no real orders.
+- `DecisionEngine.decide()` was not modified; the same Decision object feeds
+  paper and live. Sizing/threshold/risk logic identical.
+- `LiveExecutor._send_order()` without an armed adapter is byte-for-byte the
+  old SIMULATED stub. With an armed adapter it delegates the SAME decision
+  (canary-scaled notional only) to `LiveOrderAdapter.send_entry()`.
+- Arming requires the five-gate lock: `LIVE_ENABLED` + `LIVE_HUMAN_CONFIRM`
+  + live mode (Telegram confirm + restart) + `LIVE_SEND_ORDERS=true` + keys.
+  Every default is off. `tests/test_stage3_live_orders.py` proves each gate
+  is individually sufficient to keep it disarmed.
+- A refused/failed live send opens NO trade (the engine skips the slot);
+  it never mutates the decision or re-enters the decision path.
+
+Still required before arming for real: a positive-expectancy track record
+(currently NO-GO — see `PAPER_PERFORMANCE_REPORT.md`), a trade-only key, and
+canary sizing. Until then the system stays in paper and places no real
+orders.

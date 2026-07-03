@@ -12,7 +12,9 @@ One async runner that drives the whole paper pipeline each cycle:
     (once per UTC day) send a Telegram daily summary
 
 The SAME DecisionEngine instance is what a live runner would use; only the
-executor differs. Live execution is intentionally not wired here.
+executor differs. In live mode the executor is EngineLiveExecutor + the
+Stage-3 order adapter — which stays disarmed (SIMULATED sends) unless the
+full five-gate lock is open (see live_orders.py).
 
 Robustness: per-symbol work is wrapped so a single bad symbol cannot abort the
 cycle. Shutdown is graceful on SIGINT/SIGTERM.
@@ -60,7 +62,7 @@ class Engine:
         self.scanner = UniverseScanner(cfg, self.provider)
         self.detector = SetupDetector(cfg)
         self.engine = DecisionEngine(cfg)          # the shared brain
-        self.executor = PaperExecutor(cfg)
+        self.executor = self._build_executor(cfg)
         self.journal = TradeJournal(self.db)
         self.shadow = ShadowLearner(cfg, self.db)
         self.coins = build_coin_library(self.db)
@@ -86,6 +88,24 @@ class Engine:
         # Stamp the epoch (configurable via EPOCH_LABEL, default "wave3").
         # Written once on first start; never overwrites an existing epoch stamp.
         self.db.ensure_epoch(cfg.epoch_label)
+
+    def _build_executor(self, cfg: Config):
+        """Mode-selected executor. Paper is the default and only ever paper.
+
+        Live mode wires EngineLiveExecutor + the Stage-3 order adapter; with
+        LIVE_SEND_ORDERS=false (default) the adapter stays disarmed and every
+        live-mode order is still SIMULATED — same promise as before Stage 3.
+        The decision path is identical in both branches (parity)."""
+        if cfg.mode == "live":
+            from .executors import EngineLiveExecutor
+            from .live_orders import LiveOrderAdapter
+            adapter = LiveOrderAdapter(cfg, self.db)
+            armed, why = adapter.engaged()
+            log.warning("LIVE mode executor: real sends %s%s",
+                        "ARMED" if armed else "disarmed",
+                        "" if armed else f" ({why})")
+            return EngineLiveExecutor(cfg, order_adapter=adapter)
+        return PaperExecutor(cfg)
 
     # -- lifecycle ---------------------------------------------------------
     def request_stop(self, *_: object) -> None:
@@ -446,6 +466,11 @@ class Engine:
                         continue
 
                 trade = self.executor.open(d)
+                if trade is None:
+                    # Live-mode send refused (gate/validation/exchange); the
+                    # decision was ALLOW — only the side effect was blocked.
+                    funnel.mark_live_send_refused()
+                    continue
                 self.journal.record_open(trade)
                 rank_pos = _opened_ranks.__len__() + 1  # 1-based position in opened list
                 self.notifier.trade_opened(trade, balance=self.db.get_balance(),
@@ -558,6 +583,9 @@ class Engine:
                             self.db.set_shadow_reject_reason(fc_sid, "max_open_trades")
                         continue
                     trade = self.executor.open(d)
+                    if trade is None:
+                        funnel.mark_live_send_refused()
+                        continue
                     self.journal.record_open(trade)
                     self.notifier.trade_opened(trade, balance=self.db.get_balance())
                     funnel.mark_executed()

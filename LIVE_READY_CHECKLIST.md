@@ -3,34 +3,37 @@
 > **Infrastructure live-ready ≠ strategy live-ready.** This checklist keeps the
 > two separate on purpose. Passing every infrastructure row below still does
 > NOT authorize live trading: the EVIDENCE GATE (strategy section) must pass
-> independently, and Stage 3 (real order code) requires its own owner-approved
-> wave. Real order sending is OFF; `LiveExecutor._send_order()` is a SIMULATED
-> stub.
+> independently. Since the owner-authorized Stage-3 wave (2026-07-03) the real
+> order adapter EXISTS (`live_orders.py`) — but it is disarmed by default and
+> real sending requires the full five-gate lock below.
 
-## 1. Three-factor live lock (all required, independently)
+## 1. Five-gate live lock (all required, independently)
 
-Live mode can only be reached when **all three** factors are present. Any one
-missing keeps the engine in paper.
+Real order sending happens only when **all five** gates are open. Any one
+missing keeps every order SIMULATED.
 
-| # | Factor | Where | Notes |
+| # | Gate | Where | Notes |
 |---|---|---|---|
 | 1 | `LIVE_ENABLED=true` | `.env` | Default `false`. Config-level master switch. |
 | 2 | `LIVE_HUMAN_CONFIRM=<token>` | `.env` | Human-chosen token; never committed. |
-| 3 | `/livemode confirm <token>` | Telegram commander | Token must match factor 2. |
+| 3 | `/livemode confirm <token>` | Telegram commander | Token must match gate 2; applied only on restart via `data/mode_request.json`. |
+| 4 | `LIVE_SEND_ORDERS=true` | `.env` | Default `false`. Stage-3 arming switch — exists so pre-Stage-3 setups with gates 1–3 set stay simulated until this explicit opt-in. |
+| 5 | Binance API keys (TRADE-ONLY) | `.env` | Withdraw-capable keys are flagged `unsafe_key` by the Stage-1 self-check. |
 
-The confirmed request is written to `data/mode_request.json` and applied
-**only on restart** — there is no hot-switch into live. `/papermode` reverses
-the request the same way. Even with all three factors satisfied, the executor
-still sends **no real orders** until Stage 3 code exists (it does not).
+`/papermode` + restart reverses gate 3 the same way it was set. The adapter
+also self-trips (sticky until restart) on: cancel failure, timeout hard cap,
+or any protection-placement failure — after flattening the position.
 
 ## 2. ROADMAP Phase-4 preconditions (infrastructure)
 
 From `ROADMAP.md` — required before any live execution adapter is even built:
 
 - [ ] Positive, **stable** expectancy across paper / shadow / backtest.
-- [ ] Real ccxt order adapter behind the existing `LiveExecutor` interface:
-      partial fills, order timeout, retries, reconciliation, emergency stop.
-      **(Not written — Stage 3, not authorized in any pack to date.)**
+- [x] Real ccxt order adapter behind the existing `LiveExecutor` interface:
+      partial fills (accumulated across retries), order timeout/retry
+      (Stage-2 policy table), reconciliation, emergency stop.
+      **(Stage-3 wave, 2026-07-03 — `live_orders.py`, 22 dedicated tests,
+      disarmed by default.)**
 - [ ] Private Binance key in `.env` only (never in code/git/logs).
 - [ ] Start in canary mode (`LIVE_CANARY_RISK_PCT`) with minimal size.
 - [x] Three-factor lock (Section 1) implemented and tested.
@@ -68,10 +71,21 @@ perfect infrastructure checklist, **going live is not on the table today**.
       final execution pack).
 - [ ] `LIVE_ENABLED=false` confirmed in the running container env.
 
-## 5. Bottom line
+## 5. Go-live procedure (when the EVIDENCE GATE finally passes)
 
-**Real order sending is OFF; Stage 3 requires a separate owner-approved
-wave.** Infrastructure is live-ready in the narrow sense that the lock,
-parity, read-only adapter and dry-run validation exist and are tested — but
-the strategy evidence gate is failed/withheld, so live promotion is blocked
-by design.
+1. Confirm the strategy verdict is GO (`PAPER_PERFORMANCE_REPORT.md`
+   successor) and this checklist's Section 4 rows are all checked.
+2. Create a **trade-only** Binance Futures API key (no withdraw); put it in
+   `.env`; restart; confirm `/api/binance` = `connected`, never `unsafe_key`.
+3. Set `LIVE_ENABLED=true`, `LIVE_HUMAN_CONFIRM=<token>`,
+   `LIVE_SEND_ORDERS=true`, and a small `LIVE_CANARY_RISK_PCT` in `.env`.
+4. Telegram: `/livecheck`, then `/livemode confirm <token>`; restart.
+5. Watch the first canary trades end-to-end (entry ack, SL/TP resting on the
+   exchange, `reconcile` clean); `/papermode` + restart aborts at any time.
+
+## 6. Bottom line
+
+**Real order sending is OFF by default.** The Stage-3 adapter exists and is
+tested, but it is disarmed behind the five-gate lock, and the strategy
+evidence gate is still failed (directional TA NO-GO; Carry not promoted) —
+so live promotion remains blocked by design until the evidence changes.

@@ -36,13 +36,21 @@ the decision logic during collection — just observe.
 
 ## Phase 4 — Live execution adapter (explicit decision required)
 
-Only after positive, stable expectancy across paper/shadow/backtest:
-- Implement a real ccxt order adapter behind the existing `LiveExecutor`
-  interface: partial-fill handling, order timeout, retries, reconciliation,
-  emergency stop.
-- Private Binance key in `.env` only.
-- Start in **canary** mode (`LIVE_CANARY_RISK_PCT`) with minimal size.
-- `LIVE_ENABLED=true` + `LIVE_HUMAN_CONFIRM` token.
+**Adapter status: BUILT (owner-authorized Stage-3 wave, 2026-07-03), disarmed
+by default.** `live_orders.py` implements entry + SL/TP placement with
+partial-fill accumulation across retries, the Stage-2 timeout/retry policy,
+reconciliation, and emergency stop — behind the five-gate lock
+(`LIVE_ENABLED` + `LIVE_HUMAN_CONFIRM` + live mode + `LIVE_SEND_ORDERS` +
+keys). Remaining before any real arming:
+- Positive, stable expectancy across paper/shadow/backtest (**still NOT
+  met: directional TA is formally NO-GO** — `PAPER_PERFORMANCE_REPORT.md`).
+- Private TRADE-ONLY Binance key in `.env` (withdraw-capable keys are
+  flagged unsafe).
+- Start in **canary** mode (`LIVE_CANARY_RISK_PCT`) with minimal size. Known
+  canary limitation: TP fractions below `step_size` are dropped (the SL
+  still covers the whole position) — sizes must clear min tradeable qty.
+- Live fill tracking is still bar-model-based plus `reconcile()` drift
+  detection; a websocket fill stream is Phase 5.
 - Parity tests must still pass (decision unchanged; only execution differs).
 
 ## Phase 5 — Hardening & scale (optional)
