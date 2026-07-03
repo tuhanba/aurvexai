@@ -100,7 +100,29 @@ $ git check-ignore .env
 
 Clean: no hardcoded secrets; `.env` gitignored and absent.
 
-## 7. Frozen-path assertion
+## 7. Engine stability & determinism (owner-requested data tests)
+
+Run on 2026-07-03 after the directive-closure wave:
+
+| Check | Result |
+|---|---|
+| `pytest` × 3 consecutive runs | 596 / 596 / 596 passed — zero flaky tests |
+| Offline seeded backtest (`python main.py backtest`) | Completes; 59 trades over synthetic data, deterministic metrics, `margin_rejected_signals=0` |
+| 400-cycle demo × 2 (fresh DBs, `PYTHONHASHSEED=0`) | **Bit-for-bit identical across all 400 cycles** — the decision path is fully deterministic given identical data |
+| 400-cycle demo × 2 (default env, after fix below) | Bit-for-bit identical; zero tracebacks/exceptions in 800 cycles |
+
+**Finding + fix:** `SyntheticProvider` (demo/test data generator only — not the
+engine) documented itself as "seeded, reproducible" but derived its seeds via
+Python's `hash()`, which is salted per process (`PYTHONHASHSEED`), so two demo
+runs silently produced different data. The engine itself was proven
+deterministic (row 3). Fixed by switching seed derivation to `zlib.crc32`
+(process-stable); frozen decision files untouched; 596 tests green after.
+
+Conclusion: no instability found in the engine. The remaining stability
+questions are host-runtime ones (cycle p95 under real ccxt latency, long-run
+memory) — measured by §4 on the host, not reproducible offline.
+
+## 8. Frozen-path assertion
 
 This wave touched only: `src/aurvex/dashboard/templates/index.html`
 (presentation + the `const mb` fix), `RISK_MODEL.md`, and the three report
