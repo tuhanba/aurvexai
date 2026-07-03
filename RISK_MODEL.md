@@ -5,12 +5,16 @@ Simple, explicit, and identical across paper, live and backtest. The same
 
 ## Parameters (defaults, all in `.env`)
 
-| Parameter | Default | Meaning |
+Profile defaults come from `RISK_PROFILE` (active default `aggressive_paper`;
+legacy values preserved as `conservative_paper`). An explicit env var always
+overrides its profile default.
+
+| Parameter | Default (aggressive_paper / conservative_paper) | Meaning |
 |---|---|---|
-| `INITIAL_PAPER_BALANCE` | 1000 USDT | Paper starting balance. |
-| `RISK_PCT` | 0.5 | % of balance risked per trade (stop-out loss). |
+| `INITIAL_PAPER_BALANCE` | **200** / 1000 USDT | Paper starting balance. |
+| `RISK_PCT` | **2.0** (band 1–3) / 0.5 | % of balance risked per trade (stop-out loss). |
 | `MAX_OPEN_TRADES` | 4 | Concurrent open positions cap. |
-| `MAX_DAILY_LOSS_PCT` | 3.0 | Daily realised-loss kill switch. |
+| `MAX_DAILY_LOSS_PCT` | **10.0** / 3.0 | Daily realised-loss kill switch. |
 | `MAX_LEVERAGE` | 10 | Upper bound on suggested leverage. |
 | `MAX_PORTFOLIO_EXPOSURE_PCT` | 40 | Cap on total open notional vs balance. |
 | `COIN_COOLDOWN_MINUTES` | 20 | Per-symbol cooldown after a trade. |
