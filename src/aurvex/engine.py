@@ -79,6 +79,7 @@ class Engine:
         self._cycles = 0
         self._last_summary_day = -1
         self._kill_switch_fired_day: int = -1
+        self._profit_lock_fired_day: int = -1
         self._last_error: str = ""
         self._start_ms = now_ms()
         self.db.ensure_balance(cfg.initial_paper_balance)
@@ -115,6 +116,7 @@ class Engine:
                 log.info("applying queued mode request: %s → %s",
                          self.cfg.mode, requested)
                 self.cfg.mode = requested
+                self.notifier.set_mode(requested)   # keep the [MODE] tag truthful
                 self.notifier.send(
                     f"ℹ️ Mode applied from queued request: {requested.upper()}")
         try:
@@ -612,6 +614,10 @@ class Engine:
         profit_lock_active = bool(
             self.cfg.daily_profit_lock_enabled and profit_target > 0
             and daily_pnl >= profit_target)
+        # Task 5: edge-triggered notification, once per activation (day-keyed,
+        # mirroring the kill-switch dedup above).
+        self._maybe_notify_daily_profit_lock(profit_lock_active, daily_pnl,
+                                             profit_target)
 
         # Heartbeat (enriched — Block F).
         self.db.set_heartbeat("engine", {
@@ -640,6 +646,24 @@ class Engine:
                  self._cycles, len(symbols), candidates, stats.setup_detected_count,
                  stats.decision_allow_count, stats.executed_count, open_count,
                  self.db.get_balance())
+
+    def _maybe_notify_daily_profit_lock(self, active: bool, daily_pnl: float,
+                                        target: float) -> None:
+        """Fire daily_profit_lock_activated once per activation (Task 5).
+
+        Day-keyed dedup, one-for-one with the kill-switch pattern: consecutive
+        locked cycles never repeat the message; the UTC rollover re-arms it.
+        """
+        if not active:
+            return
+        today = dt.datetime.now(dt.timezone.utc).toordinal()
+        if today == self._profit_lock_fired_day:
+            return
+        self._profit_lock_fired_day = today
+        try:
+            self.notifier.daily_profit_lock_activated(daily_pnl, target)
+        except Exception as exc:
+            log.debug("profit lock notification error: %s", exc)
 
     async def _manage_open_trades(self, snapshots: Dict[str, MarketSnapshot]) -> None:
         opens = self.db.get_open_trades(mode=self.cfg.mode)

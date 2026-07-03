@@ -60,6 +60,16 @@ def _esc(s: object) -> str:
     return html.escape(str(s))
 
 
+def mode_prefix(mode: str) -> str:
+    """THE single shared mode tag: '[PAPER]' today, '[LIVE]' in a live future.
+
+    Task 5: every outbound Telegram text begins with this tag. It is applied
+    once, inside ``BaseNotifier.send`` (and the commander's ``_send``), so it
+    cannot be forgotten per message.
+    """
+    return f"[{(mode or 'paper').strip().upper()}]"
+
+
 def _setup_display(setup_type: str) -> str:
     return _SETUP_NAMES.get(setup_type, setup_type.replace("_", " ").title())
 
@@ -100,7 +110,8 @@ def _tp_price(t, idx: int) -> str:
 
 
 class BaseNotifier:
-    def __init__(self) -> None:
+    def __init__(self, mode: str = "paper") -> None:
+        self._mode = (mode or "paper").lower()
         self._health: Dict[str, Any] = {
             "configured": False,
             "enabled": False,
@@ -116,7 +127,22 @@ class BaseNotifier:
             "note": "",
         }
 
-    def send(self, text: str) -> bool:           # pragma: no cover - interface
+    # -- mode tag (Task 5) ---------------------------------------------------
+    def set_mode(self, mode: str) -> None:
+        """Keep the tag truthful if the engine applies a queued mode change."""
+        self._mode = (mode or "paper").lower()
+
+    def _tag(self, text: str) -> str:
+        tag = mode_prefix(self._mode)
+        return text if text.startswith(tag) else f"{tag} {text}"
+
+    def send(self, text: str) -> bool:
+        """Tag-then-deliver. The mode tag is applied HERE, in one place, so no
+        event helper (or direct caller) can forget it. Subclasses implement the
+        transport in ``_deliver`` only."""
+        return self._deliver(self._tag(text))
+
+    def _deliver(self, text: str) -> bool:       # pragma: no cover - interface
         raise NotImplementedError
 
     def verify(self) -> bool:                    # default: nothing to verify
@@ -147,10 +173,19 @@ class BaseNotifier:
         )
 
     def kill_switch_hit(self, daily_pnl: float, limit: float) -> None:
+        # Task 5 copy check: must state both halves — entries pause, exits run.
         self.send(
             f"\U0001F6D1 DAILY LOSS KILL SWITCH"
             f" · {daily_pnl:+.2f} / -{limit:.2f} USDT"
-            f" · new entries paused"
+            f" · new entries paused, open trades still managed"
+        )
+
+    def daily_profit_lock_activated(self, daily_pnl: float, target: float) -> None:
+        """Task 5: fired once per activation (edge-triggered in the engine)."""
+        self.send(
+            "\U0001F512 Daily profit lock activated — new entries paused, "
+            "open trades still managed."
+            f"\nDaily realized PnL {daily_pnl:+.2f} / target +{target:.2f} USDT"
         )
 
     def trade_opened(self, t, balance: float = 0.0,
@@ -182,7 +217,7 @@ class BaseNotifier:
             "",
             f"Coin:   {_esc(t.symbol)}",
             f"Side:   {_esc(t.side)}",
-            f"Mode:   PAPER",
+            f"Mode:   {_esc(self._mode.upper())}",
             f"Setup:  {_esc(_setup_display(t.setup_type))}",
         ]
         # LABEL-ONLY quality grade + trade-weight (omitted gracefully if absent).
@@ -315,15 +350,16 @@ class NullNotifier(BaseNotifier):
     """No-op notifier used when Telegram is disabled or unconfigured."""
 
     def __init__(self, enabled: bool = False, token_set: bool = False,
-                 chat_id_set: bool = False, note: str = "") -> None:
-        super().__init__()
+                 chat_id_set: bool = False, note: str = "",
+                 mode: str = "paper") -> None:
+        super().__init__(mode=mode)
         self._health.update({
             "configured": False, "enabled": enabled,
             "token_set": token_set, "chat_id_set": chat_id_set,
             "healthy": False, "note": note,
         })
 
-    def send(self, text: str) -> bool:
+    def _deliver(self, text: str) -> bool:
         log.debug("telegram disabled, dropping message: %s", text.replace("\n", " | "))
         return False
 
@@ -331,8 +367,9 @@ class NullNotifier(BaseNotifier):
 class TelegramNotifier(BaseNotifier):
     API = "https://api.telegram.org/bot{token}/{method}"
 
-    def __init__(self, token: str, chat_id: str, timeout: float = 8.0):
-        super().__init__()
+    def __init__(self, token: str, chat_id: str, timeout: float = 8.0,
+                 mode: str = "paper"):
+        super().__init__(mode=mode)
         self.token = token
         self.chat_id = chat_id
         self.timeout = timeout
@@ -371,7 +408,7 @@ class TelegramNotifier(BaseNotifier):
             self._health["last_error"] = _sanitize(repr(exc), self.token, self.chat_id)
             return False
 
-    def send(self, text: str) -> bool:
+    def _deliver(self, text: str) -> bool:
         try:
             import requests  # lazy
         except Exception:                          # pragma: no cover
@@ -416,7 +453,7 @@ def build_notifier(cfg: Config) -> BaseNotifier:
     if not cfg.telegram_enabled:
         return NullNotifier(enabled=False, token_set=bool(cfg.telegram_bot_token),
                             chat_id_set=bool(cfg.telegram_chat_id),
-                            note="TELEGRAM_ENABLED is false")
+                            note="TELEGRAM_ENABLED is false", mode=cfg.mode)
     if not cfg.telegram_bot_token or not cfg.telegram_chat_id:
         missing = []
         if not cfg.telegram_bot_token:
@@ -426,6 +463,8 @@ def build_notifier(cfg: Config) -> BaseNotifier:
         note = "missing " + ", ".join(missing)
         log.warning("Telegram enabled but %s; using NullNotifier", note)
         return NullNotifier(enabled=True, token_set=bool(cfg.telegram_bot_token),
-                            chat_id_set=bool(cfg.telegram_chat_id), note=note)
+                            chat_id_set=bool(cfg.telegram_chat_id), note=note,
+                            mode=cfg.mode)
     log.info("Telegram notifier enabled")
-    return TelegramNotifier(cfg.telegram_bot_token, cfg.telegram_chat_id)
+    return TelegramNotifier(cfg.telegram_bot_token, cfg.telegram_chat_id,
+                            mode=cfg.mode)

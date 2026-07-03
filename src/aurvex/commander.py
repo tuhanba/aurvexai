@@ -173,6 +173,11 @@ class TelegramCommander(BaseCommander):
 
     def _send(self, text: str, chat_id: Optional[str] = None) -> None:
         target = chat_id or self._chat_id
+        # Task 5: same shared mode tag as the notifier, applied transport-side.
+        from .telegram import mode_prefix
+        tag = mode_prefix(self._cfg.mode)
+        if not text.startswith(tag):
+            text = f"{tag} {text}"
         try:
             import requests
             requests.post(
