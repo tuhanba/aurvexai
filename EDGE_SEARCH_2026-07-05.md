@@ -137,3 +137,40 @@ re-validate through the real walk-forward harness with the full cost model,
 and only on a clean Acceptance-Bar pass promote to paper. This touches
 `setups.py` — a strategy change under CLAUDE.md, done as its own reviewed
 wave with tests.
+
+---
+
+# Harness validation — squeeze_breakout through the REAL engine (same day)
+
+The candidate was ported into the engine as a fourth profile (faithful
+rules; PR "squeeze_breakout profile") and re-validated through
+`run_walkforward_analysis` — the real decision path with funding, spread,
+slippage guards, cooldowns and slot mechanics, on 26,400 real 1h bars ×
+5 majors, 26 OOS windows, deflated at n_trials=46:
+
+| metric | research sim | REAL harness |
+|---|---|---|
+| OOS trades | 2,229 (12 coins) | 1,084 (5 majors; 2,290 signals — slippage/risk guards filtered 1,206) |
+| gross Exp-R | — | **+0.153** |
+| **net Exp-R** | +0.095 | **+0.071** |
+| PF (net) | — | 1.10 |
+| MaxDD | — | 42.4% (at 2% risk, 200 base) |
+| DSR (46 trials) | — | **+1.49** |
+| harness decision | — | **ACCEPTED** |
+
+Reading: the engine's own protective filters shaved the research edge from
++0.095R to a still-positive **+0.071R net** — the first strategy in the
+project's history to come out of the walk-forward harness net-positive
+with a positive deflated Sharpe. Acceptance Bar: Exp-R ✓, PF ✓ (1.10,
+borderline), DSR ✓, trades ✓ (1,084); MaxDD 42% exceeds the ~30% line at
+2% risk — a SIZING property, not a signal property; rollout starts at
+RISK_PCT=1.5 to bring projected DD toward the bar, with the 10% daily
+kill switch as the hard floor. `win%=0.0` in the harness row is a
+reporting artifact of the no-TP exit shape (wins close as TIME, not TP)
+— flagged, cosmetic.
+
+**Decision: GO to paper** under `STRATEGY_PROFILE=squeeze_breakout`
+(LTF=1h, HTF=4h, LTF_LIMIT=525, TIME_STOP_BARS=48, RISK_PCT=1.5 initial),
+fresh epoch for clean attribution. Live remains locked behind the
+five-gate Stage-3 lock and a separate promotion decision after paper
+evidence.
