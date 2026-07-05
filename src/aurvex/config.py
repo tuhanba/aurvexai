@@ -319,6 +319,13 @@ class Config:
     #                    LTF + oversold/overbought RSI); maker-friendly fixed-% SL
     #                    and a single quick R-multiple TP. Never fires under the
     #                    momentum profiles; see SCALP_STRATEGY_SPEC / setups.py.
+    # "squeeze_breakout": volatility-squeeze breakout (edge-search campaign
+    #                    2026-07-05 candidate): W-bar range in its lowest Qth
+    #                    percentile + close breaks the W-bar high/low. Stop =
+    #                    1× range; exit = stop or TIME_STOP_BARS time-stop (no
+    #                    profit target by design — validated exit shape).
+    #                    Intended deployment: LTF=1h, HTF=4h, LTF_LIMIT>=520,
+    #                    TIME_STOP_BARS=48.
     strategy_profile: str = field(
         default_factory=lambda: _str("STRATEGY_PROFILE", "aurvex_enhanced")
     )
@@ -338,6 +345,21 @@ class Config:
     rev_rsi_short: float = field(default_factory=lambda: _float("REV_RSI_SHORT", 70.0))
     rev_sl_pct: float = field(default_factory=lambda: _float("REV_SL_PCT", 1.5))
     rev_tp_r: float = field(default_factory=lambda: _float("REV_TP_R", 1.2))
+
+    # -- Squeeze-breakout (squeeze_breakout) parameters ---------------------
+    # Faithful to the validated research rules (EDGE_SEARCH_2026-07-05.md
+    # Phase-2, family 3): 24-bar range squeeze at the 20th percentile of a
+    # trailing <=500-range baseline, breakout close beyond the 24-bar
+    # high/low, stop one full range away, no profit target (SQZ_TP_R is an
+    # unreachable sentinel that keeps the 3-slot TP contract), exit via
+    # TIME_STOP_BARS. Only the squeeze setup + its risk branches read these.
+    sqz_window: int = field(default_factory=lambda: _int("SQZ_WINDOW", 24))
+    sqz_pctile: float = field(default_factory=lambda: _float("SQZ_PCTILE", 20.0))
+    sqz_baseline: int = field(default_factory=lambda: _int("SQZ_BASELINE", 500))
+    sqz_stop_mult: float = field(default_factory=lambda: _float("SQZ_STOP_MULT", 1.0))
+    sqz_tp_r: float = field(default_factory=lambda: _float("SQZ_TP_R", 1000.0))
+    max_stop_dist_pct_sqz: float = field(
+        default_factory=lambda: _float("MAX_STOP_DIST_PCT_SQZ", 10.0))
 
     # -- Bugra replica parameters ------------------------------------------
     bugra_stop_pct: float = field(default_factory=lambda: _float("BUGRA_STOP_PCT", 4.49))
@@ -522,8 +544,9 @@ class Config:
         )
         assert self.mode in {"paper", "live"}, "AX_MODE must be 'paper' or 'live'"
         assert self.strategy_profile in {"bugra_replica", "aurvex_enhanced",
-                                         "reversion_v1"}, (
-            "STRATEGY_PROFILE must be bugra_replica|aurvex_enhanced|reversion_v1"
+                                         "reversion_v1", "squeeze_breakout"}, (
+            "STRATEGY_PROFILE must be "
+            "bugra_replica|aurvex_enhanced|reversion_v1|squeeze_breakout"
         )
         assert self.leverage_policy in {"efficient", "conservative"}, (
             "LEVERAGE_POLICY must be efficient|conservative"

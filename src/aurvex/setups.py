@@ -403,21 +403,109 @@ def mean_reversion_setup(ctx: Context) -> Optional[Signal]:
     return None
 
 
+def detect_squeeze_breakout(ctx: Context) -> Optional[Signal]:
+    """Volatility-squeeze breakout — faithful port of the validated research
+    rules (EDGE_SEARCH_2026-07-05.md, Phase-2 family 3; +0.095R net, 11/12
+    coins, 4/4 years, split-half holdout stable).
+
+    Rules, exactly as tested (closed candles only — Context guarantees it):
+      1. ``r_now``: the W-bar high-low range ENDING ONE BAR BEFORE the signal
+         bar, as a fraction of the signal close (research ``ranges[i]`` over
+         ``b[i-W:i]``).
+      2. Squeeze: ``r_now`` at/below the Q-th percentile of a trailing
+         baseline of up to ``sqz_baseline`` such ranges (min 100 samples).
+      3. Trigger: signal close breaks the same W-bar window's high (LONG) or
+         low (SHORT).
+      4. Stop: one full range (× ``sqz_stop_mult``) from entry. No profit
+         target; the exit is the stop or the TIME_STOP_BARS time-stop
+         (enforced in RiskManager._build_targets / executors).
+
+    Factors feed the score builder as usual — score stays a support layer,
+    exactly like every other setup.
+    """
+    cfg = ctx.cfg
+    W = max(2, cfg.sqz_window)
+    n = len(ctx.ltf)
+    # Need the signal bar, its W-bar window, and >=100 baseline ranges.
+    if n < W + 101:
+        return None
+
+    highs, lows, closes = ctx.ltf.highs, ctx.ltf.lows, ctx.ltf.closes
+
+    def window_range(end: int) -> Optional[float]:
+        """Range of bars [end-W, end) as a fraction of close[end]."""
+        if end - W < 0 or closes[end] <= 0:
+            return None
+        hh = max(highs[end - W:end])
+        ll = min(lows[end - W:end])
+        return (hh - ll) / closes[end]
+
+    sig_i = n - 1                       # last closed bar = signal bar
+    r_now = window_range(sig_i)
+    if r_now is None:
+        return None
+    first = max(W, sig_i - cfg.sqz_baseline)
+    baseline = [r for r in (window_range(j) for j in range(first, sig_i))
+                if r is not None]
+    if len(baseline) < 100:
+        return None
+    thresh = sorted(baseline)[int(len(baseline) * cfg.sqz_pctile / 100.0)]
+    if r_now > thresh:
+        return None
+
+    hh = max(highs[sig_i - W:sig_i])
+    ll = min(lows[sig_i - W:sig_i])
+    close = closes[sig_i]
+    if close > hh:
+        side = LONG
+    elif close < ll:
+        side = SHORT
+    else:
+        return None
+
+    rng = (hh - ll) * cfg.sqz_stop_mult
+    if rng <= 0:
+        return None
+    stop = close - rng if side == LONG else close + rng
+
+    # Squeeze tightness (lower r_now vs threshold = tighter = better) and
+    # breakout strength (distance beyond the boundary in range units).
+    tightness = _clamp01(1.0 - (r_now / thresh if thresh > 0 else 1.0))
+    excess = (close - hh) if side == LONG else (ll - close)
+    strength = _clamp01(excess / (hh - ll) * 10.0)
+    return Signal(
+        symbol=ctx.snap.symbol, side=side, setup_type="squeeze_breakout",
+        entry_hint=close, stop_hint=stop,
+        base_confidence=0.55 + 0.15 * tightness,
+        factors={
+            "squeeze_tightness": tightness,
+            "breakout_strength": strength,
+            "trend_alignment": _clamp01(0.5 + 0.5 * ctx.htf_bias *
+                                        (1 if side == LONG else -1)),
+        },
+        notes=(f"squeeze W{W} range {r_now * 100:.2f}% <= P{cfg.sqz_pctile:g} "
+               f"{thresh * 100:.2f}% · breakout {side}"),
+    )
+
+
 def _build_registry(cfg: Config) -> List[Callable[[Context], Optional[Signal]]]:
     """Return the detector list for the configured strategy profile.
 
-    bugra_replica   → detect_bugra_replica  (fixed-% stop)
-    aurvex_enhanced → detect_aurvex_enhanced (ATR-adaptive stop)
-    reversion_v1    → mean_reversion_setup   (additive mean-reversion entry)
-    legacy / other  → aurvex_enhanced (default; legacy detectors removed)
+    bugra_replica    → detect_bugra_replica    (fixed-% stop)
+    aurvex_enhanced  → detect_aurvex_enhanced  (ATR-adaptive stop)
+    reversion_v1     → mean_reversion_setup    (additive mean-reversion entry)
+    squeeze_breakout → detect_squeeze_breakout (range squeeze + breakout)
+    legacy / other   → aurvex_enhanced (default; legacy detectors removed)
 
-    Exactly one detector runs per profile, so reversion_v1 never fires under the
-    momentum profiles (and vice-versa).
+    Exactly one detector runs per profile, so no profile's setup ever fires
+    under another profile.
     """
     if cfg.strategy_profile == "reversion_v1":
         return [mean_reversion_setup]
     if cfg.strategy_profile == "bugra_replica":
         return [detect_bugra_replica]
+    if cfg.strategy_profile == "squeeze_breakout":
+        return [detect_squeeze_breakout]
     return [detect_aurvex_enhanced]
 
 

@@ -103,6 +103,22 @@ or (b) scale the position smaller (canary). Both are execution concerns.
 - Kill switch, connection failure, spread guard each block.
 - `_send_order` returns `SIMULATED` — proof no real order is ever placed.
 
+## squeeze_breakout profile (2026-07-05) — parity reasoning
+
+The edge-search candidate was added as a fourth strategy profile. Parity
+holds by the same construction as reversion_v1:
+
+- New detector (`detect_squeeze_breakout`) is pure Context→Signal; registry
+  isolation means it ONLY runs under `STRATEGY_PROFILE=squeeze_breakout`,
+  and no other profile's behavior changes (631 tests green, all prior
+  suites untouched).
+- `normalize_stop` gained a squeeze-specific ceiling (`MAX_STOP_DIST_PCT_SQZ`)
+  and `_build_targets` a no-TP branch (single unreachable target keeps the
+  3-slot contract) — both keyed on setup_type/profile, mode-agnostic, and
+  identical across paper/live/backtest.
+- Exit uses the existing TIME_STOP_BARS mechanism (executor-level, mode-
+  agnostic). `decide()` itself is unchanged.
+
 ## Going live (Stage 3 — built 2026-07-03, disarmed by default)
 
 The real order adapter now exists (`live_orders.py`), wired as an

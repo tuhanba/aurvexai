@@ -87,10 +87,18 @@ def normalize_stop(cfg: Config, side: str, entry: float, stop: float,
             stop = entry * (1 - stop_dist_pct / 100.0)
         else:
             stop = entry * (1 + stop_dist_pct / 100.0)
-    # Ceiling: bugra_replica uses a wider allowed stop distance.
+    # Ceiling: bugra_replica and squeeze_breakout use wider allowed stop
+    # distances (fixed 4.49% stop / structural 1×range stop respectively).
     is_bugra = (setup_type == "bugra_replica" or
                 cfg.strategy_profile == "bugra_replica")
-    max_stop = cfg.max_stop_dist_pct_bugra if is_bugra else cfg.max_stop_dist_pct
+    is_squeeze = (setup_type == "squeeze_breakout" or
+                  cfg.strategy_profile == "squeeze_breakout")
+    if is_squeeze:
+        max_stop = cfg.max_stop_dist_pct_sqz
+    elif is_bugra:
+        max_stop = cfg.max_stop_dist_pct_bugra
+    else:
+        max_stop = cfg.max_stop_dist_pct
     if stop_dist_pct > max_stop:
         return StopNorm(False,
                         f"stop dist {stop_dist_pct:.2f}% > max {max_stop:.2f}%")
@@ -342,6 +350,20 @@ class RiskManager:
             # contract intact; TP1 (fraction 1.0) closes the position fully first,
             # so the zero-fraction TP2/TP3 never realise anything.
             tp = entry + sign * r * cfg.rev_tp_r
+            return [
+                TPTarget(price=tp, fraction=1.0),
+                TPTarget(price=tp, fraction=0.0),
+                TPTarget(price=tp, fraction=0.0),
+            ]
+        is_squeeze = (setup_type == "squeeze_breakout" or
+                      cfg.strategy_profile == "squeeze_breakout")
+        if is_squeeze:
+            # No profit target by design — the validated exit is the stop or
+            # the TIME_STOP_BARS time-stop. A single unreachable target
+            # (SQZ_TP_R, default 1000R) keeps the 3-slot TP contract intact
+            # without ever realising; no TP1 → no break-even move, no runner —
+            # exactly the researched exit shape.
+            tp = entry + sign * r * cfg.sqz_tp_r
             return [
                 TPTarget(price=tp, fraction=1.0),
                 TPTarget(price=tp, fraction=0.0),
