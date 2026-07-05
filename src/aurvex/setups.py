@@ -463,6 +463,14 @@ def detect_squeeze_breakout(ctx: Context) -> Optional[Signal]:
     else:
         return None
 
+    # Refinement (validated in both split halves): the breakout must align
+    # with the LTF 200-bar SMA trend. Skipped gracefully when history is
+    # short (the deployed LTF_LIMIT=525 always has it).
+    if cfg.sqz_trend_filter and n >= 201:
+        sma200 = sum(closes[sig_i - 200:sig_i]) / 200.0
+        if (side == LONG) != (close > sma200):
+            return None
+
     rng = (hh - ll) * cfg.sqz_stop_mult
     if rng <= 0:
         return None

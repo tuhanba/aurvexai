@@ -189,3 +189,47 @@ def test_stop_exit_still_works(scfg):
     ts0 = (now_ms() // TF_MS) * TF_MS
     ex.simulate_fill(t, 100.2, 97.0, 97.1, bar_ts=ts0 + TF_MS)
     assert t.status == "CLOSED" and t.close_reason in ("SL", "STOP", "SL_HIT")
+
+
+# ---------------------------------------------------------------------------
+# Trend filter (refinement, validated in both split halves)
+# ---------------------------------------------------------------------------
+def _two_level_snapshot(early=112.0, late=100.0, closes_last=101.0):
+    """First ~100 bars at `early`, rest at `late` → SMA200 sits between them."""
+    now = (now_ms() // TF_MS) * TF_MS
+    n = 240
+    start = now - (n + 2) * TF_MS
+    candles = []
+    for i in range(n):
+        base = early if i < 100 else late
+        amp = 0.2 if i >= n - 30 else 2.0
+        candles.append(Candle(start + i * TF_MS, base,
+                              base * (1 + amp / 100.0),
+                              base * (1 - amp / 100.0), base, 1000.0))
+    candles.append(Candle(start + n * TF_MS, late, max(late, closes_last) * 1.0001,
+                          min(late, closes_last) * 0.9999, closes_last, 1500.0))
+    htf = [Candle(start + i * 4 * TF_MS, late, late * 1.01, late * 0.99,
+                  late, 1000.0) for i in range(n // 4)]
+    return MarketSnapshot(symbol="BTC/USDT:USDT",
+                          candles={TF: candles, HTF: htf},
+                          orderbook=make_book(late), last_price=late,
+                          quote_volume_24h=1e9, funding_rate=0.0, ts=now_ms())
+
+
+def test_trend_filter_blocks_counter_trend_breakout(scfg):
+    # SMA200 ≈ 105 (early bars at 112): a LONG breakout at 101 is below the
+    # trend line → filtered out when the filter is on, allowed when off.
+    scfg.sqz_trend_filter = True
+    snap = _two_level_snapshot()
+    assert detect_squeeze_breakout(build_context(scfg, snap)) is None
+    scfg.sqz_trend_filter = False
+    sig = detect_squeeze_breakout(build_context(scfg, snap))
+    assert sig is not None and sig.side == LONG
+
+
+def test_trend_filter_allows_aligned_breakout(scfg):
+    # Flat history at 100 → SMA200 = 100; LONG breakout at 101 aligns.
+    scfg.sqz_trend_filter = True
+    snap = series_snapshot(closes_last=101.0)
+    sig = detect_squeeze_breakout(build_context(scfg, snap))
+    assert sig is not None and sig.side == LONG
