@@ -174,3 +174,16 @@ reporting artifact of the no-TP exit shape (wins close as TIME, not TP)
 fresh epoch for clean attribution. Live remains locked behind the
 five-gate Stage-3 lock and a separate promotion decision after paper
 evidence.
+
+## Refinement round (same session): trend filter confirmed, Donchian queued
+
+- 18-cell squeeze refinement grid: LTF SMA200 trend-alignment filter
+  improved BOTH split halves; ported (`SQZ_TREND_FILTER`, default on) and
+  re-validated through the harness: **net Exp-R +0.088 (was +0.071), PF
+  1.12, maxDD 32.2% at 2% risk (~24% at deployed 1.5%), DSR +1.58,
+  ACCEPTED** — full Acceptance-Bar pass at deployed sizing.
+- Donchian/turtle 4h channel trend (8 cells): ALL 4h cells positive in
+  both halves, best +0.27-0.46R/trade (t 2.5-3.6) — the strongest family
+  found; engine port (channel-exit mechanism) is the next wave.
+- Pullback-in-trend (RSI2, 4 cells): decisively negative (t≈−15) — closed.
+- Campaign trial count now 76; all deflation notes updated accordingly.

@@ -360,6 +360,11 @@ class Config:
     sqz_tp_r: float = field(default_factory=lambda: _float("SQZ_TP_R", 1000.0))
     max_stop_dist_pct_sqz: float = field(
         default_factory=lambda: _float("MAX_STOP_DIST_PCT_SQZ", 10.0))
+    # Refinement grid 2026-07-05: requiring the breakout to align with the
+    # LTF 200-bar SMA trend improved BOTH split halves (+0.166/+0.105R vs
+    # +0.118/+0.077R baseline). Default ON (harness-confirmed).
+    sqz_trend_filter: bool = field(
+        default_factory=lambda: _bool("SQZ_TREND_FILTER", True))
 
     # -- Bugra replica parameters ------------------------------------------
     bugra_stop_pct: float = field(default_factory=lambda: _float("BUGRA_STOP_PCT", 4.49))
