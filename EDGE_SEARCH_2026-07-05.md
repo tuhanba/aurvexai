@@ -93,3 +93,47 @@ Cross-margin, universe BTC/ETH/XRP/LINK/DOGE, controls SOL/BNB
 *Generated from runs logged in this session; regenerable via
 `scripts/trend_tf_sweep.py` and `scripts/carry_phase1.py` over the
 `data.binance.vision` cache builder.*
+
+---
+
+# Phase-2 addendum — new signal families (same session)
+
+Owner requested exploration beyond the exhausted Buğra/reversion family.
+Three families, pre-registered grids, split-half holdout, taker+slip costs.
+Campaign-wide trial count for deflation: 20 (TA sweep) + 6 + 12 + 8 = 46.
+
+## Family 1 — cross-sectional momentum (12 coins, daily): NO-GO
+Best in-sample cell (14d lookback, K=3) was insignificant (t +0.77) and
+flipped negative in holdout. All 6 cells dead.
+
+## Family 2 — funding-extreme directional: NO-GO (regime mirage)
+"Long on extreme negative funding" printed +1.6-1.8%/trade with t≈5-6 in the
+2019-23 half and turned NEGATIVE in the 2023-26 holdout — a textbook regime
+artifact the holdout caught. Shorting positive funding is strongly negative
+everywhere. All 12 cells dead.
+
+## Family 3 — volatility-squeeze breakout (1h, 48h hold): **CANDIDATE**
+
+Signal: 24-bar range in its lowest 20th percentile (squeeze) + close breaks
+the 24-bar high/low → enter next open, stop = 1× range, time-exit 48h.
+
+| check | result |
+|---|---|
+| Split-half holdout | H1 +0.35%/trade (t 2.3) → H2 **+0.20%/trade (t 1.7, n=1,136)** — sign holds |
+| Family consistency | ALL four 48h-hold cells positive in BOTH halves |
+| Concentration | **11/12 coins net-positive** (only BNB flat) |
+| Yearly stability | 2023 +0.23% · 2024 +0.53% · 2025 +0.19% · 2026 +0.09% — all positive, decaying watch flagged |
+| R-normalized | **+0.0945R/trade net of taker costs, t 2.72, n 2,229**, win 39.8%, median stop 2.6% |
+| Economics @2% risk | ~1.7 trades/day fleet-wide → ~+0.19%/trade equity → **rough +0.3%/day, ~+120%/yr UPPER estimate** |
+
+Caveats (why this is a CANDIDATE, not a winner): simplified simulator (no
+funding over the 48h hold, flat 2bp slippage, no slot limits); t 2.72 vs 46
+campaign trials is borderline after deflation — the family/breadth/year
+consistency is what earns it the next round; 2026 is its weakest year.
+
+**Next wave (proposed): implement `squeeze_breakout` as a new engine
+strategy profile** (new setup detector, config-gated, parity preserved),
+re-validate through the real walk-forward harness with the full cost model,
+and only on a clean Acceptance-Bar pass promote to paper. This touches
+`setups.py` — a strategy change under CLAUDE.md, done as its own reviewed
+wave with tests.
