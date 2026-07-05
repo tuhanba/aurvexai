@@ -132,29 +132,33 @@ def shadow_basis(proxy_stats: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def telegram_lines(receipt: Dict[str, Any]) -> List[str]:
-    """Render a concise, secrets-free Telegram block from a receipt dict."""
+    """Render a concise, secrets-free Telegram block from a receipt dict.
+
+    Kept plain-text (the notifier HTML-escapes every line) and de-cluttered so
+    it reads on a phone. No token/chat id / API key is ever interpolated.
+    """
     if receipt.get("kind") == "opened":
         reasons = ", ".join(receipt.get("quality_reasons", [])[:2])
         liq = receipt.get("liq_safety_ratio")
         return [
-            f"🧾 RECEIPT · OPEN {receipt['symbol']} {receipt['side']}",
+            f"🧾 RECEIPT · OPEN · {receipt['side']} {receipt['symbol']}",
             f"setup: {receipt['setup_type']} (Buğra gate)",
             f"quality: {receipt.get('quality_grade','?')} "
             f"({receipt.get('quality_score',0):.0f})"
             + (f" · {reasons}" if reasons else ""),
             f"risk: cfg {receipt.get('configured_risk_pct', receipt['risk_pct']):.2f}% → "
             f"applied {receipt.get('applied_risk_pct', receipt['risk_pct']):.2f}% "
-            f"({receipt['risk_usdt']:.2f} USDT, util "
-            f"{receipt.get('risk_utilisation_pct', 0):.0f}%, clip "
+            f"({receipt['risk_usdt']:.2f} USDT · util "
+            f"{receipt.get('risk_utilisation_pct', 0):.0f}% · clip "
             f"{receipt.get('clip_reason', 'none')})",
-            f"notional {receipt['notional']:.2f} · {receipt['leverage']}x · "
+            f"size: {receipt['notional']:.2f} USDT · {receipt['leverage']}x · "
             f"margin {receipt['margin']:.2f}",
             f"liq-safety: {liq if liq is not None else 'n/a'} · "
             f"shadow: {receipt['shadow_stance']}",
             f"score {receipt['score']:.0f} (rank/risk input — not a gate)",
         ]
     return [
-        f"🧾 RECEIPT · REJECT {receipt['symbol']} {receipt['side']}",
+        f"🧾 RECEIPT · REJECT · {receipt['side']} {receipt['symbol']}",
         f"setup: {receipt['setup_type']} · stage: {receipt.get('stage','')}",
         f"why: {receipt.get('why','')}",
         f"bucket: {receipt.get('bucket','')} · "

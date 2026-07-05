@@ -224,10 +224,9 @@ def test_telegram_trade_opened_six_numbers():
     n.trade_opened(trade, balance=1000.0)
     assert messages, "trade_opened must call send"
     msg = messages[0]
-    # New AURVEX AI SIGNAL format (Block D): key risk labels must appear
-    assert "AURVEX AI SIGNAL" in msg
+    # Clean signal format: key risk labels must still appear.
     assert "stop" in msg.lower()
-    assert "account risk" in msg.lower() or "account" in msg.lower()
+    assert "acct" in msg.lower() or "account" in msg.lower()
     assert "lev" in msg.lower() or "leverage" in msg.lower()
     assert "margin" in msg.lower()
     assert "notional" in msg.lower()

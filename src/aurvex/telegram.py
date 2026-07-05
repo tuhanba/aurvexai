@@ -109,6 +109,31 @@ def _tp_price(t, idx: int) -> str:
         return "—"
 
 
+# Direction / lifecycle badges — one glance tells you what happened.
+_SIDE_EMOJI: Dict[str, str] = {"LONG": "🟢", "SHORT": "🔴"}
+
+
+def _side_badge(side: object) -> str:
+    """'🟢 LONG' / '🔴 SHORT' — direction readable at first glance."""
+    s = str(side or "").strip().upper()
+    return f"{_SIDE_EMOJI.get(s, '⚪')} {s}".strip()
+
+
+def _grid(rows, width: int = 12) -> str:
+    """Render aligned label/value rows inside a monospace <pre> block.
+
+    A tuple of ("", "") emits a blank spacer line. Values are assumed already
+    numeric/safe (symbols and free text stay OUTSIDE the block, escaped).
+    """
+    lines = []
+    for key, val in rows:
+        if key == "" and val == "":
+            lines.append("")
+        else:
+            lines.append(f"{str(key).ljust(width)}{val}")
+    return "<pre>" + "\n".join(lines) + "</pre>"
+
+
 class BaseNotifier:
     def __init__(self, mode: str = "paper") -> None:
         self._mode = (mode or "paper").lower()
@@ -156,28 +181,27 @@ class BaseNotifier:
     def system_started(self, mode: str, balance: float, epoch: str = "") -> None:
         epoch_part = f" · epoch {_esc(epoch)}" if epoch else ""
         self.send(
-            f"\U0001F7E2 AurvexAI started"
-            f" · mode {_esc(mode.upper())}{epoch_part}"
-            f" · balance {balance:.2f} USDT"
+            f"🟢 <b>AurvexAI started</b>"
+            f"\n{_esc(mode.upper())}{epoch_part} · balance {balance:.2f} USDT"
         )
 
     def system_stopped(self, reason: str = "") -> None:
-        self.send(f"\U0001F534 AurvexAI stopped\n{reason}".rstrip())
+        tail = f"\n{reason}" if reason else ""
+        self.send(f"🔴 <b>AurvexAI stopped</b>{tail}")
 
     def reset_completed(self, label: str, balance: float, shadows_kept: int) -> None:
         self.send(
-            f"♻️ Paper reset complete"
-            f" · epoch {_esc(label)}"
-            f" · balance {balance:.2f} USDT"
+            f"♻️ <b>Paper reset complete</b>"
+            f"\nepoch {_esc(label)} · balance {balance:.2f} USDT"
             f" · shadows kept {shadows_kept}"
         )
 
     def kill_switch_hit(self, daily_pnl: float, limit: float) -> None:
         # Task 5 copy check: must state both halves — entries pause, exits run.
         self.send(
-            f"\U0001F6D1 DAILY LOSS KILL SWITCH"
-            f" · {daily_pnl:+.2f} / -{limit:.2f} USDT"
-            f" · new entries paused, open trades still managed"
+            f"🛑 <b>DAILY LOSS KILL SWITCH</b>"
+            f"\n{daily_pnl:+.2f} / -{limit:.2f} USDT"
+            f"\nnew entries paused, open trades still managed"
         )
 
     def daily_profit_lock_activated(self, daily_pnl: float, target: float) -> None:
@@ -192,12 +216,13 @@ class BaseNotifier:
                      rank_pos: Optional[int] = None,
                      rank_total: Optional[int] = None,
                      rank_basis: Optional[str] = None) -> None:
-        """Professional AURVEX AI SIGNAL message (Block D).
+        """Clean, mobile-first entry signal.
 
-        Renders entry, stop, TP1/TP2/TP3, leverage, margin, notional, account
-        risk, score (labelled as rank/risk input, not a gate), the applied risk
-        multiplier and components, and optionally the rank + basis. Shows WHY this
-        trade won its slot and at what size factor. All dynamic fields are escaped.
+        Leads with direction + pair so LONG/SHORT reads at a glance, then a
+        single aligned block for prices and risk (entry, stop, TP1/TP2/TP3,
+        leverage, margin, notional, applied vs configured risk, score/quality).
+        Score stays labelled as a rank/risk input, never a gate. Same data as
+        before — just grouped and de-cluttered. All free text is escaped.
         """
         entry = t.entry or 0.0
         md = t.metadata or {}
@@ -212,108 +237,84 @@ class BaseNotifier:
         grade_lbl = _grade_label(md.get("quality_grade", ""))
         modulation_applied = abs(risk_mult - 1.0) > 1e-6
 
-        lines = [
-            f"<b>\U0001F7E2 AURVEX AI SIGNAL</b>",
-            "",
-            f"Coin:   {_esc(t.symbol)}",
-            f"Side:   {_esc(t.side)}",
-            f"Mode:   {_esc(self._mode.upper())}",
-            f"Setup:  {_esc(_setup_display(t.setup_type))}",
-        ]
-        # LABEL-ONLY quality grade + trade-weight (omitted gracefully if absent).
+        # Header: direction + pair (bold), then a dim context line.
+        header = f"{_side_badge(t.side)} · <b>{_esc(t.symbol)}</b>"
+        ctx = f"{_esc(_setup_display(t.setup_type))}"
         if grade_lbl:
-            lines.append(f"Quality: {grade_lbl}  (label only — gates nothing)")
-        lines.append(f"Weight: {_trade_weight_label(risk_mult)}")
-        lines += [
-            "",
-            "TA:",
-            "  • EMA alignment        ✓",
-            "  • Supertrend direction ✓",
-            "  • Ichimoku cloud        ✓",
-            "  • ADX strength          ✓",
-            "  • Spread / liquidity    ✓",
-            "",
-            f"Entry:   {entry:.6g}",
-            f"Stop:    {t.stop_loss:.6g}",
-            f"TP1:     {_tp_price(t, 0)}",
-            f"TP2:     {_tp_price(t, 1)}",
-            f"TP3:     {_tp_price(t, 2)}",
-            "",
-            "Risk:",
-            f"  Leverage:     {t.leverage}x",
-            f"  Margin:       {margin_used:.2f} USDT",
-            f"  Notional:     {t.position_size:.2f} USDT",
-            f"  Configured:   {t.risk_pct:.2f}%"
-            + (f"  ({target_risk:.3f} USDT)" if target_risk is not None else ""),
-            f"  Applied:      {account_risk_pct:.3f}% account risk  ({actual_risk:.3f} USDT)",
-            f"  Clip:         {_esc(clip_reason)}",
-            f"  Risk x{risk_mult:.2f} (shadow {m_shadow:.2f} · score {m_score:.2f})",
-            f"  Score:        {t.score:.0f}  (rank/risk input — not a gate)",
+            ctx += f" · Quality {grade_lbl}"
+
+        # Configured-vs-applied risk, kept on one readable line.
+        cfg_part = f" (cfg {t.risk_pct:.2f}%"
+        cfg_part += f" · {target_risk:.3f} USDT)" if target_risk is not None else ")"
+        risk_val = f"{account_risk_pct:.2f}% acct · {actual_risk:.2f} USDT{cfg_part}"
+
+        rows = [
+            ("Entry", f"{entry:.6g}"),
+            ("Stop", f"{t.stop_loss:.6g}"),
+            ("TP1", _tp_price(t, 0)),
+            ("TP2", _tp_price(t, 1)),
+            ("TP3", _tp_price(t, 2)),
+            ("", ""),
+            ("Leverage", f"{t.leverage}x · margin {margin_used:.2f} USDT"),
+            ("Notional", f"{t.position_size:.2f} USDT"),
+            ("Risk", risk_val),
+            ("Score", f"{t.score:.0f} · not a gate · weight {_trade_weight_label(risk_mult)}"),
         ]
-        if rank_pos is not None and rank_total is not None:
-            basis = f" · {_esc(rank_basis)}" if rank_basis else ""
-            lines.append(f"  Rank:         {rank_pos}/{rank_total}{basis}")
-        # Compact "Why opened" block — explains the slot win without debug dumps.
-        lines += [
-            "",
-            "Why opened:",
-            "  • Buğra 5-condition gate passed",
-            "  • TA checklist 5/5 · spread/liquidity OK",
-            "  • Risk engine allowed (caps + liq-safety held)",
-        ]
+        if clip_reason and clip_reason != "none":
+            rows.append(("Clip", str(clip_reason)))
         if modulation_applied:
-            lines.append("  • Shadow reduced risk, did not block"
-                         if risk_mult < 1.0 else
-                         "  • Shadow modulated risk (measured edge), did not block")
-        self.send("\n".join(lines))
+            rows.append(("Modulation",
+                         f"x{risk_mult:.2f} (shadow {m_shadow:.2f} · score {m_score:.2f})"))
+        if rank_pos is not None and rank_total is not None:
+            basis = f" · {rank_basis}" if rank_basis else ""
+            rows.append(("Rank", f"{rank_pos}/{rank_total}{basis}"))
+
+        # Single de-cluttered reason line (was a 5-tick TA list + 3-line block).
+        reason = "Reason: Buğra 5/5 gate · filters ok · risk approved"
+        if modulation_applied:
+            reason += (" · shadow reduced risk (no block)" if risk_mult < 1.0
+                       else " · shadow raised risk, measured edge (no block)")
+
+        self.send("\n".join([header, ctx, _grid(rows), reason]))
 
     def trade_event(self, t, kind: str, price: float, pnl: float,
                     stop_to: Optional[str] = None) -> None:
-        """Lifecycle event message with optional stop-advancement hint (Block D).
+        """Lifecycle event message with optional stop-advancement hint.
 
-        stop_to: "break-even", "TP1", "trailing", "closed", or None.
+        stop_to: "break-even", "TP1", "trailing", "closed", or None. The event
+        type (TP / SL / other) leads with a distinct icon so it reads instantly.
         """
         sym = _esc(t.symbol)
+        pnl_sign = "🟢" if pnl >= 0 else "🔴"
+        stop_note = f"\nStop → {_esc(stop_to)}" if stop_to else ""
         if kind.startswith("TP"):
-            stop_note = f" · stop → {_esc(stop_to)}" if stop_to else ""
-            self.send(
-                f"✅ {_esc(kind)} hit {sym} @ {price:.6g}"
-                f"{stop_note} · pnl {pnl:+.2f} USDT"
-            )
+            head = f"🎯 <b>{_esc(kind)} hit</b> · {sym}"
         elif kind == "SL":
-            self.send(
-                f"\U0001F534 SL hit {sym} @ {price:.6g}"
-                f" · pnl {pnl:+.2f} USDT"
-            )
+            head = f"🛑 <b>SL hit</b> · {sym}"
         else:
-            emoji = "✅" if pnl >= 0 else "❌"
-            stop_note = f" · stop → {_esc(stop_to)}" if stop_to else ""
-            self.send(
-                f"{emoji} {_esc(kind)} {sym} @ {price:.6g}"
-                f"{stop_note} · pnl {pnl:+.2f} USDT"
-            )
+            head = f"{pnl_sign} <b>{_esc(kind)}</b> · {sym}"
+        self.send(f"{head} @ {price:.6g}"
+                  f"\n{pnl:+.2f} USDT{stop_note}")
 
     def trade_closed(self, t) -> None:
-        emoji = "\U0001F7E2" if t.realized_pnl >= 0 else "\U0001F534"
+        emoji = "🟢" if t.realized_pnl >= 0 else "🔴"
         self.send(
-            f"{emoji} CLOSED {_esc(t.side)} {_esc(t.symbol)}"
-            f" · reason: {_esc(t.close_reason)}"
-            f" · pnl {t.realized_pnl:+.2f} USDT"
-            f" · R {t.realized_pnl_pct:+.2f}"
+            f"{emoji} <b>CLOSE</b> · {_esc(t.side)} {_esc(t.symbol)}"
+            f"\n{t.realized_pnl:+.2f} USDT · R {t.realized_pnl_pct:+.2f}"
+            f"\nReason: {_esc(t.close_reason)}"
         )
 
     def daily_summary(self, m: Dict[str, Any],
                       predictivity: Optional[Dict[str, Any]] = None) -> None:
-        lines = [
-            "\U0001F4CA Daily summary",
-            f"trades: {m['total_trades']}  winrate: {m['winrate']}%",
-            f"net: {m['net_pnl']:+.2f} USDT  PF: {m['profit_factor']}",
-            f"expectancy: {m['expectancy']:+.4f} ({m['expectancy_r']:+.2f}R)",
+        rows = [
+            ("Trades", f"{m['total_trades']} · win {m['winrate']}%"),
+            ("Net", f"{m['net_pnl']:+.2f} USDT · PF {m['profit_factor']}"),
+            ("Expectancy", f"{m['expectancy']:+.4f} ({m['expectancy_r']:+.2f}R)"),
         ]
         if predictivity:
             # Daily read on whether score is trustworthy as a support signal.
-            lines.append(f"score: {_esc(predictivity.get('label', ''))}")
-        self.send("\n".join(lines))
+            rows.append(("Score", _esc(predictivity.get('label', ''))))
+        self.send("📊 <b>Daily Summary</b>\n" + _grid(rows))
 
     def decision_receipt(self, receipt: Dict[str, Any]) -> None:
         """Send a concise, secrets-free Decision Receipt block (one per event).
@@ -334,16 +335,16 @@ class BaseNotifier:
         """
         emoji = {"connected": "\U0001F7E2", "keys_absent": "⚪",
                  "error": "\U0001F7E0", "unsafe_key": "\U0001F6A8"}.get(status, "ℹ️")
-        lines = [f"{emoji} Binance account adapter: {_esc(status)}"]
+        lines = [f"{emoji} <b>Binance adapter</b> · {_esc(status)}"]
         if detail:
             lines.append(_esc(detail))
         self.send("\n".join(lines))
 
     def critical(self, message: str) -> None:
-        self.send(f"\U0001F6A8 CRITICAL\n{message}")
+        self.send(f"🚨 <b>CRITICAL</b>\n{_esc(message)}")
 
     def health_warning(self, message: str) -> None:
-        self.send(f"⚠️ HEALTH\n{message}")
+        self.send(f"⚠️ <b>HEALTH</b>\n{_esc(message)}")
 
 
 class NullNotifier(BaseNotifier):
