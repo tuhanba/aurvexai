@@ -207,3 +207,24 @@ Deployment recommendation: donchian_trend becomes the PRIMARY paper
 profile (LTF=4h, HTF=1d, TIME_STOP_BARS=0, RISK_PCT=2.0 — DD already
 inside the bar); squeeze_breakout remains available as the validated
 secondary. Live remains behind the five-gate Stage-3 lock.
+
+## Donchian sizing decision — max-efficiency confirmed (owner request)
+
+The validated run was measured under the legacy scalp caps (4 slots,
+40% exposure) which CLIP full-size donchian positions (each ~100 USDT
+notional at 200 balance). Freeing the caps was tested through the same
+harness (4h/1d, n_trials=76):
+
+| config | trades | Exp-R | PF | MaxDD% | DSR | growth proxy |
+|---|---|---|---|---|---|---|
+| validated (4 / 40% / risk 2) | 974 | +0.284 | 1.37 | 19.3 | +2.44 | baseline |
+| **max-eff (6 / 200% / risk 3)** | 868 | +0.253 | 1.35 | 20.5 | +2.12 | **+19% vs baseline** |
+| mid (6 / 150% / risk 2) | 909 | +0.270 | 1.37 | 18.4 | +2.33 | −11% vs baseline |
+
+Per-trade quality dips slightly at higher concurrency (more correlated
+open positions), but the risk-3 multiplier wins on total growth for
++1.2pt of drawdown; DSR stays strongly positive (+2.12). **Deployment
+decision: max-eff (RISK_PCT=3, MAX_OPEN_TRADES=6,
+MAX_PORTFOLIO_EXPOSURE_PCT=200).** Kill switch (−10% of balance) and
+profit lock (+10% of balance) both scale with live balance and cap the
+extra variance.
