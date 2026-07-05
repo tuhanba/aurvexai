@@ -496,6 +496,52 @@ def detect_squeeze_breakout(ctx: Context) -> Optional[Signal]:
     )
 
 
+def detect_donchian_trend(ctx: Context) -> Optional[Signal]:
+    """Donchian/turtle channel trend — faithful port of the validated rules
+    (EDGE_SEARCH_2026-07-05.md refinement round; strongest family found:
+    +0.27-0.46R/trade, ALL 4h cells positive in both split halves).
+
+    Rules exactly as tested, deliberately unfiltered:
+      1. Trigger: signal close breaks the N-bar channel high (LONG) or low
+         (SHORT), channel computed over the N bars BEFORE the signal bar.
+      2. Initial stop: ``don_atr_mult`` × ATR(14) from entry.
+      3. Exit: close breaks the X-bar opposite channel — streaming state
+         maintained by the executor (reason "CHANNEL") — or the stop.
+         No profit target; winners run.
+    """
+    cfg = ctx.cfg
+    N = max(2, cfg.don_entry_bars)
+    n = len(ctx.ltf)
+    if n < N + 1 or ctx.ltf_atr is None or ctx.ltf_atr <= 0:
+        return None
+    highs, lows, closes = ctx.ltf.highs, ctx.ltf.lows, ctx.ltf.closes
+    sig_i = n - 1
+    hh = max(highs[sig_i - N:sig_i])
+    ll = min(lows[sig_i - N:sig_i])
+    close = closes[sig_i]
+    if close > hh:
+        side = LONG
+    elif close < ll:
+        side = SHORT
+    else:
+        return None
+    stop_dist = cfg.don_atr_mult * ctx.ltf_atr
+    stop = close - stop_dist if side == LONG else close + stop_dist
+    excess = (close - hh) if side == LONG else (ll - close)
+    strength = _clamp01(excess / max(stop_dist, 1e-12) * 5.0)
+    return Signal(
+        symbol=ctx.snap.symbol, side=side, setup_type="donchian_trend",
+        entry_hint=close, stop_hint=stop,
+        base_confidence=0.55 + 0.1 * strength,
+        factors={
+            "breakout_strength": strength,
+            "trend_alignment": _clamp01(0.5 + 0.5 * ctx.htf_bias *
+                                        (1 if side == LONG else -1)),
+        },
+        notes=f"donchian N{N} breakout {side} · stop {cfg.don_atr_mult:g}xATR",
+    )
+
+
 def _build_registry(cfg: Config) -> List[Callable[[Context], Optional[Signal]]]:
     """Return the detector list for the configured strategy profile.
 
@@ -514,6 +560,8 @@ def _build_registry(cfg: Config) -> List[Callable[[Context], Optional[Signal]]]:
         return [detect_bugra_replica]
     if cfg.strategy_profile == "squeeze_breakout":
         return [detect_squeeze_breakout]
+    if cfg.strategy_profile == "donchian_trend":
+        return [detect_donchian_trend]
     return [detect_aurvex_enhanced]
 
 

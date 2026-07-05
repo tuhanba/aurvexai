@@ -93,7 +93,11 @@ def normalize_stop(cfg: Config, side: str, entry: float, stop: float,
                 cfg.strategy_profile == "bugra_replica")
     is_squeeze = (setup_type == "squeeze_breakout" or
                   cfg.strategy_profile == "squeeze_breakout")
-    if is_squeeze:
+    is_donchian = (setup_type == "donchian_trend" or
+                   cfg.strategy_profile == "donchian_trend")
+    if is_donchian:
+        max_stop = cfg.max_stop_dist_pct_don
+    elif is_squeeze:
         max_stop = cfg.max_stop_dist_pct_sqz
     elif is_bugra:
         max_stop = cfg.max_stop_dist_pct_bugra
@@ -357,13 +361,17 @@ class RiskManager:
             ]
         is_squeeze = (setup_type == "squeeze_breakout" or
                       cfg.strategy_profile == "squeeze_breakout")
-        if is_squeeze:
-            # No profit target by design — the validated exit is the stop or
-            # the TIME_STOP_BARS time-stop. A single unreachable target
-            # (SQZ_TP_R, default 1000R) keeps the 3-slot TP contract intact
-            # without ever realising; no TP1 → no break-even move, no runner —
-            # exactly the researched exit shape.
-            tp = entry + sign * r * cfg.sqz_tp_r
+        is_donchian = (setup_type == "donchian_trend" or
+                       cfg.strategy_profile == "donchian_trend")
+        if is_squeeze or is_donchian:
+            # No profit target by design — the validated exits are the stop
+            # plus the time-stop (squeeze) or the streaming channel exit
+            # (donchian). A single unreachable target (SQZ_TP_R / DON_TP_R,
+            # default 1000R) keeps the 3-slot TP contract intact without
+            # ever realising; no TP1 → no break-even move, no runner —
+            # exactly the researched exit shapes.
+            tp_r = cfg.don_tp_r if is_donchian else cfg.sqz_tp_r
+            tp = entry + sign * r * tp_r
             return [
                 TPTarget(price=tp, fraction=1.0),
                 TPTarget(price=tp, fraction=0.0),

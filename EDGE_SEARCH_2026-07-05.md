@@ -187,3 +187,23 @@ evidence.
   found; engine port (channel-exit mechanism) is the next wave.
 - Pullback-in-trend (RSI2, 4 cells): decisively negative (t≈−15) — closed.
 - Campaign trial count now 76; all deflation notes updated accordingly.
+
+## donchian_trend harness validation — the campaign's strongest result
+
+Ported as the fifth profile (streaming CHANNEL exit in the executor) and
+validated through the real walk-forward harness on ~5.8 years of 4h data
+(12,689 bars × 5 majors, 25 OOS windows, n_trials=76):
+
+| metric | value |
+|---|---|
+| OOS trades | 974 (2,433 signals; slippage/cooldown guards filtered the rest) |
+| net Exp-R | **+0.284** (gross +0.362) |
+| PF | **1.37** |
+| MaxDD at 2% risk | **19.3%** — inside the bar without downsizing |
+| DSR (76 trials) | **+2.44** |
+| harness decision | **ACCEPTED — full 5/5 Acceptance-Bar pass** |
+
+Deployment recommendation: donchian_trend becomes the PRIMARY paper
+profile (LTF=4h, HTF=1d, TIME_STOP_BARS=0, RISK_PCT=2.0 — DD already
+inside the bar); squeeze_breakout remains available as the validated
+secondary. Live remains behind the five-gate Stage-3 lock.

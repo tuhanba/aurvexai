@@ -366,6 +366,20 @@ class Config:
     sqz_trend_filter: bool = field(
         default_factory=lambda: _bool("SQZ_TREND_FILTER", True))
 
+    # -- Donchian trend (donchian_trend) parameters -------------------------
+    # Edge-search 2026-07-05, strongest family (+0.27-0.46R/trade, all 4h
+    # cells positive in both split halves). Entry: close breaks the N-bar
+    # channel; initial stop 2xATR(14); exit when the close breaks the X-bar
+    # opposite channel (streaming state in the executor) — no profit target
+    # (DON_TP_R sentinel keeps the 3-slot TP contract). Deploy: LTF=4h
+    # HTF=1d TIME_STOP_BARS=0.
+    don_entry_bars: int = field(default_factory=lambda: _int("DON_ENTRY_BARS", 20))
+    don_exit_bars: int = field(default_factory=lambda: _int("DON_EXIT_BARS", 20))
+    don_atr_mult: float = field(default_factory=lambda: _float("DON_ATR_MULT", 2.0))
+    don_tp_r: float = field(default_factory=lambda: _float("DON_TP_R", 1000.0))
+    max_stop_dist_pct_don: float = field(
+        default_factory=lambda: _float("MAX_STOP_DIST_PCT_DON", 12.0))
+
     # -- Bugra replica parameters ------------------------------------------
     bugra_stop_pct: float = field(default_factory=lambda: _float("BUGRA_STOP_PCT", 4.49))
     bugra_tp1_pct: float = field(default_factory=lambda: _float("BUGRA_TP1_PCT", 1.50))
@@ -549,9 +563,10 @@ class Config:
         )
         assert self.mode in {"paper", "live"}, "AX_MODE must be 'paper' or 'live'"
         assert self.strategy_profile in {"bugra_replica", "aurvex_enhanced",
-                                         "reversion_v1", "squeeze_breakout"}, (
-            "STRATEGY_PROFILE must be "
-            "bugra_replica|aurvex_enhanced|reversion_v1|squeeze_breakout"
+                                         "reversion_v1", "squeeze_breakout",
+                                         "donchian_trend"}, (
+            "STRATEGY_PROFILE must be bugra_replica|aurvex_enhanced|"
+            "reversion_v1|squeeze_breakout|donchian_trend"
         )
         assert self.leverage_policy in {"efficient", "conservative"}, (
             "LEVERAGE_POLICY must be efficient|conservative"
