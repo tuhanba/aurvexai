@@ -151,8 +151,7 @@ def test_trade_opened_message_contains_risk_fields():
               metadata={"risk_amount": 5.0, "liq_price": 51.0})
     Cap().trade_opened(t)
     txt = sent["text"]
-    # New AURVEX AI SIGNAL format (Block D)
-    assert "AURVEX AI SIGNAL" in txt
+    # Clean signal format: notional, leverage and margin are all surfaced.
     assert "1000.00" in txt   # notional amount
     assert "2x" in txt        # leverage
     assert "500.00" in txt    # margin amount

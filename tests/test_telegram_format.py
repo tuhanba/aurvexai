@@ -1,9 +1,9 @@
 """
-Block D format regression tests.
+Telegram message-format regression tests.
 
-Verifies the professional AURVEX AI SIGNAL message body, full lifecycle
-messages with stop-transition text, and that token/chat_id never leak.
-Uses a stub notifier — no real Telegram calls are made.
+Verifies the clean, mobile-first signal body (direction-led header, grouped
+price/risk grid), full lifecycle messages with stop-transition text, and that
+token/chat_id never leak. Uses a stub notifier — no real Telegram calls.
 """
 import json
 
@@ -55,10 +55,12 @@ class Cap(BaseNotifier):
 # trade_opened: header + TP prices + risk fields
 # ---------------------------------------------------------------------------
 
-def test_signal_header_present():
+def test_header_leads_with_direction_and_pair():
     n = Cap()
     n.trade_opened(_trade(), balance=200.0)
-    assert "AURVEX AI SIGNAL" in n.last
+    # Direction is readable at a glance, pair right beside it.
+    assert "🟢 LONG" in n.last
+    assert "ETHUSDT" in n.last
 
 
 def test_all_three_tp_prices_in_message():
@@ -74,8 +76,9 @@ def test_tp_dash_when_targets_missing():
     n = Cap()
     t = _trade(tp_targets=[TPTarget(3045.0, 1.0)])
     n.trade_opened(t, balance=200.0)
-    assert "TP2:     —" in n.last
-    assert "TP3:     —" in n.last
+    assert "TP2" in n.last and "TP3" in n.last
+    # Exactly the two missing targets render an em dash.
+    assert n.last.count("—") == 2
 
 
 def test_rank_line_shown_when_ranking_on():
@@ -106,15 +109,15 @@ def test_risk_multiplier_line_rendered():
                          "m_score": 1.10})
     n.trade_opened(t, balance=200.0)
     txt = n.last
-    assert "Risk x1.15" in txt
+    assert "x1.15" in txt
     assert "shadow 1.05" in txt
     assert "score 1.10" in txt
 
 
-def test_score_labelled_as_rank_risk_input():
+def test_score_labelled_as_not_a_gate():
     n = Cap()
     n.trade_opened(_trade(), balance=200.0)
-    assert "rank/risk input" in n.last
+    assert "not a gate" in n.last
 
 
 # ---------------------------------------------------------------------------
@@ -127,14 +130,13 @@ def test_quality_grade_line_rendered_with_colour():
     t = _trade(metadata={"actual_risk_amount": 7.5, "liq_price": 2500.0,
                          "quality_grade": "A"})
     n.trade_opened(t, balance=200.0)
-    assert "Quality: A 🟢" in n.last
-    assert "label only" in n.last
+    assert "Quality A 🟢" in n.last
 
 
 def test_quality_grade_line_omitted_when_absent():
     n = Cap()
     n.trade_opened(_trade(), balance=200.0)
-    assert "Quality:" not in n.last
+    assert "Quality" not in n.last
 
 
 def test_trade_weight_label_reduced():
@@ -142,13 +144,13 @@ def test_trade_weight_label_reduced():
     t = _trade(metadata={"actual_risk_amount": 7.5, "liq_price": 2500.0,
                          "risk_multiplier": 0.70})
     n.trade_opened(t, balance=200.0)
-    assert "Weight: Reduced x0.70" in n.last
+    assert "Reduced x0.70" in n.last
 
 
 def test_trade_weight_label_normal_default():
     n = Cap()
     n.trade_opened(_trade(), balance=200.0)
-    assert "Weight: Normal x1.00" in n.last
+    assert "Normal x1.00" in n.last
 
 
 def test_configured_vs_applied_risk_lines():
@@ -159,10 +161,10 @@ def test_configured_vs_applied_risk_lines():
                          "target_risk_amount": 1.0})
     n.trade_opened(t, balance=200.0)
     txt = n.last
-    assert "Configured:   0.50%" in txt
+    assert "cfg 0.50%" in txt
     assert "1.000 USDT" in txt            # target budget
-    assert "Applied:" in txt
-    assert "3.750%" in txt                 # applied = 7.5/200
+    assert "3.75% acct" in txt            # applied = 7.5/200
+    assert "7.50 USDT" in txt
 
 
 def test_clip_reason_line_rendered():
@@ -170,27 +172,27 @@ def test_clip_reason_line_rendered():
     t = _trade(metadata={"actual_risk_amount": 7.5, "liq_price": 2500.0,
                          "clip_reason": "exposure_cap"})
     n.trade_opened(t, balance=200.0)
-    assert "Clip:         exposure_cap" in n.last
+    assert "Clip" in n.last and "exposure_cap" in n.last
 
 
-def test_why_opened_block_present():
+def test_reason_line_present():
     n = Cap()
     n.trade_opened(_trade(), balance=200.0)
     txt = n.last
-    assert "Why opened:" in txt
-    assert "Buğra 5-condition gate passed" in txt
+    assert "Reason:" in txt
+    assert "Buğra 5/5 gate" in txt
 
 
 def test_shadow_reduced_note_only_when_modulation_applied():
     n = Cap()
     # No modulation → no shadow note.
     n.trade_opened(_trade(), balance=200.0)
-    assert "Shadow reduced risk" not in n.last
+    assert "shadow reduced risk" not in n.last
     # Modulation reduced risk → note appears, framed as non-blocking.
     t = _trade(metadata={"actual_risk_amount": 7.5, "liq_price": 2500.0,
                          "risk_multiplier": 0.70})
     n.trade_opened(t, balance=200.0)
-    assert "Shadow reduced risk, did not block" in n.last
+    assert "shadow reduced risk (no block)" in n.last
 
 
 def test_daily_summary_predictivity_line():
@@ -206,7 +208,7 @@ def test_daily_summary_omits_predictivity_when_none():
     metrics = {"total_trades": 4, "winrate": 50.0, "net_pnl": 1.2,
                "profit_factor": 1.3, "expectancy": 0.01, "expectancy_r": 0.05}
     n.daily_summary(metrics)
-    assert "score:" not in n.last
+    assert "Score" not in n.last
 
 
 def test_core_risk_fields_present():
@@ -222,9 +224,9 @@ def test_core_risk_fields_present():
 def test_account_risk_pct_computed_from_balance():
     """account_risk_pct = actual_risk / balance * 100."""
     n = Cap()
-    # actual_risk = 7.5, balance = 200 → 3.750%
+    # actual_risk = 7.5, balance = 200 → 3.75%
     n.trade_opened(_trade(), balance=200.0)
-    assert "3.750" in n.last
+    assert "3.75%" in n.last
 
 
 def test_entry_and_stop_in_message():
@@ -252,15 +254,14 @@ def test_setup_display_name_bugra():
     assert "Bugra Replica" in n.last
 
 
-def test_ta_ticks_present():
-    """All five TA condition ticks must appear."""
+def test_reason_summarises_gate_without_clutter():
+    """The verbose 5-tick TA list is folded into one compact reason line."""
     n = Cap()
     n.trade_opened(_trade(), balance=200.0)
-    assert "EMA alignment" in n.last
-    assert "Supertrend direction" in n.last
-    assert "Ichimoku cloud" in n.last
-    assert "ADX strength" in n.last
-    assert "Spread / liquidity" in n.last
+    txt = n.last
+    assert "Buğra 5/5 gate" in txt
+    assert "filters ok" in txt
+    assert "risk approved" in txt
 
 
 # ---------------------------------------------------------------------------

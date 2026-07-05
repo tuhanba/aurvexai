@@ -7,32 +7,38 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='8' y='8' width='16' height='16' rx='3' transform='rotate(45 16 16)' fill='%23d4b05a'/%3E%3C/svg%3E"/>
 <style>
 :root{
-  --bg:#07080b; --panel:#0e1015; --panel2:#12151c; --line:#1d202a;
-  --line-soft:#181b23;
-  --gold:#d4b05a; --gold-hi:#e8cc82; --gold-dim:#6b5720;
-  --gold-glow:rgba(212,176,90,.14);
-  --text:#e2e4ec; --muted:#646a7a; --sub:#979daf;
-  --green:#3ecb76; --red:#e65a76; --blue:#4a9eff; --amber:#f0a800;
-  --green-tint:rgba(62,203,118,.09); --red-tint:rgba(230,90,118,.09);
-  --amber-tint:rgba(240,168,0,.09);
+  /* Layered near-black surfaces — cinematic, calm, high-contrast. */
+  --bg:#050609; --panel:#0d0f14; --panel2:#12151d; --line:#20232e;
+  --line-soft:#171a22;
+  --gold:#d8b56a; --gold-hi:#efd493; --gold-dim:#7a6230;
+  --gold-glow:rgba(216,181,106,.15);
+  --text:#e7e9f1; --muted:#6b7183; --sub:#9aa0b3;
+  --green:#41d17c; --red:#f0637f; --blue:#5aa6ff; --amber:#f2b013;
+  --green-tint:rgba(65,209,124,.10); --red-tint:rgba(240,99,127,.10);
+  --amber-tint:rgba(242,176,19,.10);
+  --ui:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
   --mono:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
-  --radius:14px; --gap:12px;
-  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.5);
+  --radius:16px; --gap:14px;
+  --shadow:0 1px 2px rgba(0,0,0,.45),0 12px 32px -16px rgba(0,0,0,.6);
 }
 *{box-sizing:border-box;margin:0;padding:0}
-html{scrollbar-color:#262a36 var(--bg)}
+html{scrollbar-color:#2a2e3b var(--bg)}
 body{
   background:var(--bg);color:var(--text);
-  font-family:var(--mono);font-size:13px;min-height:100vh;
-  font-variant-numeric:tabular-nums;
+  font-family:var(--ui);font-size:13px;min-height:100vh;
+  font-variant-numeric:tabular-nums;letter-spacing:.1px;
+  -webkit-font-smoothing:antialiased;
   background-image:
-    radial-gradient(1100px 480px at 85% -10%,rgba(212,176,90,.05),transparent 60%),
-    radial-gradient(900px 420px at 0% 0%,rgba(74,158,255,.04),transparent 55%);
+    radial-gradient(1200px 520px at 88% -12%,rgba(216,181,106,.055),transparent 60%),
+    radial-gradient(940px 440px at -5% 0%,rgba(90,166,255,.04),transparent 55%);
   background-attachment:fixed;
 }
+/* Numeric/data surfaces keep the tabular mono face. */
+.kpi-val,.row-val,.badge-val,.health-val,.trade-item span,.funnel-count,
+.bucket-stats,table,.mode-banner,.pill,#clockTxt{font-family:var(--mono)}
 ::-webkit-scrollbar{width:9px;height:9px}
 ::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:#262a36;border-radius:8px;border:2px solid var(--bg)}
+::-webkit-scrollbar-thumb{background:#2a2e3b;border-radius:8px;border:2px solid var(--bg)}
 ::-webkit-scrollbar-thumb:hover{background:var(--gold-dim)}
 ::selection{background:var(--gold-dim);color:#fff}
 
@@ -46,22 +52,22 @@ header{
   border-bottom:1px solid var(--line);
 }
 .brand{
-  font-family:Cinzel,Georgia,serif;font-size:18px;letter-spacing:3px;
-  white-space:nowrap;display:flex;align-items:center;gap:9px;
+  font-family:Cinzel,Georgia,serif;font-size:19px;letter-spacing:4px;
+  white-space:nowrap;display:flex;align-items:center;gap:10px;
   background:linear-gradient(120deg,var(--gold-hi),var(--gold) 45%,#a8842e);
   -webkit-background-clip:text;background-clip:text;color:transparent;
 }
 .brand::before{
-  content:'';width:9px;height:9px;flex-shrink:0;
+  content:'';width:10px;height:10px;flex-shrink:0;
   background:linear-gradient(135deg,var(--gold-hi),#a8842e);
   transform:rotate(45deg);border-radius:2px;
   box-shadow:0 0 10px var(--gold-glow),0 0 22px var(--gold-glow);
 }
 .pills{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 .pill{
-  padding:3px 10px;border:1px solid var(--line);border-radius:999px;
-  font-size:11px;color:var(--muted);white-space:nowrap;
-  background:rgba(255,255,255,.015);
+  padding:4px 11px;border:1px solid var(--line);border-radius:999px;
+  font-size:11px;color:var(--muted);white-space:nowrap;letter-spacing:.3px;
+  background:rgba(255,255,255,.02);
   transition:color .3s,border-color .3s,background .3s;
 }
 .pill.ok{color:var(--green);border-color:rgba(62,203,118,.45);background:var(--green-tint)}
@@ -93,20 +99,26 @@ header{
 /* ── Status badges (Task 4: four independent truths) ── */
 .badges{display:grid;grid-template-columns:repeat(4,1fr);gap:var(--gap)}
 .badge-card{
+  position:relative;overflow:hidden;
   background:linear-gradient(180deg,var(--panel2),var(--panel));
   border:1px solid var(--line);border-radius:var(--radius);
-  padding:11px 14px;box-shadow:var(--shadow);
+  padding:12px 15px;box-shadow:var(--shadow);
   transition:border-color .3s,box-shadow .3s;
 }
-.badge-card.ok{border-color:rgba(62,203,118,.55);box-shadow:var(--shadow),inset 0 1px 0 rgba(62,203,118,.12)}
-.badge-card.err{border-color:rgba(230,90,118,.6);box-shadow:var(--shadow),0 0 18px -6px rgba(230,90,118,.35)}
-.badge-card.warn{border-color:rgba(240,168,0,.55)}
-.badge-label{font-size:9px;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted)}
-.badge-val{font-size:15px;font-weight:600;margin-top:4px;letter-spacing:.5px}
+/* A hairline status rail on the left edge — calm, unambiguous. */
+.badge-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--muted);opacity:.4}
+.badge-card.ok::before{background:var(--green);opacity:1}
+.badge-card.err::before{background:var(--red);opacity:1}
+.badge-card.warn::before{background:var(--amber);opacity:1}
+.badge-card.ok{border-color:rgba(65,209,124,.4)}
+.badge-card.err{border-color:rgba(240,99,127,.5);box-shadow:var(--shadow),0 0 20px -8px rgba(240,99,127,.4)}
+.badge-card.warn{border-color:rgba(242,176,19,.45)}
+.badge-label{font-size:9px;text-transform:uppercase;letter-spacing:1.6px;color:var(--muted);font-weight:600}
+.badge-val{font-size:15px;font-weight:600;margin-top:5px;letter-spacing:.5px}
 .badge-val.ok{color:var(--green)}
 .badge-val.err{color:var(--red)}
 .badge-val.warn{color:var(--amber)}
-.badge-sub{font-size:10px;color:var(--muted);margin-top:3px}
+.badge-sub{font-size:10px;color:var(--muted);margin-top:4px}
 @media(max-width:700px){.badges{grid-template-columns:1fr 1fr}}
 
 /* ── Layout ── */
@@ -118,27 +130,27 @@ main{padding:var(--gap);display:flex;flex-direction:column;gap:var(--gap);max-wi
 
 /* ── Card ── */
 .card{
-  background:linear-gradient(180deg,var(--panel2),var(--panel) 55%);
-  border:1px solid var(--line);border-radius:var(--radius);padding:15px;
+  background:linear-gradient(180deg,var(--panel2),var(--panel) 60%);
+  border:1px solid var(--line);border-radius:var(--radius);padding:16px 17px;
   box-shadow:var(--shadow);
-  transition:border-color .35s;
+  transition:border-color .35s,transform .35s;
 }
-.card:hover{border-color:#2a2e3c}
+.card:hover{border-color:#2d3140}
 .card-title{
-  font-size:10px;text-transform:uppercase;letter-spacing:1.6px;
-  color:var(--gold);margin-bottom:11px;
-  display:flex;align-items:center;gap:7px;
+  font-size:10px;text-transform:uppercase;letter-spacing:1.8px;
+  color:var(--gold);margin-bottom:13px;font-weight:600;
+  display:flex;align-items:center;gap:8px;
 }
 .card-title::before{
-  content:'';width:3px;height:11px;flex-shrink:0;border-radius:2px;
-  background:linear-gradient(180deg,var(--gold),var(--gold-dim));
+  content:'';width:3px;height:12px;flex-shrink:0;border-radius:2px;
+  background:linear-gradient(180deg,var(--gold-hi),var(--gold-dim));
 }
 .section-label{
-  font-size:9px;text-transform:uppercase;letter-spacing:3px;
-  color:var(--gold-dim);margin:10px 0 2px;padding:0 2px;
+  font-size:10px;text-transform:uppercase;letter-spacing:3.5px;
+  color:var(--gold);margin:16px 0 2px;padding:0 2px;font-weight:600;
   display:flex;align-items:center;gap:12px;
 }
-.section-label::before{content:'';width:18px;height:1px;background:var(--gold-dim);flex-shrink:0}
+.section-label::before{content:'';width:22px;height:2px;border-radius:2px;background:linear-gradient(90deg,var(--gold),var(--gold-dim));flex-shrink:0}
 .section-label::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,var(--line),transparent)}
 
 /* ── System Health Strip ── */
@@ -161,13 +173,13 @@ main{padding:var(--gap);display:flex;flex-direction:column;gap:var(--gap);max-wi
 .freshness-dot.err{background:var(--red)}
 
 /* ── KPI ── */
-.kpi-val{font-size:27px;font-weight:700;line-height:1;letter-spacing:-.5px}
-.kpi-sub{font-size:11px;color:var(--sub);margin-top:5px}
+.kpi-val{font-size:29px;font-weight:700;line-height:1;letter-spacing:-.6px}
+.kpi-sub{font-size:11px;color:var(--sub);margin-top:6px}
 .pos{color:var(--green)} .neg{color:var(--red)} .neu{color:var(--sub)}
 .spark{display:block;width:100%;height:34px;margin-top:8px;opacity:.95}
 
 /* ── Stat row ── */
-.row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--line-soft)}
+.row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--line-soft)}
 .row:last-child{border-bottom:none}
 .row-label{color:var(--muted);font-size:11px}
 .row-val{font-size:12px;text-align:right}
@@ -201,30 +213,33 @@ main{padding:var(--gap);display:flex;flex-direction:column;gap:var(--gap);max-wi
 }
 
 /* ── Tables ── */
-.tbl-wrap{overflow-x:auto;margin-top:4px;border-radius:8px}
+.tbl-wrap{overflow-x:auto;margin-top:4px;border-radius:10px;border:1px solid var(--line-soft)}
 table{width:100%;border-collapse:collapse;min-width:420px}
 thead th{position:sticky;top:0;background:var(--panel2);z-index:1}
-th{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:500;padding:6px 8px;text-align:left;border-bottom:1px solid var(--line)}
-td{padding:6px 8px;font-size:12px;border-bottom:1px solid var(--line-soft);white-space:nowrap}
+th{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600;padding:8px 10px;text-align:left;border-bottom:1px solid var(--line)}
+td{padding:7px 10px;font-size:12px;border-bottom:1px solid var(--line-soft);white-space:nowrap}
 tbody tr{transition:background .15s}
-tbody tr:hover{background:rgba(212,176,90,.04)}
+tbody tr:hover{background:rgba(216,181,106,.05)}
 tr:last-child td{border-bottom:none}
 
-/* ── Trade cards (mobile open trades) ── */
+/* ── Trade cards (open trades) ── */
 .trade-card{
-  background:linear-gradient(180deg,#141822,var(--panel2));
-  border:1px solid var(--line);border-radius:10px;padding:11px;margin-top:8px;
-  transition:border-color .3s;
+  background:linear-gradient(180deg,#15192320,var(--panel2));
+  border:1px solid var(--line);border-radius:12px;padding:13px 14px;margin-top:10px;
+  transition:border-color .3s,transform .3s;
 }
-.trade-card:hover{border-color:var(--gold-dim)}
-.trade-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}
-.trade-sym{font-size:13px;font-weight:600;color:var(--text);letter-spacing:.5px}
-.trade-side{font-size:11px;font-weight:600;padding:2px 9px;border-radius:5px;letter-spacing:1px}
-.trade-side.LONG{color:var(--green);border:1px solid rgba(62,203,118,.5);background:var(--green-tint)}
-.trade-side.SHORT{color:var(--red);border:1px solid rgba(230,90,118,.5);background:var(--red-tint)}
-.trade-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 10px}
-.trade-item{font-size:11px;color:var(--muted)}
-.trade-item span{color:var(--sub)}
+.trade-card:hover{border-color:var(--gold-dim);transform:translateY(-1px)}
+.trade-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px;padding-bottom:9px;border-bottom:1px solid var(--line-soft)}
+.trade-sym{font-size:14px;font-weight:700;color:var(--text);letter-spacing:.5px;font-family:var(--mono)}
+.trade-side{font-size:11px;font-weight:700;padding:3px 11px;border-radius:6px;letter-spacing:1px}
+.trade-side.LONG{color:var(--green);border:1px solid rgba(65,209,124,.5);background:var(--green-tint)}
+.trade-side.SHORT{color:var(--red);border:1px solid rgba(240,99,127,.5);background:var(--red-tint)}
+.trade-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px 12px}
+.trade-item{font-size:11px;color:var(--muted);display:flex;flex-direction:column;gap:2px}
+.trade-item span{color:var(--text);font-family:var(--mono);font-size:12px}
+.trade-item span.pos{color:var(--green)}
+.trade-item span.neg{color:var(--red)}
+.trade-item span.neu{color:var(--sub)}
 
 /* ── Refresh indicator ── */
 .refresh-dot{width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;margin-right:4px;animation:pulse 2s infinite;box-shadow:0 0 6px rgba(62,203,118,.6)}
@@ -234,14 +249,19 @@ tr:last-child td{border-bottom:none}
 @media(max-width:700px){
   .g4,.g3{grid-template-columns:1fr 1fr}
   .g2{grid-template-columns:1fr 1fr}
-  .kpi-val{font-size:22px}
+  .kpi-val{font-size:23px}
   header{padding:10px 12px}
-  .brand{font-size:16px}
-  .health-strip{gap:8px}
+  .brand{font-size:16px;letter-spacing:3px}
+  .health-strip{gap:8px 12px}
   .health-sep{display:none}
+  .trade-grid{grid-template-columns:1fr 1fr}
 }
-@media(max-width:420px){
-  .g4,.g3,.g2{grid-template-columns:1fr 1fr}
+@media(max-width:440px){
+  .g4,.g3,.g2{grid-template-columns:1fr}
+  .badges{grid-template-columns:1fr 1fr}
+  .trade-grid{grid-template-columns:1fr 1fr}
+  .card{padding:14px}
+  main{padding:10px}
 }
 </style>
 </head>
@@ -262,6 +282,9 @@ tr:last-child td{border-bottom:none}
 <div class="mode-banner PAPER" id="modeBanner">PAPER</div>
 
 <main>
+
+  <!-- System status section -->
+  <div class="section-label">System Status</div>
 
   <!-- Four independent status badges (Task 4). The old single "engine down"
        boolean is dead: each truth renders on its own, fed by separate fields. -->
@@ -326,7 +349,10 @@ tr:last-child td{border-bottom:none}
     </div>
   </div>
 
-  <!-- Daily-Risk card (Block E-2) + KPI row -->
+  <!-- Overview section: Balance / PnL / Winrate / Profit Factor -->
+  <div class="section-label">Overview — Balance &amp; PnL</div>
+
+  <!-- KPI row -->
   <div class="grid g4">
     <div class="card">
       <div class="card-title">Balance</div>
@@ -366,6 +392,9 @@ tr:last-child td{border-bottom:none}
       <div class="kpi-sub" id="maxdd">max DD —</div>
     </div>
   </div>
+
+  <!-- Daily targets & risk section -->
+  <div class="section-label">Daily Target &amp; Risk</div>
 
   <!-- Daily-Risk & Kill-Switch card (Block E-2) -->
   <div class="card">
@@ -527,10 +556,24 @@ tr:last-child td{border-bottom:none}
     </div>
   </div>
 
+  <!-- Positions section: open + closed trades grouped together -->
+  <div class="section-label">Positions</div>
+
   <!-- Open trades -->
   <div class="card">
     <div class="card-title">Open trades</div>
     <div id="openTrades"></div>
+  </div>
+
+  <!-- Closed trades -->
+  <div class="card">
+    <div class="card-title">Closed trades</div>
+    <div class="tbl-wrap" style="max-height:280px;overflow-y:auto">
+      <table id="closedTbl">
+        <thead><tr><th>sym</th><th>side</th><th>setup</th><th>reason</th><th>PnL</th><th>R</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </div>
 
   <!-- Learning section -->
@@ -619,17 +662,6 @@ tr:last-child td{border-bottom:none}
 
   <!-- Diagnostics section -->
   <div class="section-label">Diagnostics</div>
-
-  <!-- Closed trades -->
-  <div class="card">
-    <div class="card-title">Closed trades</div>
-    <div class="tbl-wrap" style="max-height:280px;overflow-y:auto">
-      <table id="closedTbl">
-        <thead><tr><th>sym</th><th>side</th><th>setup</th><th>reason</th><th>PnL</th><th>R</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </div>
 
   <!-- Signals -->
   <div class="card">
