@@ -344,6 +344,31 @@ class BaseExecutor:
             trade.close_price = close
             trade.close_reason = "TIME"
             events.append(FillEvent("TIME", close, frac, net, True))
+
+        # 4) Streaming channel exit (donchian_trend): close breaks the X-bar
+        #    opposite channel extreme → close everything at this bar's close
+        #    (reason "CHANNEL"). State lives in trade.metadata so the exit is
+        #    identical in engine, backtest and (future) live — like the
+        #    time-stop, it is close-based and only advances on new bars.
+        if (bar_ts is not None and trade.setup_type == "donchian_trend"
+                and self.cfg.don_exit_bars > 0 and trade.status == OPEN):
+            hist = list(trade.metadata.get("chan_hist") or [])
+            x = int(self.cfg.don_exit_bars)
+            if len(hist) >= x:
+                if trade.side == LONG:
+                    broke = close < min(hist[-x:])
+                else:
+                    broke = close > max(hist[-x:])
+                if broke:
+                    frac = trade.remaining_fraction
+                    net = self._close_fraction(trade, close, frac)
+                    trade.status = CLOSED
+                    trade.close_time = close_ts
+                    trade.close_price = close
+                    trade.close_reason = "CHANNEL"
+                    events.append(FillEvent("CHANNEL", close, frac, net, True))
+            hist.append(low if trade.side == LONG else high)
+            trade.metadata["chan_hist"] = hist[-max(x, 1):]
         return events
 
     def force_close(self, trade: Trade, price: float, reason: str = "MANUAL") -> FillEvent:
