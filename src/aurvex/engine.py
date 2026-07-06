@@ -411,6 +411,10 @@ class Engine:
                 except Exception as exc:
                     log.debug("snapshot failed %s: %s", sym, exc)
                     continue
+                # A symbol missing any required timeframe (multi-mode needs
+                # 1h+4h+1d) returns None — skip it, never feed None downstream.
+                if snap is None:
+                    continue
                 snapshots[sym] = snap
                 # Single-strategy: gate on the one profile's context. Multi:
                 # each detector self-guards on its own timeframe, so we let them
@@ -566,13 +570,16 @@ class Engine:
                           if self.cfg.risk_modulation_enabled else None)
             for sym in scanned:
                 try:
-                    snap = self.provider.get_snapshot(sym)
+                    snap = self._snapshot(sym)
                 except Exception as exc:
                     log.debug("snapshot failed %s: %s", sym, exc)
                     continue
+                if snap is None:
+                    continue
                 snapshots[sym] = snap
-                ctx = build_context(self.cfg, snap)
-                if ctx is None:
+                # Single-strategy: gate on the profile's context; multi: each
+                # detector self-guards on its own timeframe.
+                if not self.multi and build_context(self.cfg, snap) is None:
                     continue
                 candidates += 1
 
