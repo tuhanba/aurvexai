@@ -90,6 +90,10 @@ class Context:
 
 
 def build_context(cfg: Config, snap: MarketSnapshot) -> Optional[Context]:
+    # Defensive: a missing snapshot (a symbol lacking a required timeframe)
+    # yields no context rather than an AttributeError deep in the cycle.
+    if snap is None:
+        return None
     # Closed candles only: signals/scoring must never see the forming bar.
     ltf_candles = snap.closed_ltf(cfg.ltf)
     htf_candles = snap.closed_ltf(cfg.htf)

@@ -143,3 +143,37 @@ def test_single_mode_engine_unchanged(tmp_path):
     assert e.multi is False
     # single-mode decide routes to the base engine and stamps no exit override
     assert e._decider_by_setup["donchian_trend"] is e.engine
+
+
+# ---------------------------------------------------------------------------
+# Regression: a missing-timeframe symbol (None snapshot) must not crash a cycle
+# ---------------------------------------------------------------------------
+def test_none_snapshot_is_safe():
+    from aurvex.setups import build_context
+    c = Config(); c.strategies = "donchian_trend@4h/1d squeeze_breakout@1h/4h:ts=24"
+    # build_context tolerates a missing snapshot (the deep crash site)
+    assert build_context(c, None) is None
+    # each strategy's detector inherits that safety via build_context
+    for sp in parse_strategies(c):
+        assert sp.detector.detect_all(None) == []
+        assert sp.detector.detect(None) is None
+
+
+def test_cycle_survives_symbol_missing_a_timeframe(tmp_path, monkeypatch):
+    """A scanned symbol whose provider returns None (a timeframe it lacks) must
+    be skipped, not abort the whole multi-strategy cycle."""
+    import asyncio
+    c = Config(); c.data_provider = "synthetic"; c.mode = "paper"
+    c.db_path = str(tmp_path / "m.db")
+    c.strategies = "donchian_trend@4h/1d squeeze_breakout@1h/4h:ts=24"
+    c.global_ranking = True
+    e = Engine(c)
+    real = e.provider.get_snapshot
+    def flaky(symbol, timeframes=None):
+        if symbol.startswith("BTC"):
+            return None                      # simulate a missing-timeframe coin
+        return real(symbol, timeframes)
+    monkeypatch.setattr(e.provider, "get_snapshot", flaky)
+    monkeypatch.setattr(e.scanner, "scan", lambda: ["BTC/USDT:USDT", "ETH/USDT:USDT"])
+    asyncio.run(e._cycle())                  # must not raise
+    assert "closed_ltf" not in (e._last_error or "")
