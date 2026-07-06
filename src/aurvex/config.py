@@ -330,6 +330,18 @@ class Config:
         default_factory=lambda: _str("STRATEGY_PROFILE", "aurvex_enhanced")
     )
 
+    # Multi-strategy mode. When STRATEGIES is set, the engine runs SEVERAL
+    # strategies on ONE shared account/balance/DB — one kill switch, one profit
+    # lock, one exposure cap, one slot pool — each strategy entering on its own
+    # timeframe and exiting by its own rule. Empty (default) = single-strategy
+    # mode governed by STRATEGY_PROFILE, byte-identical to before.
+    #
+    # Format: space- or comma-separated specs "profile@ltf/htf[:ts=N][:ch=N]"
+    #   ts = per-strategy time_stop_bars, ch = per-strategy channel-exit bars.
+    # Example (the validated pairing):
+    #   STRATEGIES="donchian_trend@4h/1d squeeze_breakout@1h/4h:ts=24"
+    strategies: str = field(default_factory=lambda: _str("STRATEGIES", ""))
+
     # -- Mean-reversion (reversion_v1) parameters --------------------------
     # Additive, independent of the momentum knobs. These fields always exist
     # (cheap defaults) but only the reversion setup + its exit branch read them,

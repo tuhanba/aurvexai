@@ -277,3 +277,28 @@ so percent-performance equals any live split — full 200 each just gives cleane
 per-strategy statistics. Live capital allocation is a separate later decision;
 note that two engines sharing ONE real Binance account is a live-only
 complication (shared margin/positions) to be designed before any live parallel.
+
+## Multi-strategy on ONE account (recommended over the separate stack)
+
+The `STRATEGIES` env runs both validated edges inside a SINGLE engine on ONE
+shared balance — one kill switch, one profit lock, one slot pool, one Telegram
+commander, one dashboard. Each strategy still enters on its own timeframe and
+exits by its own rule (donchian on its 4h channel, squeeze on its 1h 24-bar
+time-stop). One position per symbol is enforced across both, so they never
+double up. This is the "two friendly systems on one line" deployment and it
+supersedes the separate `docker-compose.squeeze.yml` stack (which kept two
+independent balances).
+
+On the server, on the primary stack's `.env` (one line each):
+
+    sed -i '/^STRATEGIES=/d' .env
+    printf 'STRATEGIES=donchian_trend@4h/1d squeeze_breakout@1h/4h:ts=24\n' >> .env
+    sed -i 's/^GLOBAL_RANKING=.*/GLOBAL_RANKING=true/' .env
+    sed -i 's/^LTF_LIMIT=.*/LTF_LIMIT=525/' .env
+    docker compose up -d --force-recreate
+    curl -s http://127.0.0.1:5000/api/system_state
+
+STRATEGY_PROFILE is ignored while STRATEGIES is set. Leave STRATEGIES empty to
+return to single-strategy mode. The engine logs `MULTI-STRATEGY mode: ...` on
+start; trades carry their strategy's `exit_ltf` so each is managed on its own
+timeframe.

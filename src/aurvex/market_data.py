@@ -87,33 +87,40 @@ class CCXTProvider(MarketDataProvider):
         self._volume_cache = vol_cache
         return [s for s, _ in rows]
 
-    def get_snapshot(self, symbol: str) -> Optional[MarketSnapshot]:
+    def get_snapshot(self, symbol: str,
+                     timeframes: Optional[List[str]] = None) -> Optional[MarketSnapshot]:
         ex = self.exchange
-        # Hot path: only the data the decision actually needs. Two klines +
+        # Hot path: only the data the decision actually needs. Klines +
         # one order book. last_price comes from the latest close; 24h volume
         # from the cache populated by load_universe(); funding is unused by the
         # current setups so it is not fetched here.
+        #
+        # Multi-strategy mode passes the union of every strategy's timeframes
+        # (e.g. 1h+4h+1d) so ONE snapshot serves all detectors; default keeps
+        # the ltf/htf pair — byte-identical to before.
+        limit_for = {self.cfg.ltf: self.cfg.ltf_limit,
+                     self.cfg.htf: self.cfg.htf_limit}
+        tfs = timeframes or [self.cfg.ltf, self.cfg.htf]
         try:
-            ltf = ex.fetch_ohlcv(symbol, self.cfg.ltf, limit=self.cfg.ltf_limit)
-            htf = ex.fetch_ohlcv(symbol, self.cfg.htf, limit=self.cfg.htf_limit)
+            raw = {tf: ex.fetch_ohlcv(symbol, tf,
+                                      limit=limit_for.get(tf, self.cfg.ltf_limit))
+                   for tf in tfs}
             ob = ex.fetch_order_book(symbol, limit=self.cfg.orderbook_depth)
         except Exception as exc:
             _log.debug("ccxt snapshot failed for %s: %s", symbol, exc)
             return None
 
-        if not ltf or not htf:
+        if any(not rows for rows in raw.values()):
             return None
 
-        candles = {
-            self.cfg.ltf: [Candle.from_ccxt(r) for r in ltf],
-            self.cfg.htf: [Candle.from_ccxt(r) for r in htf],
-        }
+        candles = {tf: [Candle.from_ccxt(r) for r in rows]
+                   for tf, rows in raw.items()}
         orderbook = OrderBook(bids=ob.get("bids", []), asks=ob.get("asks", []))
         # last_price = most recent (possibly forming) close: a realistic live
         # tick for spread/slippage. The DECISION path consumes closed candles
         # only (see MarketSnapshot.closed_ltf); we also drop the in-progress bar
         # here so any consumer reading the raw candles directly is safe too.
-        last_close = candles[self.cfg.ltf][-1].close
+        last_close = candles[tfs[0]][-1].close
         candles = {tf: closed_view(c, tf) for tf, c in candles.items()}
         return MarketSnapshot(
             symbol=symbol,
@@ -191,16 +198,21 @@ class SyntheticProvider(MarketDataProvider):
             price = c
         return candles
 
-    def get_snapshot(self, symbol: str) -> Optional[MarketSnapshot]:
-        ltf = self._gen_series(symbol, self.cfg.ltf, self.cfg.ltf_limit)
-        htf = self._gen_series(symbol, self.cfg.htf, self.cfg.htf_limit)
-        last = ltf[-1].close
+    def get_snapshot(self, symbol: str,
+                     timeframes: Optional[List[str]] = None) -> Optional[MarketSnapshot]:
+        # Multi-strategy mode passes the union of every strategy's timeframes so
+        # one snapshot serves them all; default keeps the ltf/htf pair.
+        tfs = timeframes or [self.cfg.ltf, self.cfg.htf]
+        limit_for = {self.cfg.ltf: self.cfg.ltf_limit, self.cfg.htf: self.cfg.htf_limit}
+        candles = {tf: self._gen_series(symbol, tf, limit_for.get(tf, self.cfg.ltf_limit))
+                   for tf in tfs}
+        last = candles[tfs[0]][-1].close
         spread = last * 0.0002
         bids = [[last - spread / 2 - i * spread, 5 + i] for i in range(self.cfg.orderbook_depth)]
         asks = [[last + spread / 2 + i * spread, 5 + i] for i in range(self.cfg.orderbook_depth)]
         return MarketSnapshot(
             symbol=symbol,
-            candles={self.cfg.ltf: ltf, self.cfg.htf: htf},
+            candles=candles,
             orderbook=OrderBook(bids=bids, asks=asks),
             last_price=last,
             quote_volume_24h=200_000_000.0,

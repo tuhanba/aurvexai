@@ -233,3 +233,39 @@ def test_trend_filter_allows_aligned_breakout(scfg):
     snap = series_snapshot(closes_last=101.0)
     sig = detect_squeeze_breakout(build_context(scfg, snap))
     assert sig is not None and sig.side == LONG
+
+
+# ---------------------------------------------------------------------------
+# Per-trade exit params (multi-strategy foundation) — parity + override
+# ---------------------------------------------------------------------------
+def test_per_trade_time_stop_overrides_cfg(scfg):
+    # cfg time-stop is 48, but this trade carries its own 24 → must exit at 24.
+    from aurvex.models import Decision
+    scfg.time_stop_bars = 48
+    d = Decision(symbol="BTC/USDT:USDT", side=LONG, decision="ALLOW",
+                 setup_type="squeeze_breakout", risk_pct=2.0, entry=100.0,
+                 stop_loss=97.4, position_size=100.0, leverage=5,
+                 margin_used=20.0, max_loss=0.4)
+    d.tp1 = d.tp2 = d.tp3 = 2700.0
+    d.metadata["exit_time_stop_bars"] = 24
+    ex = PaperExecutor(scfg)
+    t = ex.build_trade(d, "paper")
+    ts0 = (now_ms() // TF_MS) * TF_MS
+    for k in range(1, 40):
+        ex.simulate_fill(t, 100.5, 99.6, 100.2, bar_ts=ts0 + k * TF_MS)
+        if t.status == "CLOSED":
+            break
+    assert t.close_reason == "TIME"
+    assert int(t.metadata["bars_held"]) == 24   # its own budget, not cfg's 48
+
+
+def test_absent_exit_param_falls_back_to_cfg(scfg):
+    # No per-trade override → cfg.time_stop_bars (48) governs (parity path).
+    ex, t = _open_trade(scfg)
+    assert t.metadata.get("exit_time_stop_bars") is None
+    ts0 = (now_ms() // TF_MS) * TF_MS
+    for k in range(1, 60):
+        ex.simulate_fill(t, 100.5, 99.6, 100.2, bar_ts=ts0 + k * TF_MS)
+        if t.status == "CLOSED":
+            break
+    assert int(t.metadata["bars_held"]) == 48
