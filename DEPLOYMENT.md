@@ -250,3 +250,30 @@ Stop / remove just the secondary (primary untouched):
 
 Both run at INITIAL_PAPER_BALANCE=200 in paper: returns are percentage-based,
 so 
+## Parallel strategy stacks (donchian + squeeze)
+
+Two validated edges run side by side, each at its own timeframe (donchian can
+NOT be sped up — its edge lives only at 4h; squeeze only at 1h; every faster
+cell measured net-negative). Running both maximises trade frequency without
+diluting either edge.
+
+- Primary (donchian_trend, 4h): the default `docker-compose.yml` stack —
+  Telegram commander, dashboard on :5000, epoch `don1`.
+- Secondary (squeeze_breakout, 1h, 24h hold): `docker-compose.squeeze.yml` —
+  own DB volume, dashboard on :5001, epoch `sqz1`, Telegram OFF (only one
+  engine may poll the bot).
+
+Bring the secondary up alongside the primary (server, one line each):
+
+    docker compose -f docker-compose.squeeze.yml -p aurvex-sqz up -d --build
+    curl -s http://127.0.0.1:5001/health
+
+Stop / remove just the secondary (primary untouched):
+
+    docker compose -f docker-compose.squeeze.yml -p aurvex-sqz down
+
+Both run at INITIAL_PAPER_BALANCE=200 in paper: returns are percentage-based,
+so percent-performance equals any live split — full 200 each just gives cleaner
+per-strategy statistics. Live capital allocation is a separate later decision;
+note that two engines sharing ONE real Binance account is a live-only
+complication (shared margin/positions) to be designed before any live parallel.
