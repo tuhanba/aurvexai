@@ -225,3 +225,28 @@ This deployment runs **paper only**. The live executor is a gated stub and sends
 no real orders. Do not set `LIVE_ENABLED=true` without a separate, explicit
 decision and the real-order adapter described in
 [`PAPER_LIVE_PARITY.md`](PAPER_LIVE_PARITY.md).
+
+## Parallel strategy stacks (donchian + squeeze)
+
+Two validated edges run side by side, each at its own timeframe (donchian can
+NOT be sped up — its edge lives only at 4h; squeeze only at 1h; every faster
+cell was measured net-negative). Running both maximises trade frequency
+without diluting either edge.
+
+- **Primary (donchian_trend, 4h):** the default `docker-compose.yml` stack —
+  Telegram commander, dashboard on **:5000**, epoch `don1`.
+- **Secondary (squeeze_breakout, 1h, 24h hold):** `docker-compose.squeeze.yml`
+  — its own DB volume, dashboard on **:5001**, epoch `sqz1`, Telegram OFF
+  (only one engine may poll the bot).
+
+Bring the secondary up alongside the primary (server, one line each):
+
+    docker compose -f docker-compose.squeeze.yml -p aurvex-sqz up -d --build
+    curl -s http://127.0.0.1:5001/health
+
+Stop / remove just the secondary (primary untouched):
+
+    docker compose -f docker-compose.squeeze.yml -p aurvex-sqz down
+
+Both run at INITIAL_PAPER_BALANCE=200 in paper: returns are percentage-based,
+so 

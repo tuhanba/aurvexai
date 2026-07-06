@@ -1,0 +1,80 @@
+# AurvexAI — PARALLEL squeeze_breakout stack (second engine).
+#
+# Runs alongside the primary donchian_trend stack (docker-compose.yml) as an
+# independent paper experiment: its OWN database volume, its OWN dashboard on
+# port 5001, and strategy-specific env overrides. Shares .env for secrets and
+# risk caps; the `environment:` block below WINS over .env for the per-strategy
+# knobs (docker-compose precedence).
+#
+# Telegram is disabled here (TELEGRAM_ENABLED=false): only ONE engine may poll
+# the bot (two long-pollers on one token → Telegram 409). The donchian stack
+# keeps the Telegram commander; this one is dashboard-only.
+#
+# Paper sizing: both stacks run at INITIAL_PAPER_BALANCE=200. Returns are
+# percentage-based, so %-performance is identical to any live split — running
+# each at full 200 just gives cleaner per-strategy paper statistics. Live
+# capital allocation is a separate, later decision.
+#
+# Run (server, one line each, no &&):
+#   docker compose -f docker-compose.squeeze.yml -p aurvex-sqz up -d --build
+#   curl -s http://127.0.0.1:5001/health
+#   docker compose -f docker-compose.squeeze.yml -p aurvex-sqz down     # stop
+#
+# The -p (project name) keeps this stack's containers/volumes namespaced apart
+# from the primary stack so the two never collide.
+
+services:
+  engine:
+    build: .
+    image: aurvexai:latest
+    container_name: aurvex-engine-sqz
+    restart: unless-stopped
+    env_file: .env
+    command: ["python", "main.py", "engine"]
+    volumes:
+      - aurvex-data-sqz:/app/data
+    environment:
+      - DB_PATH=/app/data/aurvex.db
+      - STRATEGY_PROFILE=squeeze_breakout
+      - LTF=1h
+      - HTF=4h
+      - LTF_LIMIT=525
+      - TIME_STOP_BARS=24          # 24h hold: ~25% more trades, edge still passes
+      - SQZ_TREND_FILTER=true
+      - RISK_PCT=2.0
+      - MAX_OPEN_TRADES=6
+      - MAX_PORTFOLIO_EXPOSURE_PCT=200
+      - INITIAL_PAPER_BALANCE=200
+      - EPOCH_LABEL=sqz1
+      - CYCLE_INTERVAL_SEC=60
+      - TELEGRAM_ENABLED=false     # avoid the 409 double-poller conflict
+
+  dashboard:
+    build: .
+    image: aurvexai:latest
+    container_name: aurvex-dashboard-sqz
+    restart: unless-stopped
+    env_file: .env
+    command: ["python", "main.py", "dashboard"]
+    ports:
+      - "5001:5001"
+    volumes:
+      - aurvex-data-sqz:/app/data
+    environment:
+      - DB_PATH=/app/data/aurvex.db
+      - DASHBOARD_PORT=5001
+      - STRATEGY_PROFILE=squeeze_breakout
+      - INITIAL_PAPER_BALANCE=200
+      - EPOCH_LABEL=sqz1
+      - TELEGRAM_ENABLED=false
+    depends_on:
+      - engine
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5001/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  aurvex-data-sqz:
