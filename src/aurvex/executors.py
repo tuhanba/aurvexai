@@ -112,7 +112,18 @@ class BaseExecutor:
                       # dashboard can correlate grade with realised outcome.
                       "quality_grade": decision.metadata.get("quality_grade", ""),
                       "quality_score": decision.metadata.get("quality_score", 0.0),
-                      "quality_reasons": decision.metadata.get("quality_reasons", [])},
+                      "quality_reasons": decision.metadata.get("quality_reasons", []),
+                      # Per-trade EXIT parameters (multi-strategy mode). Absent
+                      # in single-strategy mode → the executor falls back to the
+                      # global cfg, so behaviour is byte-identical. Present only
+                      # when the engine runs several strategies on one account,
+                      # so a squeeze trade time-stops on its own bar count while
+                      # a donchian trade exits on its own channel — independently.
+                      "exit_time_stop_bars": decision.metadata.get(
+                          "exit_time_stop_bars"),
+                      "exit_channel_bars": decision.metadata.get(
+                          "exit_channel_bars"),
+                      "exit_ltf": decision.metadata.get("exit_ltf", "")},
         )
         return trade
 
@@ -334,9 +345,13 @@ class BaseExecutor:
         #    closing whatever remains at this bar's close (reason "TIME"). Off by
         #    default (time_stop_bars == 0) and only active when a bar timestamp is
         #    supplied, so parity is preserved unless explicitly enabled.
-        if (bar_ts is not None and self.cfg.time_stop_bars > 0
+        _ts_bars = trade.metadata.get("exit_time_stop_bars")
+        if _ts_bars is None:
+            _ts_bars = self.cfg.time_stop_bars
+        _ts_bars = int(_ts_bars)
+        if (bar_ts is not None and _ts_bars > 0
                 and trade.status == OPEN
-                and int(trade.metadata.get("bars_held", 0)) >= self.cfg.time_stop_bars):
+                and int(trade.metadata.get("bars_held", 0)) >= _ts_bars):
             frac = trade.remaining_fraction
             net = self._close_fraction(trade, close, frac)
             trade.status = CLOSED
@@ -350,10 +365,14 @@ class BaseExecutor:
         #    (reason "CHANNEL"). State lives in trade.metadata so the exit is
         #    identical in engine, backtest and (future) live — like the
         #    time-stop, it is close-based and only advances on new bars.
+        _chan_bars = trade.metadata.get("exit_channel_bars")
+        if _chan_bars is None:
+            _chan_bars = self.cfg.don_exit_bars
+        _chan_bars = int(_chan_bars)
         if (bar_ts is not None and trade.setup_type == "donchian_trend"
-                and self.cfg.don_exit_bars > 0 and trade.status == OPEN):
+                and _chan_bars > 0 and trade.status == OPEN):
             hist = list(trade.metadata.get("chan_hist") or [])
-            x = int(self.cfg.don_exit_bars)
+            x = _chan_bars
             if len(hist) >= x:
                 if trade.side == LONG:
                     broke = close < min(hist[-x:])

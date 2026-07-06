@@ -63,6 +63,27 @@ class Engine:
         self.detector = SetupDetector(cfg)
         self.engine = DecisionEngine(cfg)          # the shared brain
         self.executor = self._build_executor(cfg)
+        # Multi-strategy (portfolio) mode: several validated edges on ONE
+        # account. specs[] each carry a per-strategy Config clone (own profile/
+        # timeframes/exit params) + detector; the risk/decision/portfolio
+        # pipeline below stays SHARED (one balance, kill switch, slot pool). A
+        # single spec (default) is single-strategy mode, byte-identical to before.
+        from .setups import parse_strategies, required_timeframes
+        self.specs = parse_strategies(cfg)
+        self.multi = len(self.specs) > 1
+        self._snapshot_tfs = required_timeframes(self.specs)
+        # Route each candidate to its strategy's brain + exit rules by setup_type
+        # (setup_type == profile for these strategies). Single-strategy → the
+        # base engine + empty exit meta (fallback to global cfg).
+        self._decider_by_setup = {}
+        self._exit_by_setup = {}
+        for sp in self.specs:
+            self._decider_by_setup[sp.profile] = (
+                self.engine if not self.multi else DecisionEngine(sp.pcfg))
+            self._exit_by_setup[sp.profile] = dict(sp.exit_meta)
+        if self.multi:
+            log.warning("MULTI-STRATEGY mode: %s (shared account)",
+                        " + ".join(s.name for s in self.specs))
         self.journal = TradeJournal(self.db)
         self.shadow = ShadowLearner(cfg, self.db)
         self.coins = build_coin_library(self.db)
@@ -106,6 +127,45 @@ class Engine:
                         "" if armed else f" ({why})")
             return EngineLiveExecutor(cfg, order_adapter=adapter)
         return PaperExecutor(cfg)
+
+    # -- multi-strategy helpers -------------------------------------------
+    def _snapshot(self, sym: str):
+        """One snapshot per symbol, carrying every timeframe the active
+        strategies need (multi) or the ltf/htf pair (single)."""
+        if self.multi:
+            return self.provider.get_snapshot(sym, self._snapshot_tfs)
+        return self.provider.get_snapshot(sym)
+
+    def _detect_candidates(self, snap) -> List:
+        """All signals for a symbol this cycle. Single: the one profile's
+        detector. Multi: every strategy's detector on the shared snapshot, so
+        donchian (4h) and squeeze (1h) both get a fair look at the symbol."""
+        if not self.multi:
+            return self.detector.detect_all(snap)
+        out = []
+        for sp in self.specs:
+            out.extend(sp.detector.detect_all(snap))
+        return out
+
+    def _decide(self, signal, snap, pf, risk_multiplier: float = 1.0):
+        """Route a signal to ITS strategy's decision engine (correct timeframe
+        for entry-bar/lookahead + sizing) and stamp that strategy's per-trade
+        exit params. Shared caps/balance/slots are enforced by the engine loop,
+        not here — so the account stays single and unified."""
+        decider = self._decider_by_setup.get(signal.setup_type, self.engine)
+        d = decider.decide(signal, snap, pf, risk_multiplier=risk_multiplier)
+        exit_meta = self._exit_by_setup.get(signal.setup_type)
+        if exit_meta:
+            d.metadata.update(exit_meta)
+        return d
+
+    def _signal_ltf(self, setup_type: str) -> str:
+        """The LTF a signal was detected on (its own strategy's), for shadow
+        dedup / bar-timestamp reads. Falls back to the base cfg.ltf."""
+        meta = self._exit_by_setup.get(setup_type)
+        if meta and meta.get("exit_ltf"):
+            return meta["exit_ltf"]
+        return self.cfg.ltf
 
     # -- lifecycle ---------------------------------------------------------
     def request_stop(self, *_: object) -> None:
@@ -347,17 +407,19 @@ class Engine:
             # Pass 1: collect + score all candidates.
             for sym in scanned:
                 try:
-                    snap = self.provider.get_snapshot(sym)
+                    snap = self._snapshot(sym)
                 except Exception as exc:
                     log.debug("snapshot failed %s: %s", sym, exc)
                     continue
                 snapshots[sym] = snap
-                ctx = build_context(self.cfg, snap)
-                if ctx is None:
+                # Single-strategy: gate on the one profile's context. Multi:
+                # each detector self-guards on its own timeframe, so we let them
+                # decide rather than gate on one base timeframe.
+                if not self.multi and build_context(self.cfg, snap) is None:
                     continue
                 candidates += 1
 
-                all_signals = self.detector.detect_all(snap)
+                all_signals = self._detect_candidates(snap)
                 if not all_signals:
                     continue
                 funnel.note_setup_detected()
@@ -373,7 +435,8 @@ class Engine:
                     self.coins.on_signal(s.symbol, now_ms())
                 signal = max(all_signals, key=lambda s: s.score)
 
-                closed_ltf = snap.closed_ltf(self.cfg.ltf)
+                _sltf = self._signal_ltf(signal.setup_type)
+                closed_ltf = snap.closed_ltf(_sltf)
                 sig_bar_ts = closed_ltf[-1].ts if closed_ltf else 0
                 shadow_delta = (self.shadow.score_delta(signal.setup_type)
                                 if self.cfg.shadow_apply else 0.0)
@@ -409,7 +472,7 @@ class Engine:
                 pf.open_notional = open_notional
                 pf.open_margin = open_margin
                 rm, m_shadow, m_score = self._risk_modulation(cand.signal, cycle_buckets)
-                d = self.engine.decide(cand.signal, cand.snap, pf, risk_multiplier=rm)
+                d = self._decide(cand.signal, cand.snap, pf, risk_multiplier=rm)
                 # Slot-selection support layer: record why this candidate won
                 # (or lost) its slot race. Set before persistence so signal_events
                 # and the dashboard/Telegram can show the rank basis.
@@ -541,7 +604,7 @@ class Engine:
                 pf.open_notional = open_notional
                 pf.open_margin = open_margin
                 rm, m_shadow, m_score = self._risk_modulation(signal, fc_buckets)
-                d = self.engine.decide(signal, snap, pf, risk_multiplier=rm)
+                d = self._decide(signal, snap, pf, risk_multiplier=rm)
                 d.metadata["m_shadow"] = m_shadow
                 d.metadata["m_score"] = m_score
                 # LABEL ONLY: attach quality grade (blocks nothing).
@@ -552,7 +615,8 @@ class Engine:
                 # Shadow tracking: opened paper trades AND high-score rejects.
                 # signal_bar_ts (the last closed bar) dedups across cycles that
                 # re-see the same signalled bar.
-                closed_ltf = snap.closed_ltf(self.cfg.ltf)
+                _sltf = self._signal_ltf(signal.setup_type)
+                closed_ltf = snap.closed_ltf(_sltf)
                 sig_bar_ts = closed_ltf[-1].ts if closed_ltf else 0
                 source = "paper" if d.decision == ALLOW else "rejected"
                 fc_sid = self.shadow.track_signal(signal, d, source=source,
@@ -700,11 +764,15 @@ class Engine:
             snap = snapshots.get(trade.symbol)
             if snap is None:
                 try:
-                    snap = self.provider.get_snapshot(trade.symbol)
+                    snap = self._snapshot(trade.symbol)
                 except Exception as exc:
                     log.debug("manage snapshot failed %s: %s", trade.symbol, exc)
                     continue
-            closed = snap.closed_ltf(self.cfg.ltf)
+            # Manage each trade on ITS OWN timeframe (multi-strategy): a squeeze
+            # trade advances on 1h bars, a donchian trade on 4h bars. Single
+            # mode → exit_ltf is absent → base cfg.ltf, byte-identical.
+            manage_ltf = trade.metadata.get("exit_ltf") or self.cfg.ltf
+            closed = snap.closed_ltf(manage_ltf)
             if not closed:
                 continue
             bar = closed[-1]

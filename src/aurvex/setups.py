@@ -590,3 +590,84 @@ class SetupDetector:
             if sig is not None:
                 out.append(sig)
         return out
+
+
+# ---------------------------------------------------------------------------
+# Multi-strategy (portfolio) mode — several validated edges on ONE account.
+# ---------------------------------------------------------------------------
+import dataclasses as _dc
+
+
+@dataclass
+class StrategySpec:
+    """One strategy in a multi-strategy engine: its own profile, timeframes and
+    exit params, but sharing the account (balance / kill switch / slots) with
+    the others. ``pcfg`` is a per-strategy Config clone; ``exit_meta`` is stamped
+    onto every decision this strategy produces so the executor exits each trade
+    by its own rule (see executors.build_trade)."""
+    name: str
+    profile: str
+    ltf: str
+    htf: str
+    pcfg: Config
+    exit_meta: dict
+    detector: object
+
+
+def _parse_one_spec(base: Config, spec: str) -> Optional[StrategySpec]:
+    spec = spec.strip()
+    if not spec:
+        return None
+    # profile@ltf/htf[:ts=N][:ch=N]
+    head, *opts = spec.split(":")
+    if "@" not in head or "/" not in head:
+        raise ValueError(f"bad STRATEGIES spec '{spec}' "
+                         "(want profile@ltf/htf[:ts=N][:ch=N])")
+    profile, tfs = head.split("@", 1)
+    ltf, htf = tfs.split("/", 1)
+    profile, ltf, htf = profile.strip(), ltf.strip(), htf.strip()
+    overrides = {"strategy_profile": profile, "ltf": ltf, "htf": htf}
+    ts = None
+    ch = None
+    for o in opts:
+        if o.startswith("ts="):
+            ts = int(o[3:]); overrides["time_stop_bars"] = ts
+        elif o.startswith("ch="):
+            ch = int(o[3:]); overrides["don_exit_bars"] = ch
+    pcfg = _dc.replace(base, **overrides)
+    exit_meta = {
+        "exit_ltf": ltf,
+        "exit_time_stop_bars": ts if ts is not None else pcfg.time_stop_bars,
+        "exit_channel_bars": (ch if ch is not None else pcfg.don_exit_bars)
+        if profile == "donchian_trend" else 0,
+    }
+    return StrategySpec(name=f"{profile}@{ltf}/{htf}", profile=profile,
+                        ltf=ltf, htf=htf, pcfg=pcfg, exit_meta=exit_meta,
+                        detector=SetupDetector(pcfg))
+
+
+def parse_strategies(cfg: Config) -> List[StrategySpec]:
+    """Parse ``cfg.strategies`` into StrategySpecs. Empty → single-strategy
+    (one spec mirroring cfg.strategy_profile / cfg.ltf / cfg.htf)."""
+    raw = (cfg.strategies or "").replace(",", " ").split()
+    if not raw:
+        return [_parse_one_spec(
+            cfg, f"{cfg.strategy_profile}@{cfg.ltf}/{cfg.htf}")]
+    specs = [s for s in (_parse_one_spec(cfg, r) for r in raw) if s]
+    seen = set()
+    for s in specs:
+        if s.name in seen:
+            raise ValueError(f"duplicate strategy spec {s.name}")
+        seen.add(s.name)
+    return specs
+
+
+def required_timeframes(specs: List[StrategySpec]) -> List[str]:
+    """The union of every (ltf, htf) a multi-strategy set needs, so the engine
+    can fetch them all into one snapshot per symbol."""
+    tfs = []
+    for s in specs:
+        for tf in (s.ltf, s.htf):
+            if tf not in tfs:
+                tfs.append(tf)
+    return tfs
