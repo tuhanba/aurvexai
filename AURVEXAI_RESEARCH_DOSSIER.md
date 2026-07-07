@@ -181,3 +181,34 @@ round-trip cost (~0.14%) exceeds the scalp-sized edge. Scalp would need maker
 execution (adverse selection — tested, worse) or L2/order-flow data +
 low-latency infra (unavailable). **Scalp is NOT viable here.** The validated
 positive edges are all swing/positional (donchian 4h, squeeze 1h, carry).
+
+---
+
+## 10. Universe expansion study — the edge is coin-specific (Phase-4)
+
+Owner concern: 12 coins is too few / too few trades. Tested whether donchian
+generalises to 15 more liquid, established perps (LTC, BCH, ETC, ATOM, NEAR,
+FIL, UNI, AAVE, ARB, OP, INJ, APT, SUI, LDO, ICP), per-coin net-R, taker cost.
+
+**Finding: the edge does NOT generalise to arbitrary liquid coins.** Most of
+the 15 were weak or net-negative (LTC −0.13, ETC −0.07, FIL −0.11, INJ −0.11,
+AAVE −0.03, APT −0.05, LDO −0.10). Only a handful lean positive. The donchian
+trend-breakout edge lives in coins that actually TREND — "boring" large-caps
+chop and don't reward breakouts.
+
+Best-5 positive expansion (NEAR, ARB, SUI, ICP, ATOM) as a diversified GROUP:
+**meanR +0.213, t +2.12, n=610** — significant. Adding them:
+
+| universe | meanR | t | n |
+|---|---|---|---|
+| Original 12 | +0.360 | +4.34 | 2,812 |
+| **Expanded 17** (+NEAR,ARB,SUI,ICP,ATOM) | **+0.334** | **+4.74** | 3,422 |
+
+**Recommendation: expand to the validated 17-coin universe** — keeps the edge
+strong, adds ~22% more trades. This is the honest frequency ceiling: beyond
+these 17, adding coins means trading where the edge does NOT exist (dilutes /
+loses). More trade frequency must come from the squeeze @1h leg, not from
+diluting donchian with edgeless coins.
+
+Validated 17-coin `UNIVERSE_INCLUDE`:
+BTC,ETH,SOL,BNB,XRP,DOGE,ADA,AVAX,LINK,TON,TRX,DOT,NEAR,ARB,SUI,ICP,ATOM
