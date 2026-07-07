@@ -228,3 +228,38 @@ decision: max-eff (RISK_PCT=3, MAX_OPEN_TRADES=6,
 MAX_PORTFOLIO_EXPOSURE_PCT=200).** Kill switch (−10% of balance) and
 profit lock (+10% of balance) both scale with live balance and cap the
 extra variance.
+
+---
+
+# Phase-3 — dedicated scalp hunt (real-trader tactics)
+
+Owner asked to test the scalp tactics real discretionary/copy traders use,
+beyond what was already killed. All on real 15m (12 coins) / 5m (5 majors),
+split-half holdout, taker+slip round-trip cost 0.14%, R-normalised. Every
+cell net-negative on BOTH halves — a comprehensive, robust NO-GO.
+
+| family (tactic) | best holdout R | verdict |
+|---|---|---|
+| Liquidity-sweep / stop-hunt reversal (ICT/SMC) | −0.38R (buffered stop) | FAIL |
+| VWAP reversion (fade extension to mean) | −0.27R | FAIL |
+| RSI2 pure mean-reversion (Connors) | −0.19R | FAIL |
+| Opening-range breakout (ORB) | −0.30R | FAIL |
+| Momentum continuation (buy strength + trailing) | −0.40R (15m), −0.73R (5m) | FAIL |
+
+Combined with the earlier waves, **~10 distinct families / 50+ cells of
+short-timeframe scalping are all net-negative after realistic costs**, and
+they get WORSE the lower the timeframe (5m > 15m loss). 
+
+**Fundamental reason:** taker round-trip cost (~0.14%) is a large fraction of
+any scalp-sized target; the gross signal on OHLCV is at best marginal and the
+cost erases it. There is no taker-executable, OHLCV-signal scalp edge on this
+instrument. Enabling scalp would require EITHER maker/passive execution
+(tested earlier for reversion — adverse selection makes it worse) OR an
+order-flow / L2-microstructure edge (needs tick/L2 data + low-latency
+infrastructure, not available here). 
+
+**Definitive verdict: scalp is a NO-GO with the available execution and data.**
+The only positive edges remain the swing/positional ones: donchian_trend 4h
+(+0.284R), squeeze_breakout 1h (+0.088R), carry (slow, +~4%/yr). The closest
+thing to "frequent scalp action" that is actually positive is squeeze @1h
+(~3–6 trades/day fleet-wide).
