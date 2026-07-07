@@ -212,3 +212,40 @@ diluting donchian with edgeless coins.
 
 Validated 17-coin `UNIVERSE_INCLUDE`:
 BTC,ETH,SOL,BNB,XRP,DOGE,ADA,AVAX,LINK,TON,TRX,DOT,NEAR,ARB,SUI,ICP,ATOM
+
+---
+
+## 11. Frequency-optimization campaign (Phase-5) — the frontier is mapped
+
+Owner: maximise frequency AND yield, push limits. Swept squeeze and donchian
+parameters toward MORE trades on the 17-coin universe, split-half holdout,
+measuring net-R, t, AND trades/day.
+
+**Squeeze — cannot be pushed:** loosening the percentile (Q 20→50) raises
+trades (5→9/day) but the edge DIES on holdout (H12 holds strongly negative;
+looser Q holdout t<0.8). Best remains the deployed 24/Q20/H24 (~3/day). No
+free frequency.
+
+**Donchian — robust; a real frequency/yield frontier (all cells PASS holdout
+t 2.2–2.9):**
+
+| cell (N,X) | trades/day | R/trade | daily-R (yield) |
+|---|---|---|---|
+| N30/X20 | 1.3 | +0.283 | **0.368** (max yield) |
+| N20/X20 (deployed) | 1.4 | +0.252 | 0.353 |
+| N10/X20 | 1.6 | +0.207 | 0.331 (best freq/yield balance) |
+| N10/X10 | **2.2** (max freq) | +0.119 | 0.262 |
+
+**Finding: more frequency costs yield** — a faster exit (X=10) raises trades
++57% but cuts total yield −26%. The deployed config sits near the yield-optimal
+frontier. Optional frequency bump: N10/X20 (`DON_ENTRY_BARS=10`) gives +14%
+trades at ~94% of the yield — a defensible "more action" choice, still
+validated.
+
+**Combined validated ceiling (17 coins):** donchian ~1.4–2/day + squeeze
+~3/day ≈ **~4.5–5 trades/day**. Beyond this, more frequency requires either
+edgeless coins (proven loss), edge-killing looseness (proven), or scalp
+(proven dead across 10 families). The directional-frequency frontier is now
+fully mapped. Genuinely MORE activity with positive edge must come from a
+DIFFERENT edge (carry — uncorrelated funding harvest), not from pushing the
+directional edges past their limits.
