@@ -622,11 +622,11 @@ def _parse_one_spec(base: Config, spec: str) -> Optional[StrategySpec]:
     spec = spec.strip()
     if not spec:
         return None
-    # profile@ltf/htf[:ts=N][:ch=N]
+    # profile@ltf/htf[:ts=N][:ch=N][:en=N][:atr=X]
     head, *opts = spec.split(":")
     if "@" not in head or "/" not in head:
         raise ValueError(f"bad STRATEGIES spec '{spec}' "
-                         "(want profile@ltf/htf[:ts=N][:ch=N])")
+                         "(want profile@ltf/htf[:ts=N][:ch=N][:en=N][:atr=X])")
     profile, tfs = head.split("@", 1)
     ltf, htf = tfs.split("/", 1)
     profile, ltf, htf = profile.strip(), ltf.strip(), htf.strip()
@@ -638,6 +638,12 @@ def _parse_one_spec(base: Config, spec: str) -> Optional[StrategySpec]:
             ts = int(o[3:]); overrides["time_stop_bars"] = ts
         elif o.startswith("ch="):
             ch = int(o[3:]); overrides["don_exit_bars"] = ch
+        elif o.startswith("en="):
+            # donchian entry-channel length (N-bar breakout); detection param only
+            overrides["don_entry_bars"] = int(o[3:])
+        elif o.startswith("atr="):
+            # donchian initial-stop ATR multiple; detection param only
+            overrides["don_atr_mult"] = float(o[4:])
     pcfg = _dc.replace(base, **overrides)
     exit_meta = {
         "exit_ltf": ltf,

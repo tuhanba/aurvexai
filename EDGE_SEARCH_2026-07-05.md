@@ -263,3 +263,57 @@ The only positive edges remain the swing/positional ones: donchian_trend 4h
 (+0.284R), squeeze_breakout 1h (+0.088R), carry (slow, +~4%/yr). The closest
 thing to "frequent scalp action" that is actually positive is squeeze @1h
 (~3–6 trades/day fleet-wide).
+
+---
+
+## Phase 6 (2026-07-07) — Round-2 edge hunt + the fast-momentum answer
+
+Directive: "research OTHER edges, coin/parameter choices are yours, find scalp."
+Two more never-tested execution/signal angles, then the one honest win.
+
+### 6a. Three genuinely-new families — all FAIL on holdout
+
+| family | best HOLDOUT R | holdout t | verdict |
+|---|---|---|---|
+| **Maker** mean-reversion (limit-at-extreme, earns the spread; 4bp not 14bp) | −0.18R (5m), −0.10R (15m) | −35 / −22 | FAIL |
+| Maker MR, taker contrast | −0.42R | −65 | FAIL |
+| Cross-coin **lead-lag** (BTC impulse → alt next bar) | −0.51R (5m), −0.24R (15m) | −111 / −68 | FAIL |
+| **Keltner** band-walk continuation (trail exit) | −0.72R (5m), −0.42R (15m) | −179 / −135 | FAIL |
+
+Key result: **maker execution does NOT rescue mean-reversion.** It roughly
+halves the loss (−0.18 vs −0.42 taker) but the *gross* signal is negative —
+on 5m/15m, extensions **continue**, they do not revert. Cheaper fills can't
+save a wrong-sign edge. Lead-lag is already priced within one bar (negative
+net). Band-walk continuation on fast TF is pure chop-death. This closes the
+maker/lead-lag/microstructure hypotheses on OHLCV.
+
+### 6b. The honest win — push the ONE edge that works DOWN in timeframe
+
+Tick-scalp is dead, but **momentum breakout (donchian) survives to 1h.** This
+is the real bridge between swing and scalp: intraday momentum, not tick-MR.
+Same channel-breakout + reverse-channel exit as the deployed 4h engine, run at
+30m / 1h / 2h, split-half holdout, 17-coin universe.
+
+| TF | best cell (N,X,atr) | HOLDOUT R | holdout t | trades/day (fleet) | verdict |
+|---|---|---|---|---|---|
+| 30m | 20,20,2.0 | −0.019R | −0.5 | 10.2 | FAIL (costs eat it) |
+| **1h** | **48,20,2.0** | **+0.116R** | **2.01** | **5.4** | **PASS** |
+| 1h | 30,20,2.0 | +0.079R | 1.56 | 6.4 | PASS |
+| 1h | 48,20,3.0 | +0.080R | 1.82 | 4.8 | PASS |
+| 2h | 20,10,2.0 | +0.073R | 1.16 | 2.9 | weak+ |
+
+**Triple-validated (1h N=48/X=20/atr=2.0):**
+- Time holdout (2nd half): +0.116R, t=2.01 — PASS
+- Out-of-symbol (train coins ≠ test coins), BOTH folds: t=+2.06 and +2.87
+- Per-coin: **16/17 coins positive**
+- Verdict: **ROBUST**
+
+This is ~4× the frequency of the deployed 4h donchian (1.4→5.4 trades/day
+fleet-wide) while staying holdout-positive. Not a tick-scalp — the data
+proves that cannot exist here — but a validated **fast intraday-momentum
+engine**, deployable today on the same shared account via multi-strategy mode:
+
+    STRATEGIES="donchian_trend@4h/1d  donchian_trend@1h/4h:en=48:ch=20:atr=2.0  squeeze_breakout@1h/4h:ts=24"
+
+Spec parser gained `:en=` (entry-channel length) and `:atr=` (stop multiple)
+so each strategy carries its own momentum parameters on one balance.

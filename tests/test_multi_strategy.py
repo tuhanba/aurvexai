@@ -38,6 +38,25 @@ def test_parse_pairing():
     assert required_timeframes(specs) == ["4h", "1d", "1h"]
 
 
+def test_parse_entry_and_atr_overrides():
+    # The validated fast-momentum spec: 1h donchian, 48-bar entry channel,
+    # 20-bar exit, 2.0×ATR stop — each param carried per-strategy.
+    c = Config()
+    c.strategies = ("donchian_trend@4h/1d "
+                    "donchian_trend@1h/4h:en=48:ch=20:atr=2.0")
+    slow, fast = parse_strategies(c)
+    # slow spec keeps the base defaults (entry 20, atr 2.0)
+    assert slow.pcfg.don_entry_bars == 20
+    # fast spec carries its own entry channel + exit + stop, independently
+    assert fast.name == "donchian_trend@1h/4h"
+    assert fast.pcfg.don_entry_bars == 48
+    assert fast.pcfg.don_exit_bars == 20
+    assert fast.pcfg.don_atr_mult == 2.0
+    assert fast.exit_meta["exit_channel_bars"] == 20
+    assert fast.pcfg.ltf == "1h" and fast.pcfg.htf == "4h"
+    assert required_timeframes(parse_strategies(c)) == ["4h", "1d", "1h"]
+
+
 def test_single_fallback_and_dupe_guard():
     c = Config(); c.strategy_profile = "donchian_trend"; c.ltf = "4h"; c.htf = "1d"
     assert [s.name for s in parse_strategies(c)] == ["donchian_trend@4h/1d"]
