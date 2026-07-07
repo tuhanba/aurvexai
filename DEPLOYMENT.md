@@ -302,3 +302,22 @@ STRATEGY_PROFILE is ignored while STRATEGIES is set. Leave STRATEGIES empty to
 return to single-strategy mode. The engine logs `MULTI-STRATEGY mode: ...` on
 start; trades carry their strategy's `exit_ltf` so each is managed on its own
 timeframe.
+
+### Trade ONLY the validated universe (important)
+
+The edge was measured on a specific set of liquid coins — **BTC, ETH, SOL,
+BNB, XRP, DOGE, ADA, AVAX, LINK, TON, TRX, DOT**. The live scanner ranks the
+top `UNIVERSE_SIZE` coins by 24h volume, which on a busy day pulls in exotic /
+newly-listed names (e.g. WLD, CL, XAG, SPCX) whose breakouts fail far more
+often — trading them is trading OFF the validation set and bleeds on false
+breakouts. Pin the universe to the validated coins:
+
+    UNIVERSE_SIZE=12
+    UNIVERSE_INCLUDE=BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT,ADA/USDT:USDT,AVAX/USDT:USDT,LINK/USDT:USDT,TON/USDT:USDT,TRX/USDT:USDT,DOT/USDT:USDT
+
+Sizing note: donchian's wide (2×ATR) stops make each position large in
+notional, so `MAX_PORTFOLIO_EXPOSURE_PCT` (default 200) saturates after ~2
+positions at `RISK_PCT=3` — the 6 slots never fill and diversification stays
+low (high variance). Lowering `RISK_PCT` to ~1.5 fits 3–5 concurrent
+positions under the same exposure cap: same per-trade R-edge, smaller swings,
+better diversification.
