@@ -317,3 +317,43 @@ engine**, deployable today on the same shared account via multi-strategy mode:
 
 Spec parser gained `:en=` (entry-channel length) and `:atr=` (stop multiple)
 so each strategy carries its own momentum parameters on one balance.
+
+---
+
+## Phase 6c (2026-07-07) — Lower-TF push: the hard floor is 1h
+
+Directive: "keep researching edges, target LOWER timeframes." Pushed the one
+working family (donchian momentum) down to 15m/5m with chop-filters, plus two
+never-tested low-TF families. Split-half holdout, taker cost.
+
+**Every low-TF cell FAILS. The edge decays monotonically with timeframe:**
+
+| TF | donchian N48/X20/atr2.0 (holdout R, t) | verdict |
+|---|---|---|
+| **1h** | **+0.116R, t=2.01** | **PASS** |
+| 15m | −0.105R, t=−3.7 | FAIL |
+| 5m | −0.437R, t=−14.5 | FAIL |
+
+Filters help but never cross zero: ATR-expansion filter lifts 15m/N96 to
+−0.037R (near break-even in-sample) but still FAIL on holdout. Volume-spike
+momentum burst (−0.30R @15m, −0.71R @5m) and session-open momentum
+(−0.28R @15m, −0.58R @5m) are pure cost-bleed.
+
+**Why 1h is the mathematical floor (exact):** taker round-trip cost is a fixed
+~0.0014 tax. R-normalised, that tax = cost / stop_distance:
+- 5m:  stop≈0.35% → tax ≈ **0.40R/trade** (matches the −0.44R observed; gross≈−0.04)
+- 15m: stop≈0.60% → tax ≈ **0.23R/trade** (matches −0.11R; gross≈+0.12)
+- 1h:  stop≈1.2%  → tax ≈ **0.12R/trade**, and the gross momentum edge (+0.23R)
+  finally *beats* the tax → net **+0.11R**.
+
+The gross momentum signal is roughly constant per-trade in R terms; the cost
+tax explodes as the stop (and thus the move) shrinks with timeframe. The
+crossover sits between 1h and 15m. **1h is the lowest timeframe where any
+OHLCV+taker edge survives on this instrument — proven, not assumed.** Going
+lower is a losing proposition until execution becomes maker/rebate-based AND an
+order-flow (L2/tick) signal replaces OHLCV — neither available here.
+
+**Consequence for frequency:** the lever for more trades is NOT lower TF (dead
+below 1h) — it is *more coins at 1h*. The validated 1h momentum engine already
+runs the 17-coin universe at ~5.4 trades/day; widening the universe scales that
+linearly, at the same holdout-positive per-trade yield.
