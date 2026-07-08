@@ -388,3 +388,50 @@ fleet-wide. This is the honest frequency lever.
 Rejected (18): AAVE APT BCH ETC FIL INJ LTC OP LDO RUNE ALGO APE AXS CHZ COMP
 CRV DYDX EGLD ENJ HBAR KAVA MANA MKR SAND SNX THETA VET — none clear the
 sign-consistency + holdout-floor bar. The 1h momentum edge stays coin-specific.
+
+---
+
+## Phase 6e (2026-07-07) — Diversifier + amplifier hunt: both NO-GO
+
+Directive: "more options, more money, research every path." Two honest attempts
+to add money beyond universe breadth. Both fail on holdout.
+
+### 6e-1. Uncorrelated sleeve: 4h SWING mean-reversion — FAIL
+
+Idea: momentum loses in chop, MR wins in chop → an independent MR sleeve smooths
+the portfolio. Tested 4h Bollinger-fade (z<−k → revert to mid) and 4h RSI
+reversion (RSI<25/30 → revert to 50), 18 coins, split-half holdout.
+
+| family | best HOLDOUT R | t | verdict |
+|---|---|---|---|
+| Bollinger fade 4h | −0.076R | −4.3 | FAIL |
+| RSI reversion 4h | −0.055R | −4.8 | FAIL |
+
+**Every cell cleanly negative.** Combined with the dead 5m/15m MR (Phase 3/6a),
+this is now conclusive: **mean-reversion is a mirage on this instrument at every
+timeframe.** Crypto perps trend; they do not revert. There is exactly ONE
+behavioral edge here — momentum/trend-continuation — expressed fast (1h),
+slow (4h), and via volatility (squeeze). No MR diversifier exists to add.
+
+### 6e-2. Yield amplifier: pyramiding the 1h momentum edge — FAIL
+
+Idea: add a 2nd/3rd unit to a winner that extends +1R and prints a fresh
+N-bar high → capture more of the big trends = more money per signal.
+
+| variant | base H2 | pyramided H2 total-R/signal |
+|---|---|---|
+| base (no add) | **+0.102R (t1.59)** | — |
+| +1 unit @1.0R | | −0.100R |
+| +1 unit @1.5R | | −0.030R |
+| +2 units @1.0R | | −0.092R |
+
+**Every pyramid variant turns the positive base NEGATIVE on holdout.** The add
+points sit near local extremes that then mean-revert into the shared
+reverse-channel exit, which liquidates the whole stack at once. Adding to
+winners destroys this edge. Keep single-unit sizing.
+
+**Net of Phase 6:** the tradeable space is fully mapped. Positive: momentum
+1h + 4h + squeeze (behavioral), carry (structural). Dead at every TF: scalp,
+mean-reversion, lead-lag, maker-MR, band-walk, pyramiding. The only working
+lever for "more" is **universe breadth** (Phase 6d, +24% and counting) and,
+if wanted, the **carry sleeve** as a genuinely uncorrelated structural add.
