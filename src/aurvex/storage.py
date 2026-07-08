@@ -25,6 +25,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import threading
 import time
 from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, List, Optional
@@ -291,26 +292,46 @@ class Storage:
     def __init__(self, db_path: str, read_only: bool = False):
         self.db_path = db_path
         self.read_only = read_only
+        # Per-thread connections. A single sqlite3.Connection is NOT safe for
+        # concurrent use across threads even with check_same_thread=False — the
+        # dashboard (threaded Flask) fires many API calls at once and racing on
+        # one shared connection raises "InterfaceError: bad parameter or other
+        # API misuse". WAL already supports many readers + one writer, so give
+        # each thread its own connection to the same file instead.
+        self._local = threading.local()
         if read_only:
-            # Structural read-only: open the SQLite file in mode=ro so ANY write
-            # attempt raises. No schema create, no migration, no PRAGMA writes.
-            # Used by the Governor (a separate read-only reporting process) so it
-            # cannot — by construction — mutate trades, config, risk or live state.
-            uri = f"file:{os.path.abspath(db_path)}?mode=ro"
-            self.conn = sqlite3.connect(uri, uri=True, check_same_thread=False,
-                                        timeout=30)
-            self.conn.row_factory = sqlite3.Row
             return
         d = os.path.dirname(db_path)
         if d:
             os.makedirs(d, exist_ok=True)
-        self.conn = sqlite3.connect(db_path, check_same_thread=False, timeout=30)
-        self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA journal_mode=WAL;")
-        self.conn.execute("PRAGMA synchronous=NORMAL;")
-        self.conn.executescript(SCHEMA)
+        # Primary (this-thread) connection: create schema + migrate once.
+        c = self.conn
+        c.executescript(SCHEMA)
         self._migrate()
-        self.conn.commit()
+        c.commit()
+
+    def _new_conn(self) -> sqlite3.Connection:
+        if self.read_only:
+            # Structural read-only: mode=ro so ANY write attempt raises. Used by
+            # the Governor (separate reporting process) so it cannot — by
+            # construction — mutate trades, config, risk or live state.
+            uri = f"file:{os.path.abspath(self.db_path)}?mode=ro"
+            c = sqlite3.connect(uri, uri=True, check_same_thread=False, timeout=30)
+        else:
+            c = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30)
+            c.execute("PRAGMA journal_mode=WAL;")
+            c.execute("PRAGMA synchronous=NORMAL;")
+        c.row_factory = sqlite3.Row
+        return c
+
+    @property
+    def conn(self) -> sqlite3.Connection:
+        """The calling thread's own connection (lazily created)."""
+        c = getattr(self._local, "conn", None)
+        if c is None:
+            c = self._new_conn()
+            self._local.conn = c
+        return c
 
     def _migrate(self) -> None:
         """Idempotent, additive schema migrations for pre-existing databases.
