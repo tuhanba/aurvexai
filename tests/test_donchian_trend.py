@@ -158,3 +158,51 @@ def test_channel_never_fires_for_other_setups(dcfg):
         ex.simulate_fill(t, 106.0, 101.0, 105.0, bar_ts=ts0 + k * TF_MS)
     ex.simulate_fill(t, 105.0, 101.5, 101.8, bar_ts=ts0 + 9 * TF_MS)
     assert t.close_reason != "CHANNEL"
+
+
+# ---------------------------------------------------------------------------
+# Volume-expansion quality gate (edge_search_master) — opt-in, causal
+# ---------------------------------------------------------------------------
+def _vol_snapshot(last_vol, closes_last=102.0, n=120, base=100.0, amp=1.0):
+    """Breakout snapshot whose history volume is 1000 and whose signal (last)
+    bar carries a controllable volume, so the vk filter can be exercised."""
+    now = (now_ms() // TF_MS) * TF_MS
+    start = now - (n + 2) * TF_MS
+    candles = [Candle(start + i * TF_MS, base, base * (1 + amp / 100),
+                      base * (1 - amp / 100), base, 1000.0) for i in range(n)]
+    candles.append(Candle(start + n * TF_MS, base, closes_last * 1.0001,
+                          min(base, closes_last) * 0.9999, closes_last, last_vol))
+    htf = [Candle(start + i * 6 * TF_MS, base, base * 1.02, base * 0.98,
+                  base, 1000.0) for i in range(max(30, n // 4))]
+    return MarketSnapshot(symbol="BTC/USDT:USDT",
+                          candles={TF: candles, HTF: htf},
+                          orderbook=make_book(base), last_price=base,
+                          quote_volume_24h=1e9, funding_rate=0.0, ts=now_ms())
+
+
+def test_vol_filter_blocks_low_volume_breakout(dcfg):
+    # Filter ON, vk=2.5: median history vol = 1000 => threshold 2500. A 1500-vol
+    # breakout is a low-participation fakeout and must be rejected.
+    dcfg.don_vol_filter = True
+    dcfg.don_vol_k = 2.5
+    assert detect_donchian_trend(build_context(dcfg, _vol_snapshot(1500))) is None
+    # a 5000-vol breakout (> 2500) is confirmed and fires
+    sig = detect_donchian_trend(build_context(dcfg, _vol_snapshot(5000)))
+    assert sig is not None and sig.side == LONG
+
+
+def test_vol_filter_off_is_volume_agnostic_parity(dcfg):
+    # Default OFF: the same low-volume breakout fires (unfiltered parity intact).
+    assert dcfg.don_vol_filter is False
+    sig = detect_donchian_trend(build_context(dcfg, _vol_snapshot(1500)))
+    assert sig is not None and sig.side == LONG
+
+
+def test_vk_spec_enables_filter_per_strategy():
+    from aurvex.setups import parse_strategies
+    c = Config()
+    c.strategies = "donchian_trend@1h/4h:en=48:ch=20:atr=2.0:vk=2.5"
+    (spec,) = parse_strategies(c)
+    assert spec.pcfg.don_vol_filter is True
+    assert spec.pcfg.don_vol_k == 2.5
+    assert spec.pcfg.don_entry_bars == 48

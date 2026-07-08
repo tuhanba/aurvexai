@@ -403,6 +403,15 @@ class Config:
     don_tp_r: float = field(default_factory=lambda: _float("DON_TP_R", 1000.0))
     max_stop_dist_pct_don: float = field(
         default_factory=lambda: _float("MAX_STOP_DIST_PCT_DON", 12.0))
+    # Volume-expansion quality gate (edge_search_master 2026-07-08): requiring the
+    # breakout bar's volume > DON_VOL_K x median(prior DON_VOL_WINDOW) more than
+    # TRIPLES the net per-trade edge of the plain 1h donchian (+0.12 -> +0.39R,
+    # PF 1.17 -> 1.60) and is the only 1h cell to pass DSR deflation. OFF by
+    # default (preserves the validated unfiltered parity); enable per-strategy
+    # with the STRATEGIES ":vk=" option.
+    don_vol_filter: bool = field(default_factory=lambda: _bool("DON_VOL_FILTER", False))
+    don_vol_k: float = field(default_factory=lambda: _float("DON_VOL_K", 2.5))
+    don_vol_window: int = field(default_factory=lambda: _int("DON_VOL_WINDOW", 50))
 
     # -- Bugra replica parameters ------------------------------------------
     bugra_stop_pct: float = field(default_factory=lambda: _float("BUGRA_STOP_PCT", 4.49))

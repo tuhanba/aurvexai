@@ -529,6 +529,19 @@ def detect_donchian_trend(ctx: Context) -> Optional[Signal]:
         side = SHORT
     else:
         return None
+    # Volume-expansion quality gate (opt-in). The breakout bar must trade on
+    # > don_vol_k x the median of the prior don_vol_window bars — this keeps the
+    # participation-confirmed breakouts and drops low-volume fakeouts, tripling
+    # the net edge on 1h (edge_search_master). Volume at the signal bar is known
+    # at decision time, so this is causal (no lookahead).
+    if cfg.don_vol_filter:
+        vols = ctx.ltf.volumes
+        w = min(cfg.don_vol_window, sig_i)
+        if w >= 5:
+            window = sorted(vols[sig_i - w:sig_i])
+            median = window[len(window) // 2]
+            if median > 0 and vols[sig_i] < cfg.don_vol_k * median:
+                return None
     stop_dist = cfg.don_atr_mult * ctx.ltf_atr
     stop = close - stop_dist if side == LONG else close + stop_dist
     excess = (close - hh) if side == LONG else (ll - close)
@@ -644,6 +657,11 @@ def _parse_one_spec(base: Config, spec: str) -> Optional[StrategySpec]:
         elif o.startswith("atr="):
             # donchian initial-stop ATR multiple; detection param only
             overrides["don_atr_mult"] = float(o[4:])
+        elif o.startswith("vk="):
+            # donchian volume-expansion gate: breakout vol > vk x median(window).
+            # Setting vk enables the filter for this strategy.
+            overrides["don_vol_k"] = float(o[3:])
+            overrides["don_vol_filter"] = True
     pcfg = _dc.replace(base, **overrides)
     exit_meta = {
         "exit_ltf": ltf,
