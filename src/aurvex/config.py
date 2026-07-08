@@ -497,6 +497,13 @@ class Config:
     heartbeat_stale_ms: int = field(default_factory=lambda: _int(
         "HEARTBEAT_STALE_MS",
         max(120_000, int(6 * _float("CYCLE_INTERVAL_SEC", 20.0) * 1000))))
+    # Stale-data guard for NEW entries: if the freshest CLOSED signal-timeframe
+    # bar is more than this many bar-lengths behind wall clock, the symbol is
+    # skipped for new entries this cycle (reject reason "stale_data"). Open-trade
+    # management is untouched. 0 disables. The synthetic provider is exempt
+    # (deterministic offline timestamps).
+    stale_entry_guard_bars: int = field(
+        default_factory=lambda: _int("STALE_ENTRY_GUARD_BARS", 3))
     # Optional HTTP Basic auth (Task 4): when BOTH are set, every dashboard
     # route requires credentials EXCEPT /health (docker healthcheck hits it
     # from localhost). Unset (default) = behaviour unchanged.
