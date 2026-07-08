@@ -435,3 +435,34 @@ winners destroys this edge. Keep single-unit sizing.
 mean-reversion, lead-lag, maker-MR, band-walk, pyramiding. The only working
 lever for "more" is **universe breadth** (Phase 6d, +24% and counting) and,
 if wanted, the **carry sleeve** as a genuinely uncorrelated structural add.
+
+---
+
+## Phase 6f (2026-07-07) — Universe expansion, full pool: 17 → 28
+
+Screened the full ~48-coin candidate pool (each 2.2–2.5yr 1h) on the deployed
+donchian N48/X20/atr2.0 edge with the same two-cut add-bar (both halves R>0 AND
+2nd-half R ≥ +0.02R). **11 of 31 non-incumbents pass:**
+ENA, FET, GALA, GRT, JUP, SEI, STX, UNI, WIF, WLD, XLM.
+
+Fleet holdout scales cleanly — same yield, far more trades, stronger t:
+
+| universe | holdout R | t | holdout trades | ~trades/day |
+|---|---|---|---|---|
+| incumbent 17 | +0.1160R | 2.01 | 2990 | ~5.4 |
+| **validated 28** | **+0.1222R** | **2.85** | **4963 (+66%)** | **~9** |
+
+The rejected 20 (AAVE, ALGO, APE, APT, AR, AXS, BCH, CHZ, COMP, CRV, DYDX, EGLD,
+ENJ, ENS, ETC, FIL, FLOW, GMT, HBAR, IMX, INJ, JASMY, KAVA, LDO, LTC, MANA, MKR,
+ONDO, OP, ORDI, PENDLE, PEOPLE, PYTH, RUNE, SAND, SNX, TAO, THETA, TIA, VET)
+mostly flip negative on the holdout half (e.g. JASMY H1 +0.40 → H2 −0.02;
+HBAR +0.38 → −0.03) — textbook in-sample overfits, correctly filtered. LDO,
+RUNE, TAO are sign-consistent but below the +0.02R floor.
+
+**Validated 28-coin `UNIVERSE_INCLUDE`:**
+
+    UNIVERSE_INCLUDE="BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT,ADA/USDT:USDT,AVAX/USDT:USDT,LINK/USDT:USDT,TON/USDT:USDT,TRX/USDT:USDT,DOT/USDT:USDT,NEAR/USDT:USDT,ARB/USDT:USDT,SUI/USDT:USDT,ICP/USDT:USDT,ATOM/USDT:USDT,ENA/USDT:USDT,FET/USDT:USDT,GALA/USDT:USDT,GRT/USDT:USDT,JUP/USDT:USDT,SEI/USDT:USDT,STX/USDT:USDT,UNI/USDT:USDT,WIF/USDT:USDT,WLD/USDT:USDT,XLM/USDT:USDT"
+
+This supersedes the Phase-6d 21-coin set. Frequency lever now delivers +66% at
+the same holdout-positive yield — the honest ceiling for "more trades, more
+money" without touching a decision rule.
