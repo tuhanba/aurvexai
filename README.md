@@ -1,13 +1,23 @@
-# AurvexAI — Clean-Core Scalp Engine
+# AurvexAI — Clean-Core Multi-Strategy Futures Engine
 
-A from-scratch, deliberately simple crypto-futures **scalp** engine for Binance
-USDT-M perpetuals. One decision brain, explicit risk, paper/live parity, shadow
+A from-scratch, deliberately simple crypto-futures engine for Binance USDT-M
+perpetuals. One decision brain, explicit risk, paper/live parity, shadow
 learning, funnel observability, a basic dashboard and Telegram alerts.
+It runs the **validated** edges (donchian trend @4h + squeeze breakout @1h);
+scalp was researched to exhaustion on real data and is a formal NO-GO
+(see [`SCALP_EDGE_RESEARCH_REPORT.md`](SCALP_EDGE_RESEARCH_REPORT.md)).
 
-> **Live trading is OFF.** This build sends **no real orders**. The live
-> executor is a gated **stub**. Going live requires a separate, explicit
-> decision and a code change. See [`PAPER_LIVE_PARITY.md`](PAPER_LIVE_PARITY.md)
-> and [`RISK_MODEL.md`](RISK_MODEL.md).
+> **Current truth lives in [`SYSTEM_STATE.md`](SYSTEM_STATE.md).** If any
+> other document contradicts it, `SYSTEM_STATE.md` wins.
+
+> **Live trading is OFF by default.** A real order adapter exists
+> (`live_orders.py`, owner-authorized Stage-3 wave) but it is **disarmed**
+> unless the full five-gate lock is open (`LIVE_ENABLED` + human-confirm
+> token + Telegram confirm + `LIVE_SEND_ORDERS` + API keys) — every default
+> keeps it disarmed and orders SIMULATED. See
+> [`LIVE_READY_CHECKLIST.md`](LIVE_READY_CHECKLIST.md),
+> [`PAPER_LIVE_PARITY.md`](PAPER_LIVE_PARITY.md) and
+> [`RISK_MODEL.md`](RISK_MODEL.md).
 
 ---
 
@@ -121,7 +131,7 @@ src/aurvex/
   engine.py        # async runner loop
   dashboard/       # Flask app + HTML
 main.py            # engine | dashboard | demo | backtest
-tests/             # 55 tests
+tests/             # 661 tests
 ```
 
 ## Tests
@@ -132,6 +142,9 @@ pytest
 
 ## Documentation
 
+- [`SYSTEM_STATE.md`](SYSTEM_STATE.md) — **single source of truth** (edges, verdicts, recommended config)
+- [`SCALP_EDGE_RESEARCH_REPORT.md`](SCALP_EDGE_RESEARCH_REPORT.md) — the complete scalp verdict
+- [`SERVER_RUNBOOK.md`](SERVER_RUNBOOK.md) — owner ops runbook (start/stop/backup/health)
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — components and data flow
 - [`SCALP_STRATEGY_SPEC.md`](SCALP_STRATEGY_SPEC.md) — the 5 setups in detail
 - [`RISK_MODEL.md`](RISK_MODEL.md) — sizing and protection

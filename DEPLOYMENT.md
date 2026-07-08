@@ -221,12 +221,13 @@ Then `docker compose up -d --build` recreates an empty database.
 
 ## Safety reminder
 
-This deployment runs **paper only**. The live executor is a gated stub and sends
-no real orders. Do not set `LIVE_ENABLED=true` without a separate, explicit
-decision and the real-order adapter described in
-[`PAPER_LIVE_PARITY.md`](PAPER_LIVE_PARITY.md).
+This deployment runs **paper only**. A real order adapter exists
+(`live_orders.py`) but it is disarmed behind the five-gate lock
+(`LIVE_ENABLED` + `LIVE_HUMAN_CONFIRM` + Telegram confirm + restart +
+`LIVE_SEND_ORDERS` + keys) — every default keeps orders SIMULATED. Do not
+open any gate without reading [`LIVE_READY_CHECKLIST.md`](LIVE_READY_CHECKLIST.md).
 
-## Parallel strategy stacks (donchian + squeeze)
+## Parallel strategy stacks (donchian + squeeze) — LEGACY option
 
 Two validated edges run side by side, each at its own timeframe (donchian can
 NOT be sped up — its edge lives only at 4h; squeeze only at 1h; every faster
@@ -238,30 +239,6 @@ without diluting either edge.
 - **Secondary (squeeze_breakout, 1h, 24h hold):** `docker-compose.squeeze.yml`
   — its own DB volume, dashboard on **:5001**, epoch `sqz1`, Telegram OFF
   (only one engine may poll the bot).
-
-Bring the secondary up alongside the primary (server, one line each):
-
-    docker compose -f docker-compose.squeeze.yml -p aurvex-sqz up -d --build
-    curl -s http://127.0.0.1:5001/health
-
-Stop / remove just the secondary (primary untouched):
-
-    docker compose -f docker-compose.squeeze.yml -p aurvex-sqz down
-
-Both run at INITIAL_PAPER_BALANCE=200 in paper: returns are percentage-based,
-so 
-## Parallel strategy stacks (donchian + squeeze)
-
-Two validated edges run side by side, each at its own timeframe (donchian can
-NOT be sped up — its edge lives only at 4h; squeeze only at 1h; every faster
-cell measured net-negative). Running both maximises trade frequency without
-diluting either edge.
-
-- Primary (donchian_trend, 4h): the default `docker-compose.yml` stack —
-  Telegram commander, dashboard on :5000, epoch `don1`.
-- Secondary (squeeze_breakout, 1h, 24h hold): `docker-compose.squeeze.yml` —
-  own DB volume, dashboard on :5001, epoch `sqz1`, Telegram OFF (only one
-  engine may poll the bot).
 
 Bring the secondary up alongside the primary (server, one line each):
 
@@ -305,15 +282,15 @@ timeframe.
 
 ### Trade ONLY the validated universe (important)
 
-The edge was measured on a specific set of liquid coins — **BTC, ETH, SOL,
-BNB, XRP, DOGE, ADA, AVAX, LINK, TON, TRX, DOT**. The live scanner ranks the
-top `UNIVERSE_SIZE` coins by 24h volume, which on a busy day pulls in exotic /
-newly-listed names (e.g. WLD, CL, XAG, SPCX) whose breakouts fail far more
-often — trading them is trading OFF the validation set and bleeds on false
-breakouts. Pin the universe to the validated coins:
+The edge is coin-specific. The live scanner ranks the top `UNIVERSE_SIZE`
+coins by 24h volume, which on a busy day pulls in exotic / newly-listed names
+(e.g. WLD, CL, XAG, SPCX) whose breakouts fail far more often — trading them
+is trading OFF the validation set and bleeds on false breakouts. The
+Phase-4 expansion study validated exactly **17 coins** (meanR +0.334,
+t +4.74, n=3,422; adding more measured flat-to-negative). Pin the universe:
 
-    UNIVERSE_SIZE=12
-    UNIVERSE_INCLUDE=BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT,ADA/USDT:USDT,AVAX/USDT:USDT,LINK/USDT:USDT,TON/USDT:USDT,TRX/USDT:USDT,DOT/USDT:USDT
+    UNIVERSE_SIZE=17
+    UNIVERSE_INCLUDE=BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT,ADA/USDT:USDT,AVAX/USDT:USDT,LINK/USDT:USDT,TON/USDT:USDT,TRX/USDT:USDT,DOT/USDT:USDT,NEAR/USDT:USDT,ARB/USDT:USDT,SUI/USDT:USDT,ICP/USDT:USDT,ATOM/USDT:USDT
 
 Sizing note: donchian's wide (2×ATR) stops make each position large in
 notional, so `MAX_PORTFOLIO_EXPOSURE_PCT` (default 200) saturates after ~2
