@@ -466,3 +466,36 @@ RUNE, TAO are sign-consistent but below the +0.02R floor.
 This supersedes the Phase-6d 21-coin set. Frequency lever now delivers +66% at
 the same holdout-positive yield — the honest ceiling for "more trades, more
 money" without touching a decision rule.
+
+---
+
+## Phase 6g (2026-07-07) — Realized frequency: MAX_OPEN_TRADES=4 is HARMFUL
+
+The +0.10R / 9-trades-day backtest assumes every signal is taken. Reality: with
+MAX_OPEN_TRADES slots and multi-bar holds, slots saturate and reject. Portfolio
+sim — merge all 28 coins' 1h momentum signals chronologically, fill greedily
+under a slot cap, measure REALIZED trades/day + holdout yield:
+
+| MAX_OPEN | realized trades/day | holdout R | t |
+|---|---|---|---|
+| 4 (current) | 2.67 | **−0.055R** | −0.68 |
+| 8 | 4.53 | −0.013R | −0.24 |
+| 12 | 6.00 | +0.014R | +0.30 |
+| 16 | 7.15 | +0.049R | +1.13 |
+| ∞ | 8.96 | +0.103R | +2.82 |
+
+**MAX_OPEN_TRADES=4 both throttles frequency AND inverts the edge to negative.**
+Mechanism (adverse selection): long-holding trades lock slots; fresh breakouts
+are rejected while a slot is busy, so the accepted subset is biased toward
+signals that land right after fast exits. The edge needs ~12–16+ concurrent
+slots to survive. This is the root cause of the live "1 trade / 12h" +
+loss-cluster behaviour reported earlier.
+
+**Balance (denge) constraint:** more slots = more concurrent risk. Solution is
+slots↑ AND risk_pct↓ so total concurrent exposure stays bounded and the 10%
+daily-loss kill switch holds the floor. Recommended aggressive-paper retune:
+MAX_OPEN_TRADES 4→12, RISK_PCT 2.0→1.0 (band 0.75–1.5) → ≤12% max concurrent
+risk, ~6 realized trades/day, holdout non-negative and rising. The engine's
+score layer ranks contended candidates for the limited slots, which should lift
+the realized yield above this naive-fill floor. Config-only (sizing inputs);
+decide() untouched, parity intact.
