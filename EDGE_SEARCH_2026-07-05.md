@@ -357,3 +357,34 @@ order-flow (L2/tick) signal replaces OHLCV — neither available here.
 below 1h) — it is *more coins at 1h*. The validated 1h momentum engine already
 runs the 17-coin universe at ~5.4 trades/day; widening the universe scales that
 linearly, at the same holdout-positive per-trade yield.
+
+---
+
+## Phase 6d (2026-07-07) — Universe expansion: 17 → 21 (frequency lever)
+
+Since 1h is the TF floor, the only holdout-safe way to more trades is *more
+coins at 1h*. Screened 28 candidate perps (2.5yr 1h each) on the deployed
+donchian N48/X20/atr2.0 edge. **Two-cut add-bar, both required:**
+(1) sign-consistency — BOTH halves R>0 (kills H1-only overfits);
+(2) holdout floor — 2nd-half R ≥ +0.02R.
+
+**4 of 28 pass: GALA, GRT, UNI, XLM.** (LDO, RUNE sign-consistent but too weak;
+the rest flip negative in H2 — classic overfit signature, correctly rejected.)
+
+Fleet holdout (2nd half) — adding the 4 improves the fleet, doesn't dilute it:
+
+| universe | holdout R | t | holdout trades |
+|---|---|---|---|
+| incumbent 17 | +0.1160R | 2.01 | 2990 |
+| **expanded 21** | **+0.1183R** | **2.27** | **3717 (+24%)** |
+
+Same per-trade yield, +24% frequency, better t. ~5.4 → ~6.7 trades/day
+fleet-wide. This is the honest frequency lever.
+
+**Validated 21-coin `UNIVERSE_INCLUDE` (ccxt full-symbol form):**
+
+    UNIVERSE_INCLUDE="BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT,ADA/USDT:USDT,AVAX/USDT:USDT,LINK/USDT:USDT,TON/USDT:USDT,TRX/USDT:USDT,DOT/USDT:USDT,NEAR/USDT:USDT,ARB/USDT:USDT,SUI/USDT:USDT,ICP/USDT:USDT,ATOM/USDT:USDT,GALA/USDT:USDT,GRT/USDT:USDT,UNI/USDT:USDT,XLM/USDT:USDT"
+
+Rejected (18): AAVE APT BCH ETC FIL INJ LTC OP LDO RUNE ALGO APE AXS CHZ COMP
+CRV DYDX EGLD ENJ HBAR KAVA MANA MKR SAND SNX THETA VET — none clear the
+sign-consistency + holdout-floor bar. The 1h momentum edge stays coin-specific.
