@@ -249,3 +249,62 @@ edgeless coins (proven loss), edge-killing looseness (proven), or scalp
 fully mapped. Genuinely MORE activity with positive edge must come from a
 DIFFERENT edge (carry — uncorrelated funding harvest), not from pushing the
 directional edges past their limits.
+
+---
+
+## 12. Edge-expansion + system wave (2026-07-08, second session wave)
+
+Owner directive: faster data flow, useful Shadow/Friday management, MORE
+edge (not more filters). Pre-registered cells, real archive data 2023-07 →
+2026-06 (1h/4h, 17 validated + 12 new coins), split-half at 2025-01-01,
+taker+slip+funding costs, kill-rule. Campaign trial ledger: 88 → 95.
+
+### Killed (kill-rule, both documented and final)
+
+| cell | H1 | H2 | verdict |
+|---|---|---|---|
+| donchian @4h on 12 NEW coins (PEPE WIF SEI TIA JUP WLD FET STX IMX ENA ONDO HBAR) | +0.63R (t 2.4) | **−0.02R** | **KILL — edge stays coin-specific (3rd confirmation)** |
+| squeeze @1h on expansion-5 + 12 new | +0.055R | **−0.02R** | **KILL — and the expansion-5 are NEGATIVE at 1h** |
+| donchian @1d (17) | +1.29R | −0.01R | KILL |
+| BTC-SMA200 regime hard-filter on donchian @4h | H2 +0.035 vs baseline +0.029, trades −46% | — | NO IMPROVEMENT — regime stays advisory-only |
+| squeeze @2h (17) | +0.066R | +0.071R | WATCH (both halves +, t<2/half; not deployed — TF-correlation stacking) |
+
+### ACCEPTED: squeeze_breakout @4h/1d (ts=24 bars = 96h)
+
+Replication sim: +0.193R, t 4.09, H1 +0.21 / H2 +0.18, 15/17 coins positive
+(calibration: the same sim UNDER-reports the known 1h edge, +0.037 vs
++0.088 harness — conservative). Then the REAL walk-forward harness
+(offline data_override from the archive, warmup 525, funding charged,
+deflated n_trials=95):
+
+| run | net Exp-R | PF | MaxDD @1.5% | DSR | decision |
+|---|---|---|---|---|---|
+| 5 majors | +0.193 | 1.49 | 15.5% | +2.63 | **ACCEPTED** |
+| validated 17 | +0.211 | 1.56 | 9.5% | +3.30 | **ACCEPTED** |
+
+Deployed as the third leg. Combined validated ceiling is now ≈5.5–6
+trades/day (donchian 4h ~1.4–2 + squeeze 1h ~3 + squeeze 4h ~1).
+
+### Engineering shipped with this wave
+
+- **Same profile at two TFs** in STRATEGIES (second instance's setup_type =
+  "profile@ltf"; models.profile_of() keeps risk/exit profile semantics).
+- **Per-strategy universe** (`:u=BTC+ETH+...`): squeeze@1h pinned to its
+  validated 12 — it measured NEGATIVE on the donchian-expansion coins.
+- **Closed-bar-aware kline cache** + **universe re-rank interval**: per-cycle
+  REST calls ~69 → ~17–18 at the deployed config; parity-safe by
+  construction (closed bars only change on bar close). Failed refetch serves
+  last good cache; stale-entry guard covers the tail risk.
+- **SHADOW_READINESS** governor section: explicit activation staircase
+  (stage 1 SHADOW_APPLY ≥50 resolved/setup; stage 2 risk modulation only at
+  N≥100 AND monotone buckets). Friday stays excluded; the governor report
+  is its measured replacement.
+
+### Watch flag (honest)
+
+donchian @4h recent-half softness in the replication sim (2025+ ≈ +0.03R vs
++0.48R in 2023–24; the 5.8y harness validation remains authoritative). The
+30–50-trade paper window is exactly the instrument to confirm or refute
+this. squeeze@4h is strong in BOTH halves including 2025+.
+
+Test floor: 684 green.

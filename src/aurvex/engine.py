@@ -79,9 +79,9 @@ class Engine:
         self._decider_by_setup = {}
         self._exit_by_setup = {}
         for sp in self.specs:
-            self._decider_by_setup[sp.profile] = (
+            self._decider_by_setup[sp.key] = (
                 self.engine if not self.multi else DecisionEngine(sp.pcfg))
-            self._exit_by_setup[sp.profile] = dict(sp.exit_meta)
+            self._exit_by_setup[sp.key] = dict(sp.exit_meta)
         if self.multi:
             log.warning("MULTI-STRATEGY mode: %s (shared account)",
                         " + ".join(s.name for s in self.specs))
@@ -144,8 +144,18 @@ class Engine:
         if not self.multi:
             return self.detector.detect_all(snap)
         out = []
+        base = snap.symbol.split("/", 1)[0].upper()
         for sp in self.specs:
-            out.extend(sp.detector.detect_all(snap))
+            # Per-strategy universe: an edge trades ONLY the coins it was
+            # validated on (empty = shared engine universe).
+            if sp.universe and base not in sp.universe:
+                continue
+            for sig in sp.detector.detect_all(snap):
+                # Disambiguated setup_type routes the signal back to ITS
+                # strategy (decider/exit/shadow); profile_of() recovers the
+                # profile wherever profile semantics are needed.
+                sig.setup_type = sp.key
+                out.append(sig)
         return out
 
     def _decide(self, signal, snap, pf, risk_multiplier: float = 1.0):

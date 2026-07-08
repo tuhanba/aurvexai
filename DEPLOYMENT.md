@@ -266,10 +266,12 @@ double up. This is the "two friendly systems on one line" deployment and it
 supersedes the separate `docker-compose.squeeze.yml` stack (which kept two
 independent balances).
 
-On the server, on the primary stack's `.env` (one line each):
+On the server, on the primary stack's `.env` (one line each; this is the
+validated THREE-leg deployment — squeeze@1h pinned via `u=` to its own
+validated 12 coins, squeeze@4h newly harness-accepted on the 17):
 
     sed -i '/^STRATEGIES=/d' .env
-    printf 'STRATEGIES=donchian_trend@4h/1d squeeze_breakout@1h/4h:ts=24\n' >> .env
+    printf 'STRATEGIES=donchian_trend@4h/1d squeeze_breakout@1h/4h:ts=24:u=BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TON+TRX+DOT squeeze_breakout@4h/1d:ts=24\n' >> .env
     sed -i 's/^GLOBAL_RANKING=.*/GLOBAL_RANKING=true/' .env
     sed -i 's/^LTF_LIMIT=.*/LTF_LIMIT=525/' .env
     docker compose up -d --force-recreate

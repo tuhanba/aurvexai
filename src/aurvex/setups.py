@@ -616,28 +616,42 @@ class StrategySpec:
     pcfg: Config
     exit_meta: dict
     detector: object
+    # setup_type stamped on this spec's signals. Equals ``profile`` normally;
+    # when the SAME profile runs at two timeframes the later instances get
+    # "profile@ltf" so routing / shadow stats / journal stay separate
+    # (models.profile_of() recovers the profile for risk/exit branching).
+    key: str = ""
+    # Optional per-strategy universe restriction (base assets, e.g. {"BTC",
+    # "ETH"}). Empty = trade the shared engine universe. Lets each edge trade
+    # ONLY the coins it was validated on (e.g. squeeze@1h measured negative
+    # on the donchian-only expansion coins).
+    universe: frozenset = frozenset()
 
 
 def _parse_one_spec(base: Config, spec: str) -> Optional[StrategySpec]:
     spec = spec.strip()
     if not spec:
         return None
-    # profile@ltf/htf[:ts=N][:ch=N]
+    # profile@ltf/htf[:ts=N][:ch=N][:u=BTC+ETH+...]
     head, *opts = spec.split(":")
     if "@" not in head or "/" not in head:
         raise ValueError(f"bad STRATEGIES spec '{spec}' "
-                         "(want profile@ltf/htf[:ts=N][:ch=N])")
+                         "(want profile@ltf/htf[:ts=N][:ch=N][:u=BTC+ETH])")
     profile, tfs = head.split("@", 1)
     ltf, htf = tfs.split("/", 1)
     profile, ltf, htf = profile.strip(), ltf.strip(), htf.strip()
     overrides = {"strategy_profile": profile, "ltf": ltf, "htf": htf}
     ts = None
     ch = None
+    universe: frozenset = frozenset()
     for o in opts:
         if o.startswith("ts="):
             ts = int(o[3:]); overrides["time_stop_bars"] = ts
         elif o.startswith("ch="):
             ch = int(o[3:]); overrides["don_exit_bars"] = ch
+        elif o.startswith("u="):
+            universe = frozenset(b.strip().upper()
+                                 for b in o[2:].split("+") if b.strip())
     pcfg = _dc.replace(base, **overrides)
     exit_meta = {
         "exit_ltf": ltf,
@@ -647,7 +661,8 @@ def _parse_one_spec(base: Config, spec: str) -> Optional[StrategySpec]:
     }
     return StrategySpec(name=f"{profile}@{ltf}/{htf}", profile=profile,
                         ltf=ltf, htf=htf, pcfg=pcfg, exit_meta=exit_meta,
-                        detector=SetupDetector(pcfg))
+                        detector=SetupDetector(pcfg), key=profile,
+                        universe=universe)
 
 
 def parse_strategies(cfg: Config) -> List[StrategySpec]:
@@ -663,6 +678,21 @@ def parse_strategies(cfg: Config) -> List[StrategySpec]:
         if s.name in seen:
             raise ValueError(f"duplicate strategy spec {s.name}")
         seen.add(s.name)
+    # Same profile at several timeframes: the FIRST instance keeps the bare
+    # profile as its key (shadow-history continuity for existing deployments);
+    # later instances are disambiguated as "profile@ltf".
+    profile_counts = {}
+    for s in specs:
+        profile_counts[s.profile] = profile_counts.get(s.profile, 0) + 1
+    first_seen = set()
+    for s in specs:
+        if profile_counts[s.profile] > 1 and s.profile in first_seen:
+            s.key = f"{s.profile}@{s.ltf}"
+        first_seen.add(s.profile)
+    keys = [s.key for s in specs]
+    if len(keys) != len(set(keys)):
+        raise ValueError(f"strategy keys not unique: {keys} "
+                         "(same profile may appear once per LTF)")
     return specs
 
 

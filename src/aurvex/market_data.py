@@ -20,10 +20,11 @@ import logging
 import math
 import random
 import zlib
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .config import Config
-from .models import Candle, MarketSnapshot, OrderBook, closed_view
+from .models import (Candle, MarketSnapshot, OrderBook, closed_view,
+                     interval_to_ms, now_ms)
 
 _log = logging.getLogger("aurvex.market_data")
 
@@ -49,6 +50,20 @@ class CCXTProvider(MarketDataProvider):
         # get_snapshot() need not call fetch_ticker per symbol (saves N requests
         # per cycle and one failure point).
         self._volume_cache: Dict[str, float] = {}
+        # Universe (fetch_tickers is the heaviest public call): re-ranked only
+        # every universe_refresh_sec, served from cache in between. Membership
+        # changes on the minutes scale add nothing — and with UNIVERSE_INCLUDE
+        # pinned (the validated deployment) it matters even less.
+        self._universe_cache: List[str] = []
+        self._universe_next_ms: int = 0
+        # Closed-bar-aware kline cache. The decision path consumes CLOSED
+        # candles only, and a timeframe's closed view can only change when a
+        # new bar closes — so refetching 4h/1d klines every 20s cycle buys
+        # nothing. Cache per (symbol, tf): serve until a new bar can exist,
+        # then refetch. Cuts the per-cycle REST calls by ~an order of
+        # magnitude at the deployed 17×(1h+4h+1d) configuration.
+        self._kline_cache: Dict[Tuple[str, str], List[Candle]] = {}
+        self._kline_next_ms: Dict[Tuple[str, str], int] = {}
 
     @property
     def exchange(self):
@@ -64,11 +79,16 @@ class CCXTProvider(MarketDataProvider):
         return self._ex
 
     def load_universe(self) -> List[str]:
+        if (self.cfg.universe_refresh_sec > 0 and self._universe_cache
+                and now_ms() < self._universe_next_ms):
+            return list(self._universe_cache)
         ex = self.exchange
         try:
             tickers = ex.fetch_tickers()
         except Exception as exc:
             _log.warning("fetch_tickers failed (%s); volume ranking degraded", exc)
+            if self._universe_cache:      # keep the last good ranking
+                return list(self._universe_cache)
             tickers = {}
         rows = []
         vol_cache: Dict[str, float] = {}
@@ -85,15 +105,49 @@ class CCXTProvider(MarketDataProvider):
             rows.append((sym, qv))
         rows.sort(key=lambda x: x[1], reverse=True)
         self._volume_cache = vol_cache
-        return [s for s, _ in rows]
+        self._universe_cache = [s for s, _ in rows]
+        self._universe_next_ms = now_ms() + self.cfg.universe_refresh_sec * 1000
+        return list(self._universe_cache)
+
+    def _fetch_klines(self, symbol: str, tf: str, limit: int) -> Optional[List[Candle]]:
+        """CLOSED candles for (symbol, tf), served from the closed-bar-aware
+        cache when no new bar can have closed since the last fetch.
+
+        The closed view of a timeframe only changes when a bar closes, so the
+        earliest time new data can exist is ``last_closed.ts + 2 × tf`` (the
+        bar after the last closed one completes). Until then a refetch returns
+        byte-identical decision inputs — serving the cache is parity-safe and
+        removes the vast majority of per-cycle kline calls at 4h/1d.
+
+        On a failed refetch the last good cache is returned (best-effort); the
+        engine's stale-entry guard blocks NEW entries if it ever gets too old.
+        """
+        key = (symbol, tf)
+        cached = self._kline_cache.get(key)
+        if (self.cfg.kline_cache_enabled and cached
+                and now_ms() < self._kline_next_ms.get(key, 0)):
+            return cached
+        try:
+            raw = self.exchange.fetch_ohlcv(symbol, tf, limit=limit)
+        except Exception as exc:
+            _log.debug("fetch_ohlcv failed %s %s: %s", symbol, tf, exc)
+            return cached
+        if not raw:
+            return cached
+        candles = closed_view([Candle.from_ccxt(r) for r in raw], tf)
+        if not candles:
+            return cached
+        self._kline_cache[key] = candles
+        self._kline_next_ms[key] = candles[-1].ts + 2 * interval_to_ms(tf)
+        return candles
 
     def get_snapshot(self, symbol: str,
                      timeframes: Optional[List[str]] = None) -> Optional[MarketSnapshot]:
         ex = self.exchange
-        # Hot path: only the data the decision actually needs. Klines +
-        # one order book. last_price comes from the latest close; 24h volume
-        # from the cache populated by load_universe(); funding is unused by the
-        # current setups so it is not fetched here.
+        # Hot path: only the data the decision actually needs. Klines (via the
+        # closed-bar cache) + one LIVE order book per snapshot. 24h volume
+        # comes from the cache populated by load_universe(); funding is unused
+        # by the current setups so it is not fetched here.
         #
         # Multi-strategy mode passes the union of every strategy's timeframes
         # (e.g. 1h+4h+1d) so ONE snapshot serves all detectors; default keeps
@@ -101,32 +155,29 @@ class CCXTProvider(MarketDataProvider):
         limit_for = {self.cfg.ltf: self.cfg.ltf_limit,
                      self.cfg.htf: self.cfg.htf_limit}
         tfs = timeframes or [self.cfg.ltf, self.cfg.htf]
+        candles: Dict[str, List[Candle]] = {}
+        for tf in tfs:
+            rows = self._fetch_klines(symbol, tf,
+                                      limit_for.get(tf, self.cfg.ltf_limit))
+            if not rows:
+                return None
+            candles[tf] = rows
         try:
-            raw = {tf: ex.fetch_ohlcv(symbol, tf,
-                                      limit=limit_for.get(tf, self.cfg.ltf_limit))
-                   for tf in tfs}
             ob = ex.fetch_order_book(symbol, limit=self.cfg.orderbook_depth)
         except Exception as exc:
-            _log.debug("ccxt snapshot failed for %s: %s", symbol, exc)
+            _log.debug("ccxt orderbook failed for %s: %s", symbol, exc)
             return None
-
-        if any(not rows for rows in raw.values()):
-            return None
-
-        candles = {tf: [Candle.from_ccxt(r) for r in rows]
-                   for tf, rows in raw.items()}
         orderbook = OrderBook(bids=ob.get("bids", []), asks=ob.get("asks", []))
-        # last_price = most recent (possibly forming) close: a realistic live
-        # tick for spread/slippage. The DECISION path consumes closed candles
-        # only (see MarketSnapshot.closed_ltf); we also drop the in-progress bar
-        # here so any consumer reading the raw candles directly is safe too.
-        last_close = candles[tfs[0]][-1].close
-        candles = {tf: closed_view(c, tf) for tf, c in candles.items()}
+        # last_price = live order-book mid (fetched fresh every snapshot): a
+        # realistic current tick for spread/slippage guards. Falls back to the
+        # newest CLOSED close when the book is empty. The DECISION path
+        # consumes closed candles only (see MarketSnapshot.closed_ltf).
+        last_price = orderbook.mid or candles[tfs[0]][-1].close
         return MarketSnapshot(
             symbol=symbol,
             candles=candles,
             orderbook=orderbook,
-            last_price=last_close,
+            last_price=last_price,
             quote_volume_24h=self._volume_cache.get(symbol, 0.0),
             funding_rate=0.0,
         )

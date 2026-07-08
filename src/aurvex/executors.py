@@ -33,6 +33,7 @@ from typing import List, Optional, Sequence, Tuple
 
 from .config import Config
 from .models import (LIVE, LONG, OPEN, PAPER, SHORT, CLOSED, Decision, Trade,
+                     profile_of,
                      TPTarget, now_ms)
 
 _log = logging.getLogger("aurvex.executors")
@@ -369,7 +370,7 @@ class BaseExecutor:
         if _chan_bars is None:
             _chan_bars = self.cfg.don_exit_bars
         _chan_bars = int(_chan_bars)
-        if (bar_ts is not None and trade.setup_type == "donchian_trend"
+        if (bar_ts is not None and profile_of(trade.setup_type) == "donchian_trend"
                 and _chan_bars > 0 and trade.status == OPEN):
             hist = list(trade.metadata.get("chan_hist") or [])
             x = _chan_bars

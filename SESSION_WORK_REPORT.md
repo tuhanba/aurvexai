@@ -110,3 +110,54 @@ evidence-collection window.
 3. Return with the numbers for the live decision.
 4. (Optional engineering, separate wave) carry executor port — the only
    validated-but-unbuilt strategy.
+
+---
+
+# Wave 2 (same day, 2026-07-08): edge expansion + data speed + shadow
+
+Owner directive: faster data flow, useful Shadow/Friday management, MORE
+edge without diluting — "you are the system owner."
+
+## Research (real archive data, pre-registered, kill-rule; trials 88 → 95)
+
+- **NEW VALIDATED EDGE: squeeze_breakout @4h/1d (ts=24 = 96h)** — through
+  the REAL walk-forward harness offline (archive data_override, deflated
+  n_trials=95): net +0.193R / PF 1.49 / DD 15.5% / DSR +2.63 on the 5
+  majors; net +0.211R / PF 1.56 / DD 9.5% / DSR +3.30 on the validated 17.
+  Both split halves positive in the replication sim (+0.21/+0.18), 15/17
+  coins. Deployed as the third strategy leg.
+- **Killed honestly:** donchian on 12 new coins (H1 +0.63 → H2 −0.02 —
+  coin-specificity confirmed again); squeeze@1h on expansion/new coins
+  (negative — actionable: restrict squeeze@1h to its validated 12);
+  donchian@1d (H2 ~0); BTC-SMA200 regime hard-filter (no H2 improvement,
+  −46% trades → regime stays advisory). squeeze@2h = WATCH, not deployed.
+- New combined validated frequency ceiling: **≈5.5–6 trades/day**.
+
+## Code shipped (all tested)
+
+1. **Same profile at two TFs** in STRATEGIES: spec keys, setup_type
+   disambiguation ("squeeze_breakout@4h"), `models.profile_of()` for
+   profile-semantics sites in risk/executors/decision.
+2. **Per-strategy universe** `:u=BTC+ETH+...` — each edge trades only its
+   validated coins.
+3. **Closed-bar-aware kline cache** (`KLINE_CACHE_ENABLED`, default on) +
+   **universe re-rank interval** (`UNIVERSE_REFRESH_SEC=600`): per-cycle
+   REST calls ~69 → ~17–18 at the deployed config; order book stays live;
+   failed refetch falls back to last good cache (stale-entry guard covers
+   the tail). Parity-safe by construction.
+4. **SHADOW_READINESS** governor section: explicit activation staircase
+   (stage 1 SHADOW_APPLY ≥50 resolved/setup; stage 2 risk modulation needs
+   N≥100 AND monotone buckets). Friday remains excluded by design; the
+   governor report is its measured replacement.
+
+## Tests
+
+`pytest`: **684 passed** (661 → 684: +7 multi-TF/universe, +10 kline cache,
++6 shadow readiness). Offline demo end-to-end OK.
+
+## Docs
+
+SYSTEM_STATE.md §2/§6/§7/§8/§10/§11/§12, dossier §12, FINAL_OWNER_DECISION
+(.env + monitoring), DEPLOYMENT.md (3-leg block), .env.example (u= + new
+knobs). Research scripts archived: scripts/fetch_swing_klines.py,
+scripts/edge_expansion.py, scripts/harness_sqz4h.py.

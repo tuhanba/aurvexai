@@ -1,8 +1,9 @@
 # FINAL_OWNER_DECISION.md — clear answers, no hedging
 
-**Date: 2026-07-08.** Written after the final scalp research wave and the
+**Date: 2026-07-08 (updated same day, wave 2: edge expansion).** Written
+after the final scalp research wave, the edge-expansion wave and the
 full-system readiness audit. Numbers and sources: `SYSTEM_STATE.md`,
-`SCALP_EDGE_RESEARCH_REPORT.md`.
+`SCALP_EDGE_RESEARCH_REPORT.md`, `AURVEXAI_RESEARCH_DOSSIER.md` §12.
 
 ## 1. Is this system ready for paper?
 
@@ -23,10 +24,12 @@ clean reconcile. This is the owner's decision to make LATER — not now.
 
 ## 3. What is the fastest VALID setup?
 
-Multi-strategy **donchian_trend @4h + squeeze_breakout @1h** on the pinned
-17-coin universe ≈ **4.5–5 trades/day fleet-wide**. That is the measured
-frequency ceiling with positive edge. Optional validated bump:
-`DON_ENTRY_BARS=10` (+14% trades at ~94% of yield).
+Three-leg multi-strategy: **donchian_trend @4h (17 coins) +
+squeeze_breakout @1h (its validated 12 only) + squeeze_breakout @4h (17,
+newly harness-ACCEPTED: net +0.21R, PF 1.56, DSR +3.30)** ≈ **5.5–6
+trades/day fleet-wide**. That is the measured frequency ceiling with
+positive edge. Optional validated bump: `DON_ENTRY_BARS=10` (+14% donchian
+trades at ~94% of yield).
 
 **Scalp is not and will not be the fast option.** Four campaigns, ~17
 families, 60+ cells, all net-negative after cost — including this session's
@@ -59,7 +62,7 @@ equity swings of the 2% config. The kill switch (−10%/day) and profit lock
 AX_MODE=paper
 RISK_PROFILE=aggressive_paper
 INITIAL_PAPER_BALANCE=200
-STRATEGIES=donchian_trend@4h/1d squeeze_breakout@1h/4h:ts=24
+STRATEGIES=donchian_trend@4h/1d squeeze_breakout@1h/4h:ts=24:u=BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TON+TRX+DOT squeeze_breakout@4h/1d:ts=24
 GLOBAL_RANKING=true
 RANK_KEY=edge
 LTF_LIMIT=525
@@ -70,6 +73,8 @@ MAX_LEVERAGE=10
 UNIVERSE_SIZE=17
 UNIVERSE_INCLUDE=BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT,ADA/USDT:USDT,AVAX/USDT:USDT,LINK/USDT:USDT,TON/USDT:USDT,TRX/USDT:USDT,DOT/USDT:USDT,NEAR/USDT:USDT,ARB/USDT:USDT,SUI/USDT:USDT,ICP/USDT:USDT,ATOM/USDT:USDT
 STALE_ENTRY_GUARD_BARS=3
+KLINE_CACHE_ENABLED=true
+UNIVERSE_REFRESH_SEC=600
 LIVE_ENABLED=false
 LIVE_SEND_ORDERS=false
 DASHBOARD_AUTH_USER=<pick-a-user>
@@ -120,10 +125,15 @@ trades and ends with a canary, not a switch-flip.
 
 ## 9. What to monitor for the next 30–50 trades
 
-Per strategy (dashboard + `/summary` in Telegram):
-1. **Expectancy (net R/trade)** — donchian should trend toward +0.2…+0.3R,
-   squeeze toward +0.05…+0.1R. Alarm: either persistently below −0.1R after
-   ≥20 trades of that strategy.
+Per strategy (dashboard + `/summary` in Telegram; the 4h squeeze leg
+reports separately as `squeeze_breakout@4h`):
+1. **Expectancy (net R/trade)** — donchian toward +0.2…+0.3R, squeeze@1h
+   toward +0.05…+0.1R, squeeze@4h toward +0.15…+0.2R. Alarm: any leg
+   persistently below −0.1R after ≥20 trades of that leg. Special watch:
+   donchian's 2025+ half measured soft in the replication sim — if donchian
+   paper expectancy sits near zero after 30 trades while squeeze@4h
+   performs, that soft-regime flag is confirmed and sizing should shift
+   (owner decision, not automatic).
 2. **Stop quality** — losses should cluster at ≈−1.0R. Worse-than-−1.2R
    losses mean slippage/liquidation-buffer problems, not signal problems.
 3. **Diversification** — 3–5 concurrent positions, not 2; exposure-cap

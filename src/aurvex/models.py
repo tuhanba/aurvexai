@@ -40,6 +40,18 @@ def new_id() -> str:
     return uuid.uuid4().hex[:16]
 
 
+def profile_of(setup_type: str) -> str:
+    """Strategy profile behind a setup_type.
+
+    In multi-strategy mode the SAME profile may run at two timeframes; the
+    duplicated instance's signals/trades carry a disambiguated setup_type
+    ("squeeze_breakout@4h") so routing/shadow/journal stats stay separate.
+    Any code that branches on the PROFILE (risk ceilings, TP contract,
+    channel exit) must compare against this, never the raw string.
+    """
+    return (setup_type or "").split("@", 1)[0]
+
+
 # ---------------------------------------------------------------------------
 # Market data
 # ---------------------------------------------------------------------------

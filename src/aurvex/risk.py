@@ -26,7 +26,8 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 from .config import Config
-from .models import LONG, SHORT, MarketSnapshot, Signal, TPTarget
+from .models import (LONG, SHORT, MarketSnapshot, Signal, TPTarget,
+                     profile_of)
 
 
 @dataclass
@@ -89,11 +90,11 @@ def normalize_stop(cfg: Config, side: str, entry: float, stop: float,
             stop = entry * (1 + stop_dist_pct / 100.0)
     # Ceiling: bugra_replica and squeeze_breakout use wider allowed stop
     # distances (fixed 4.49% stop / structural 1×range stop respectively).
-    is_bugra = (setup_type == "bugra_replica" or
+    is_bugra = (profile_of(setup_type) == "bugra_replica" or
                 cfg.strategy_profile == "bugra_replica")
-    is_squeeze = (setup_type == "squeeze_breakout" or
+    is_squeeze = (profile_of(setup_type) == "squeeze_breakout" or
                   cfg.strategy_profile == "squeeze_breakout")
-    is_donchian = (setup_type == "donchian_trend" or
+    is_donchian = (profile_of(setup_type) == "donchian_trend" or
                    cfg.strategy_profile == "donchian_trend")
     if is_donchian:
         max_stop = cfg.max_stop_dist_pct_don
@@ -343,7 +344,7 @@ class RiskManager:
                        setup_type: str = "") -> List[TPTarget]:
         cfg = self.cfg
         sign = 1 if side == LONG else -1
-        is_reversion = (setup_type == "reversion_v1" or
+        is_reversion = (profile_of(setup_type) == "reversion_v1" or
                         cfg.strategy_profile == "reversion_v1")
         if is_reversion:
             # Reversion v1: a single quick TP at rev_tp_r taking 100% — snap the
@@ -359,9 +360,9 @@ class RiskManager:
                 TPTarget(price=tp, fraction=0.0),
                 TPTarget(price=tp, fraction=0.0),
             ]
-        is_squeeze = (setup_type == "squeeze_breakout" or
+        is_squeeze = (profile_of(setup_type) == "squeeze_breakout" or
                       cfg.strategy_profile == "squeeze_breakout")
-        is_donchian = (setup_type == "donchian_trend" or
+        is_donchian = (profile_of(setup_type) == "donchian_trend" or
                        cfg.strategy_profile == "donchian_trend")
         if is_squeeze or is_donchian:
             # No profit target by design — the validated exits are the stop
@@ -377,7 +378,7 @@ class RiskManager:
                 TPTarget(price=tp, fraction=0.0),
                 TPTarget(price=tp, fraction=0.0),
             ]
-        is_bugra = (setup_type == "bugra_replica" or
+        is_bugra = (profile_of(setup_type) == "bugra_replica" or
                     cfg.strategy_profile == "bugra_replica")
         if is_bugra:
             # Fixed-% TP levels: entry ± pct/100 * entry

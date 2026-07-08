@@ -27,7 +27,8 @@ from typing import Optional
 
 from .config import Config
 from .filters import FilterChain, PortfolioView
-from .models import (ALLOW, REJECT, WATCH, Decision, MarketSnapshot, Signal)
+from .models import (ALLOW, REJECT, WATCH, Decision, MarketSnapshot,
+                     Signal, profile_of)
 from .risk import RiskManager
 from .scoring import ScoreBuilder
 
@@ -83,7 +84,8 @@ class DecisionEngine:
         #     They still score, track in shadow, and appear in the funnel —
         #     only the execution step is blocked. Gated here so the shadow
         #     learner can measure them against the full rejected population.
-        if signal.setup_type in cfg.shadow_only_setups:
+        if (signal.setup_type in cfg.shadow_only_setups
+                or profile_of(signal.setup_type) in cfg.shadow_only_setups):
             d.decision = REJECT
             d.failed_stage = "shadow_only"
             d.reject_reason = (f"{signal.setup_type} is shadow-only "

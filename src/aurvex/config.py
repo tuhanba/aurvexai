@@ -169,6 +169,18 @@ class Config:
     # deterministic generator for tests / local demo with no network).
     data_provider: str = field(default_factory=lambda: _str("DATA_PROVIDER", "ccxt"))
 
+    # Closed-bar-aware kline cache (ccxt provider): a timeframe's CLOSED view
+    # can only change when a new bar closes, so klines are refetched only when
+    # a new bar can exist. Parity-safe (identical decision inputs), removes
+    # most per-cycle REST calls at 4h/1d. false = legacy fetch-every-cycle.
+    kline_cache_enabled: bool = field(
+        default_factory=lambda: _bool("KLINE_CACHE_ENABLED", True))
+    # Universe re-rank interval (sec). fetch_tickers is the heaviest public
+    # call and volume ranks don't move minute-to-minute; the pinned
+    # UNIVERSE_INCLUDE deployment barely uses the ranking at all. 0 = every cycle.
+    universe_refresh_sec: int = field(
+        default_factory=lambda: _int("UNIVERSE_REFRESH_SEC", 600))
+
     # -- Universe scanner --------------------------------------------------
     universe_size: int = field(default_factory=lambda: _int("UNIVERSE_SIZE", 40))
     min_quote_volume_24h: float = field(
