@@ -25,9 +25,9 @@ def _aggr_cfg(tmp_path, profile="aurvex_enhanced") -> Config:
     c.data_provider = "synthetic"
     c.telegram_enabled = False
     c.initial_paper_balance = 200.0
-    c.risk_pct = 2.0
-    c.min_risk_pct = 1.0
-    c.max_risk_pct = 3.0
+    c.risk_pct = 1.0
+    c.min_risk_pct = 0.75
+    c.max_risk_pct = 1.5
     c.max_daily_loss_pct = 10.0
     c.strategy_profile = profile
     c.trade_hours_utc = []
@@ -44,14 +44,14 @@ def _pf(balance=200.0, open_notional=0.0, open_margin=0.0, open_count=0):
 
 
 def test_budget_is_two_percent_of_200(tmp_path):
-    """risk budget = balance * risk_pct/100 = 4.00 USDT; daily budget = 20 USDT."""
+    """risk budget = balance * risk_pct/100 = 2.00 USDT (1%); daily budget = 20 USDT."""
     cfg = _aggr_cfg(tmp_path)
-    assert math.isclose(cfg.initial_paper_balance * cfg.risk_pct / 100.0, 4.0)
+    assert math.isclose(cfg.initial_paper_balance * cfg.risk_pct / 100.0, 2.0)
     assert math.isclose(cfg.initial_paper_balance * cfg.max_daily_loss_pct / 100.0, 20.0)
 
 
 def test_full_stop_is_one_R_across_stop_distances(tmp_path):
-    """Risk-level: max_loss == 4.00 (=-1R) for every uncapped stop distance."""
+    """Risk-level: max_loss == 2.00 (=-1R at 200/1%) for every uncapped stop."""
     cfg = _aggr_cfg(tmp_path)
     rm = RiskManager(cfg)
     snap = make_snapshot(price=100.0)
@@ -60,8 +60,8 @@ def test_full_stop_is_one_R_across_stop_distances(tmp_path):
         rr = rm.evaluate(sig, snap, balance=200.0, open_notional=0.0)
         assert rr.allowed, rr.reason
         assert rr.clip_reason == "none"
-        # Full stop loses exactly the 4.00 budget (fee-inclusive sizing => -1R).
-        assert math.isclose(rr.max_loss, 4.0, abs_tol=1e-6)
+        # Full stop loses exactly the 2.00 budget (fee-inclusive sizing => -1R).
+        assert math.isclose(rr.max_loss, 2.0, abs_tol=1e-6)
 
 
 def test_bugra_449_stop_is_one_R(tmp_path):
@@ -76,11 +76,11 @@ def test_bugra_449_stop_is_one_R(tmp_path):
     rr = rm.evaluate(sig, snap, balance=200.0, open_notional=0.0)
     assert rr.allowed, rr.reason
     assert math.isclose(rr.stop_dist_pct, 4.49, abs_tol=1e-6)
-    assert math.isclose(rr.max_loss, 4.0, abs_tol=1e-6)
+    assert math.isclose(rr.max_loss, 2.0, abs_tol=1e-6)
 
 
 def test_paper_full_stop_realises_minus_one_R(tmp_path):
-    """End-to-end: a full stop on a 200 USDT / 2% trade realises ~ -4.00 USDT."""
+    """End-to-end: a full stop on a 200 USDT / 1% trade realises ~ -2.00 USDT."""
     cfg = _aggr_cfg(tmp_path)
     eng = DecisionEngine(cfg)
     ex = PaperExecutor(cfg)
@@ -121,19 +121,21 @@ def _with_env(**env):
 
 
 def test_default_profile_is_aggressive_paper():
-    """Unset RISK_PROFILE → aggressive_paper defaults (200 / 2% / 1-3% / 10%)."""
+    """Unset RISK_PROFILE → aggressive_paper defaults
+    (200 / 1% / 0.75-1.5 / 10% / 12 slots — Phase-6g realized-frequency retune)."""
     restore = _with_env(RISK_PROFILE=None, INITIAL_PAPER_BALANCE=None,
                         RISK_PCT=None, MIN_RISK_PCT=None, MAX_RISK_PCT=None,
-                        MAX_DAILY_LOSS_PCT=None)
+                        MAX_DAILY_LOSS_PCT=None, MAX_OPEN_TRADES=None)
     try:
         c = Config()
         assert c.risk_profile == "aggressive_paper"
         assert c.initial_paper_balance == 200.0
-        assert c.risk_pct == 2.0
-        assert c.min_risk_pct == 1.0
-        assert c.max_risk_pct == 3.0
+        assert c.risk_pct == 1.0
+        assert c.min_risk_pct == 0.75
+        assert c.max_risk_pct == 1.5
         assert c.max_daily_loss_pct == 10.0
-        c.validate()  # band holds: 1.0 <= 2.0 <= 3.0 <= 5
+        assert c.max_open_trades == 12
+        c.validate()  # band holds: 0.75 <= 1.0 <= 1.5 <= 5
     finally:
         restore()
 
@@ -155,16 +157,16 @@ def test_conservative_profile_keeps_legacy_defaults():
 
 def test_explicit_env_overrides_profile_default():
     """An explicit RISK_PCT beats the aggressive profile default of 2.0."""
-    restore = _with_env(RISK_PROFILE="aggressive_paper", RISK_PCT="1.5",
+    restore = _with_env(RISK_PROFILE="aggressive_paper", RISK_PCT="1.25",
                         INITIAL_PAPER_BALANCE="500", MIN_RISK_PCT=None,
                         MAX_RISK_PCT=None, MAX_DAILY_LOSS_PCT=None)
     try:
         c = Config()
-        assert c.risk_pct == 1.5                 # explicit wins
+        assert c.risk_pct == 1.25                # explicit wins
         assert c.initial_paper_balance == 500.0  # explicit wins
-        assert c.min_risk_pct == 1.0             # still from profile
-        assert c.max_risk_pct == 3.0             # still from profile
-        c.validate()                             # 1.0 <= 1.5 <= 3.0 <= 5
+        assert c.min_risk_pct == 0.75            # still from profile
+        assert c.max_risk_pct == 1.5             # still from profile
+        c.validate()                             # 0.75 <= 1.25 <= 1.5 <= 5
     finally:
         restore()
 

@@ -90,7 +90,13 @@ def _int_list(key: str, default: List[int]) -> List[int]:
 # they NEVER touch DecisionEngine.decide()'s allow/reject logic. Paper/live/
 # backtest parity is preserved because the executors all read the same Config.
 #
-#   aggressive_paper  (DEFAULT for the new epoch): 200 / 2% / 1-3% band / 10%
+#   aggressive_paper  (DEFAULT for the new epoch): 200 / 1% / 0.75-1.5 band /
+#                     10% / 12 slots. The 12-slot cap (was 4) is the validated
+#                     realized-frequency fix: EDGE_SEARCH Phase 6g showed a
+#                     4-slot cap adversely-selects and inverts the momentum edge
+#                     to NEGATIVE on holdout; the edge needs ~12+ concurrent
+#                     slots. Per-trade risk is dropped 2%->1% so 12 slots keep
+#                     total concurrent exposure <=12%, under the 10% daily kill.
 #   conservative_paper (legacy paper defaults)   : 1000 / 0.5% / 0.25-1% / 3%
 _PROFILE_DEFAULTS: dict = {
     "conservative_paper": {
@@ -105,12 +111,12 @@ _PROFILE_DEFAULTS: dict = {
     },
     "aggressive_paper": {
         "INITIAL_PAPER_BALANCE": 200.0,
-        "RISK_PCT": 2.0,
-        "MIN_RISK_PCT": 1.0,
-        "MAX_RISK_PCT": 3.0,
+        "RISK_PCT": 1.0,
+        "MIN_RISK_PCT": 0.75,
+        "MAX_RISK_PCT": 1.5,
         "MAX_DAILY_LOSS_PCT": 10.0,
         "DAILY_PROFIT_LOCK_PCT": 10.0,
-        "MAX_OPEN_TRADES": 4,
+        "MAX_OPEN_TRADES": 12,
         "DASHBOARD_PORT": 5000,
     },
 }
@@ -207,8 +213,14 @@ class Config:
         default_factory=lambda: _bool("DAILY_PROFIT_LOCK_ENABLED", True))
     daily_profit_lock_pct: float = field(
         default_factory=lambda: _pfloat("DAILY_PROFIT_LOCK_PCT"))
+    # Total open-notional cap as % of balance. Raised 200->800 so the 12-slot
+    # aggressive profile can actually fill: at 1% risk with ~1.5% momentum stops
+    # each trade sizes to ~60% notional, so 12 concurrent need ~730%. Notional is
+    # sized from risk FIRST (this cap never grows per-trade risk); the free-margin
+    # reserve (20%) + max_leverage (10x) still bound committed margin to ~73%.
+    # Conservative profile is slot-bound at 4 and never reaches this cap.
     max_portfolio_exposure_pct: float = field(
-        default_factory=lambda: _float("MAX_PORTFOLIO_EXPOSURE_PCT", 200.0)
+        default_factory=lambda: _float("MAX_PORTFOLIO_EXPOSURE_PCT", 800.0)
     )
     max_leverage: int = field(default_factory=lambda: _int("MAX_LEVERAGE", 10))
     coin_cooldown_minutes: float = field(default_factory=lambda: _float("COIN_COOLDOWN_MINUTES", 20.0))

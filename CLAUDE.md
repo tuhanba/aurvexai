@@ -68,7 +68,7 @@ Risk detail: `RISK_MODEL.md`.
 
 Everything is env-driven via `.env` (see `.env.example`). The active paper
 defaults come from `RISK_PROFILE` (default `aggressive_paper`): balance 200 USDT,
-risk 2%/trade (band 1–3%), max 4 open, daily-loss kill switch 10%, trade
+risk 1%/trade (band 0.75–1.5%), max 12 open, daily-loss kill switch 10%, trade
 threshold 60, LTF 1m / HTF 15m, `DATA_PROVIDER=ccxt`, `AX_MODE=paper`,
 `LIVE_ENABLED=false`. The legacy 1000 / 0.5% / 3% values are preserved as
 `RISK_PROFILE=conservative_paper`. An explicit env var always overrides its
