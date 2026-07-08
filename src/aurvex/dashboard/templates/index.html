@@ -579,6 +579,33 @@ tr:last-child td{border-bottom:none}
   <!-- Learning section -->
   <div class="section-label">Learning</div>
 
+  <!-- Friday — decision-intelligence brain (READ-ONLY, never vetoes) -->
+  <div class="card" id="brainCard">
+    <div class="card-title">🧠 Friday — decision brain <span id="brainGuarantee" style="font-size:10px;color:var(--muted);font-weight:400">observe-first · advises, never vetoes</span></div>
+    <div class="kpi-sub" id="brainHead" style="margin-bottom:10px">—</div>
+    <div class="grid g2">
+      <div>
+        <div class="row-label" style="margin-bottom:4px">Per-setup measured edge → advisory nudges</div>
+        <div class="tbl-wrap">
+          <table id="brainSetupTbl">
+            <thead><tr><th>setup</th><th>n</th><th>win%</th><th>avg R</th><th>Δscore*</th><th>×risk*</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div>
+        <div class="row-label" style="margin-bottom:4px">Per-coin library edge (top by trades)</div>
+        <div class="tbl-wrap">
+          <table id="brainCoinTbl">
+            <thead><tr><th>coin</th><th>trades</th><th>win%</th><th>avg R</th><th>Δscore*</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="kpi-sub" style="margin-top:8px;font-size:10px;color:var(--muted)">* advisory only — surfaced for insight; the decision brain never applies these as a veto.</div>
+  </div>
+
   <!-- Shadow + Setup performance -->
   <div class="grid g2">
     <div class="card">
@@ -693,9 +720,45 @@ const cls=n=>n>0?'pos':n<0?'neg':'neu';
 const signed=(v,d=2)=>(v>=0?'+':'')+fmt(v,d);
 async function getJSON(u){const r=await fetch(u);return r.json();}
 
+function renderBrain(br){
+  if(!br) return;
+  const fmtR=v=>(v===null||v===undefined)?'—':(v>=0?'+':'')+Number(v).toFixed(3);
+  const pv=(br.predictivity&&(br.predictivity.verdict||br.predictivity.label))||'—';
+  const sm=br.summary||{};
+  const resolved=(sm.resolved!==undefined)?sm.resolved:(sm.n||0);
+  document.getElementById('brainHead').textContent=
+    'predictivity: '+pv+'  ·  resolved samples: '+resolved;
+  // per-setup
+  const stb=document.querySelector('#brainSetupTbl tbody'); stb.innerHTML='';
+  const setups=br.setups||{};
+  Object.keys(setups).sort().forEach(k=>{
+    const s=setups[k], m=s.measured||{};
+    const tr=document.createElement('tr');
+    tr.innerHTML='<td>'+k+'</td><td>'+(m.n||0)+'</td><td>'+
+      (m.win_pct==null?'—':m.win_pct+'%')+'</td><td>'+fmtR(m.avg_r)+
+      '</td><td>'+fmtR(s.advisory_score_delta)+'</td><td>'+
+      (s.advisory_risk_mult==null?'—':'×'+Number(s.advisory_risk_mult).toFixed(2))+'</td>';
+    stb.appendChild(tr);
+  });
+  if(!stb.children.length) stb.innerHTML='<tr><td colspan="6" style="color:var(--muted)">no resolved setups yet</td></tr>';
+  // per-coin
+  const ctb=document.querySelector('#brainCoinTbl tbody'); ctb.innerHTML='';
+  (br.coins||[]).slice(0,12).forEach(c=>{
+    const n=c.total_trades||0; const avg=(n>0&&c.total_r!=null)?c.total_r/n:null;
+    const wp=(n>0)?Math.round((c.wins||0)/n*100):null;
+    const sym=(c.symbol||'').replace('/USDT:USDT','');
+    const tr=document.createElement('tr');
+    tr.innerHTML='<td>'+sym+'</td><td>'+n+'</td><td>'+
+      (wp==null?'—':wp+'%')+'</td><td>'+fmtR(avg)+
+      '</td><td>'+fmtR(c.advisory_score_delta)+'</td>';
+    ctb.appendChild(tr);
+  });
+  if(!ctb.children.length) ctb.innerHTML='<tr><td colspan="5" style="color:var(--muted)">no coin history yet</td></tr>';
+}
+
 async function refresh(){
   try{
-    const [st,fn,me,op,cl,sg,sh,ac,tg,pm,sv,ss,qp,mo,shl,dg,bn] = await Promise.all([
+    const [st,fn,me,op,cl,sg,sh,ac,tg,pm,sv,ss,qp,mo,shl,dg,bn,br] = await Promise.all([
       getJSON('/api/status'), getJSON('/api/funnel'), getJSON('/api/metrics'),
       getJSON('/api/trades/open'), getJSON('/api/trades/closed'),
       getJSON('/api/signals'), getJSON('/api/shadow'),
@@ -703,8 +766,9 @@ async function refresh(){
       getJSON('/api/portfolio_metrics'), getJSON('/api/score_validity'),
       getJSON('/api/system_state'), getJSON('/api/quality'),
       getJSON('/api/missed_opportunity'), getJSON('/api/setup_health'),
-      getJSON('/api/diagnosis'), getJSON('/api/binance')
+      getJSON('/api/diagnosis'), getJSON('/api/binance'), getJSON('/api/brain')
     ]);
+    try{ renderBrain(br); }catch(e){}
 
     // ── Mode banner (Task 4): PAPER / DRY_RUN / TESTNET / LIVE ──
     const banner = st.mode_banner || ((st.mode==='live')?(st.live_enabled?'LIVE':'DRY_RUN'):'PAPER');

@@ -32,7 +32,8 @@ from ..config import load_config
 from ..accounting import compute_accounting
 from ..metrics import compute_metrics
 from ..models import now_ms
-from ..shadow import ShadowLearner, missed_reason_bucket, shadow_mode_label
+from ..shadow import (ShadowLearner, build_coin_library, missed_reason_bucket,
+                      shadow_mode_label)
 from ..storage import Storage
 
 # The canonical reason bucketer now lives in shadow.py (so the governor + shadow
@@ -346,6 +347,54 @@ def create_app(cfg=None) -> Flask:
         st["predictivity_verdict"] = verdict
         st["suggested_action"] = _shadow_suggested_action(st, verdict)
         return jsonify(st)
+
+    @app.route("/api/brain")
+    def brain():
+        """"Friday" brain panel: ONE read-only consolidation of everything the
+        shadow learner measures — predictivity, per-setup measured edge, per-coin
+        library edge, the advisory risk/score nudges it WOULD suggest, score-bucket
+        monotonicity and missed-opportunity outcomes. This is observability only:
+        it NEVER vetoes, overrides or blocks a trade (CLAUDE.md non-negotiables
+        #4/#5). Every section is composed from existing shadow methods and each is
+        guarded so a cold/empty DB degrades to empty rather than 500."""
+        def _safe(fn, default):
+            try:
+                return fn()
+            except Exception:
+                return default
+
+        # setups the brain has actually observed (current epoch), for per-setup edge
+        setups = _safe(lambda: [r["setup_type"] for r in db.conn.execute(
+            "SELECT DISTINCT setup_type FROM shadows "
+            "WHERE setup_type IS NOT NULL").fetchall()], [])
+        setup_intel = {}
+        for s in setups:
+            setup_intel[s] = {
+                "measured": _safe(lambda s=s: shadow.setup_outcome_summary(s), {}),
+                "advisory_score_delta": _safe(lambda s=s: shadow.score_delta(s), 0.0),
+                "advisory_risk_mult": _safe(lambda s=s: shadow.risk_multiplier(s), 1.0),
+            }
+
+        coin_lib = build_coin_library(db)
+        coins = _safe(lambda: coin_lib.all_profiles(), [])[:40]
+        for c in coins:
+            sym = c.get("symbol") if isinstance(c, dict) else None
+            if sym:
+                c["advisory_score_delta"] = _safe(
+                    lambda sym=sym: coin_lib.score_delta(sym), 0.0)
+
+        return jsonify({
+            # hard guarantee, surfaced in the payload itself
+            "advisory_only": True,
+            "never_vetoes": True,
+            "note": "observe-first — the brain informs, it never overrides decide()",
+            "predictivity": _safe(lambda: shadow.predictivity_verdict(), {}),
+            "score_buckets": _safe(lambda: shadow.score_bucket_stats(), {}),
+            "missed_opportunity": _safe(lambda: shadow.missed_opportunity_outcomes(), {}),
+            "setups": setup_intel,
+            "coins": coins,
+            "summary": _safe(lambda: shadow.stats(), {}),
+        })
 
     @app.route("/api/balance")
     def balance():
