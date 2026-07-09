@@ -150,3 +150,22 @@ def test_supported_profiles_validate():
         os.environ["STRATEGY_PROFILE"] = profile
         cfg = Config()
         cfg.validate()  # must not raise
+
+
+def test_aggressive_plus_profile(monkeypatch):
+    monkeypatch.setenv("RISK_PROFILE", "aggressive_plus")
+    for k in ("RISK_PCT", "MIN_RISK_PCT", "MAX_RISK_PCT", "MAX_OPEN_TRADES",
+              "MAX_DAILY_LOSS_PCT", "DAILY_PROFIT_LOCK_PCT",
+              "INITIAL_PAPER_BALANCE"):
+        monkeypatch.delenv(k, raising=False)
+    from aurvex.config import Config
+    c = Config()
+    assert c.risk_pct == 3.0
+    assert c.min_risk_pct == 1.5 and c.max_risk_pct == 4.0
+    assert c.max_open_trades == 6
+    assert c.max_daily_loss_pct == 10.0      # ruin guard NEVER loosened
+    assert c.daily_profit_lock_pct == 20.0   # big days may run
+    assert c.initial_paper_balance == 200.0
+    # explicit env still wins over the profile
+    monkeypatch.setenv("RISK_PCT", "2.5")
+    assert Config().risk_pct == 2.5
