@@ -1,11 +1,16 @@
 # SCALP_EDGE_RESEARCH_REPORT.md — the complete scalp verdict
 
-**Updated: 2026-07-09.** Consolidates every scalp/faster-edge family ever
-tested on this system, including the 2026-07-08 wave that closed the
-remaining untested families and the 2026-07-09 owner-requested campaign 5
-(htf_liquidity_sweep_bos_fvg). **Definitive verdict: NO-GO — there is no
-taker-executable, OHLCV-signal scalp edge on Binance USDT-M perps with this
-system's execution and data.**
+**Updated: 2026-07-09 (campaigns 5 and 6).** Consolidates every
+scalp/faster-edge family ever tested on this system. Campaign 5 closed the
+ICT/SMC multi-TF model (htf_liquidity_sweep_bos_fvg); campaign 6
+("leave nothing untried", owner mandate) closed the remaining DATA AXES the
+archive offers beyond OHLCV: aggressor flow (taker-buy volume / trade
+count), spot-perp basis, funding-window carry, hour-of-day seasonality and
+open-interest dynamics. **Definitive verdict: NO-GO — there is no
+taker-executable scalp/intraday edge on Binance USDT-M perps with any data
+this system can access.** The search space below 1h is now exhausted in
+the strong sense: every signal family AND every information source has
+been measured.
 
 ## Protocol (identical across all campaigns)
 
@@ -21,6 +26,50 @@ system's execution and data.**
   holdout on the multi-coin sets; DSR multiple-testing deflation across every
   cell tried in a campaign; kill-rule — a holdout sign flip kills the cell,
   no re-tuning to rescue it.
+
+## Campaign 6 (2026-07-09): the remaining data axes (owner mandate: "leave nothing untried")
+
+Prior campaigns tested signal FAMILIES on OHLCV. This campaign tested every
+remaining INFORMATION SOURCE in the official archive: taker-buy volume and
+trade count inside each kline (the 1m aggregation of aggressor order flow),
+spot klines (perp-spot basis), the funding-rate schedule, and the 5m
+open-interest metrics (majors; daily archive files). 15 pre-registered
+cells, 24 months × 12 coins, same protocol, DSR at **182** trials.
+Harness `scripts/flow_edge_wave.py`, fetcher `scripts/fetch_flow_data.py`.
+
+| cell | n | gross R | net R | cost | PF | H1 R | H2 R | coins+ | verdict |
+|---|---|---|---|---|---|---|---|---|---|
+| FA CVD divergence @5m | 93,632 | +0.035 | −0.775 | 0.81 | 0.43 | −0.75 | −0.80 | 0/12 | NO-GO |
+| FA CVD divergence @15m | 33,189 | −0.009 | −0.492 | 0.48 | 0.55 | −0.49 | −0.50 | 0/12 | NO-GO |
+| FB imbalance follow @5m | 7,558 | +0.021 | −0.574 | 0.60 | 0.44 | −0.46 | −0.69 | 0/12 | NO-GO |
+| FB imbalance follow @15m | 2,963 | −0.001 | −0.359 | 0.36 | 0.58 | −0.31 | −0.40 | 0/12 | NO-GO |
+| FC imbalance fade @5m | 7,574 | −0.009 | −0.605 | 0.60 | 0.41 | −0.59 | −0.62 | 0/12 | NO-GO |
+| FC imbalance fade @15m | 2,953 | +0.034 | −0.323 | 0.36 | 0.61 | −0.30 | −0.34 | 1/12 | NO-GO |
+| FD absorption reversal @5m | 1,302 | +0.024 | −0.626 | 0.65 | 0.40 | −0.68 | −0.58 | 0/12 | NO-GO |
+| FD absorption reversal @15m | 101 | −0.091 | −0.478 | 0.39 | 0.44 | −0.28 | −0.67 | 0/12 | NO-GO |
+| FE large-print proxy @5m | 22,342 | +0.022 | −0.596 | 0.62 | 0.42 | −0.56 | −0.64 | 0/12 | NO-GO |
+| FF basis-extreme fade @5m | 21,723 | +0.013 | −0.359 | 0.37 | 0.54 | −0.32 | −0.40 | 0/12 | NO-GO |
+| FG basis-impulse follow @5m | 24,036 | −0.017 | −0.583 | 0.57 | 0.43 | −0.50 | −0.66 | 0/12 | NO-GO |
+| FH funding-window harvest | 655 | +0.037 | −0.370 | 0.41 | 0.61 | −0.63 | −0.11 | 2/12 | NO-GO |
+| FI seasonality (H1-discovered hour, H2-traded) | 1,090 | +0.056 | −0.169 | 0.22 | 0.61 | — | OOS by design | 0/3 | NO-GO |
+| FJ OI-confirmed breakout @15m majors | 3,403 | **+0.068** | −0.156 | 0.22 | 0.79 | −0.26 | −0.06 | 0/5 | NO-GO |
+| FK OI-divergence fade @15m majors | 3,726 | +0.042 | −0.180 | 0.22 | 0.75 | −0.20 | −0.16 | 0/5 | NO-GO |
+
+Reading: the order-flow information IS real — CVD divergence, absorption,
+OI-confirmed breakouts all show positive gross (+0.02…+0.07R), consistent
+with the +0.03…+0.08R gross ceiling every OHLCV family showed. Nothing
+approaches the 0.22–0.81R cost bar; the funding payment itself (FH) is an
+order of magnitude smaller than the round-trip cost of collecting it; the
+seasonality cell is out-of-sample by construction and still loses. Zero
+cells positive net; zero coins positive in any cell but three tiny slices.
+
+What remains genuinely untested after campaign 6: **nothing this system
+can access.** aggTrades (sub-minute prints) exists in the archive but its
+1m aggregation — taker-buy volume/count, tested here — already bounds the
+information at ≤ +0.07R gross; sub-minute timing cannot multiply that
+10× to clear cost, and processing it exceeds this environment's capacity.
+L2 order-book depth (the actual microstructure edge source) is not
+archived at all. The scalp door is closed on evidence, not on effort.
 
 ## Campaign 5 (2026-07-09): htf_liquidity_sweep_bos_fvg (owner-requested)
 

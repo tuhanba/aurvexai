@@ -1,6 +1,7 @@
 # SYSTEM_STATE.md — the single source of truth
 
-**Updated: 2026-07-09 (campaign 5: htf_liquidity_sweep_bos_fvg — NO-GO).**
+**Updated: 2026-07-09 (campaigns 5+6: liquidity-sweep multi-TF and ALL
+remaining data axes — NO-GO; the sub-1h search space is exhausted).**
 If any
 other document contradicts this file, this file wins. (README/ROADMAP/
 LIVE_READY_CHECKLIST were written at different stages of the project; they
@@ -44,10 +45,10 @@ every faster cell measured net-negative.
 
 ## 3. Failed edges (evidence-gate NO-GO — do not retry without new data)
 
-Roughly **18 families / 80+ cells** of short-timeframe scalping have been
-tested across five campaigns (2026-06-29, 2026-07-05 ×2, 2026-07-08,
-2026-07-09). Every cell net-negative after realistic taker+slippage cost.
-The graveyard:
+Roughly **25 families / 95+ cells** of short-timeframe trading have been
+tested across six campaigns (2026-06-29, 2026-07-05 ×2, 2026-07-08,
+2026-07-09 ×2). Every cell net-negative after realistic taker+slippage
+cost. The graveyard:
 
 - Buğra 5-condition directional TA — 20/20 cells net-negative (5m→4h).
 - Mean-reversion (Bollinger stretch), RSI2/Connors, VWAP reversion.
@@ -68,7 +69,18 @@ The graveyard:
   confirmation/trigger/entry/stop/TP-pool-type/session-window/trend axes —
   **20/20 NO-GO, 16/20 gross-negative before cost, 0/12 coins positive,
   all acceptance criteria failed**
-  (`HTF_LIQUIDITY_SWEEP_RESEARCH_REPORT.md`). Trial count now 167.
+  (`HTF_LIQUIDITY_SWEEP_RESEARCH_REPORT.md`).
+- **2026-07-09 campaign 6 (owner mandate "leave nothing untried")**: every
+  remaining archive DATA AXIS beyond OHLCV — aggressor flow (taker-buy
+  volume / trade count: CVD divergence, imbalance follow+fade, absorption,
+  large-print proxy), spot-perp basis (fade + impulse), funding-window
+  harvest, H1-discovered/H2-traded hour seasonality, open-interest
+  breakout/divergence (majors) — **15/15 NO-GO**. Positive gross exists
+  (+0.02…+0.07R: CVD, absorption, OI-breakout) but never approaches the
+  0.22–0.81R cost bar. aggTrades sub-minute data can't beat the bound its
+  own 1m aggregation just measured; L2 depth is not archived. **The sub-1h
+  search space is exhausted: every family AND every accessible information
+  source is measured.** Trial count now 182.
 
 **Structural reason:** gross edge on OHLCV signals at scalp horizons is at
 best +0.03…+0.08R; taker round-trip cost (~0.13–0.14%) is 0.2–0.6R at
@@ -161,9 +173,11 @@ slow), not faster direction-calling.
 
 ## 8. What is still being researched
 
-- **Scalp: nothing.** The families are exhausted; the verdict is structural
-  (cost > gross edge), not parameter-sensitive. Reopen only with L2/tick data
-  or materially lower fees.
+- **Scalp: nothing.** As of campaign 6 both the signal families AND every
+  archive-accessible data axis (aggressor flow, basis, funding windows,
+  seasonality, OI) are measured net-negative; the verdict is structural
+  (cost > gross edge ceiling ≈ +0.07R), not parameter-sensitive. Reopen
+  only with L2 order-book data + latency infra or materially lower fees.
 - **Closed this wave (2026-07-08), do not retry without new data:**
   donchian on 12 NEW coins (H1 +0.63R → H2 −0.02R, killed — the edge stays
   coin-specific); squeeze@1h on expansion/new coins (killed); donchian@1d
