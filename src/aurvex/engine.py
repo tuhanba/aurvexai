@@ -35,7 +35,8 @@ from .filters import PortfolioView
 from .funnel import FunnelLogger
 from .journal import TradeJournal
 from .market_data import build_provider
-from .models import ALLOW, OPEN, REJECT, Decision, MarketSnapshot, now_ms
+from .models import (ALLOW, OPEN, REJECT, Decision, MarketSnapshot,
+                     interval_to_ms, now_ms)
 from .quality import grade as quality_grade
 from .scanner import UniverseScanner
 from .setups import SetupDetector, build_context
@@ -78,9 +79,9 @@ class Engine:
         self._decider_by_setup = {}
         self._exit_by_setup = {}
         for sp in self.specs:
-            self._decider_by_setup[sp.profile] = (
+            self._decider_by_setup[sp.key] = (
                 self.engine if not self.multi else DecisionEngine(sp.pcfg))
-            self._exit_by_setup[sp.profile] = dict(sp.exit_meta)
+            self._exit_by_setup[sp.key] = dict(sp.exit_meta)
         if self.multi:
             log.warning("MULTI-STRATEGY mode: %s (shared account)",
                         " + ".join(s.name for s in self.specs))
@@ -143,8 +144,18 @@ class Engine:
         if not self.multi:
             return self.detector.detect_all(snap)
         out = []
+        base = snap.symbol.split("/", 1)[0].upper()
         for sp in self.specs:
-            out.extend(sp.detector.detect_all(snap))
+            # Per-strategy universe: an edge trades ONLY the coins it was
+            # validated on (empty = shared engine universe).
+            if sp.universe and base not in sp.universe:
+                continue
+            for sig in sp.detector.detect_all(snap):
+                # Disambiguated setup_type routes the signal back to ITS
+                # strategy (decider/exit/shadow); profile_of() recovers the
+                # profile wherever profile semantics are needed.
+                sig.setup_type = sp.key
+                out.append(sig)
         return out
 
     def _decide(self, signal, snap, pf, risk_multiplier: float = 1.0):
@@ -166,6 +177,23 @@ class Engine:
         if meta and meta.get("exit_ltf"):
             return meta["exit_ltf"]
         return self.cfg.ltf
+
+    def _snapshot_stale(self, snap) -> bool:
+        """True when the freshest CLOSED signal-timeframe bar is more than
+        STALE_ENTRY_GUARD_BARS bar-lengths behind wall clock — the exchange feed
+        (or an upstream cache) is serving old data, so NEW entries on it would
+        trade a price that no longer exists. Open-trade management is untouched.
+        Synthetic data is exempt: its timestamps are deterministic offline."""
+        if (self.cfg.stale_entry_guard_bars <= 0
+                or self.cfg.data_provider == "synthetic"):
+            return False
+        tf = min(self._snapshot_tfs, key=interval_to_ms) if self.multi else self.cfg.ltf
+        bars = snap.closed_ltf(tf)
+        if not bars:
+            return True
+        tf_ms = interval_to_ms(tf)
+        age_ms = now_ms() - (bars[-1].ts + tf_ms)   # time since that bar closed
+        return age_ms > self.cfg.stale_entry_guard_bars * tf_ms
 
     # -- lifecycle ---------------------------------------------------------
     def request_stop(self, *_: object) -> None:
@@ -415,6 +443,10 @@ class Engine:
                 # 1h+4h+1d) returns None — skip it, never feed None downstream.
                 if snap is None:
                     continue
+                if self._snapshot_stale(snap):
+                    funnel.stats.add_reject("stale_data")
+                    log.warning("stale data %s: skipping new entries", sym)
+                    continue
                 snapshots[sym] = snap
                 # Single-strategy: gate on the one profile's context. Multi:
                 # each detector self-guards on its own timeframe, so we let them
@@ -575,6 +607,10 @@ class Engine:
                     log.debug("snapshot failed %s: %s", sym, exc)
                     continue
                 if snap is None:
+                    continue
+                if self._snapshot_stale(snap):
+                    funnel.stats.add_reject("stale_data")
+                    log.warning("stale data %s: skipping new entries", sym)
                     continue
                 snapshots[sym] = snap
                 # Single-strategy: gate on the profile's context; multi: each

@@ -90,8 +90,12 @@ chain with `&&` (Termius mobile paste breaks on chained commands).
 
 ## Current status
 
-Paper-ready, running the `aggressive_paper` profile (200 USDT / 2% / 10%) on a
-fresh epoch with label-only quality grading and read-only governor reporting.
-Live OFF by design. See `INITIAL_BUILD_REPORT.md` for the readiness report and
-the exact conditions required before any live consideration, and
-`GOVERNOR_QUALITY_OBSERVABILITY_REPORT.md` for the aggressive-paper rollout.
+**`SYSTEM_STATE.md` is the single source of truth** — read it first. Summary:
+the validated deployment is MULTI-STRATEGY paper (donchian_trend @4h +
+squeeze_breakout @1h on one shared 200 USDT account, 17-coin pinned universe,
+RISK_PCT 1.5). Scalp is a formal, final NO-GO after four research campaigns
+(~17 families / 60+ cells all net-negative after cost —
+`SCALP_EDGE_RESEARCH_REPORT.md`); do not add scalp modes. Live stays OFF
+behind the five-gate lock until 30–50 paper trades at validated expectancy
+plus an explicit owner decision (`FINAL_OWNER_DECISION.md`,
+`LIVE_READY_CHECKLIST.md`). Ops: `SERVER_RUNBOOK.md`.

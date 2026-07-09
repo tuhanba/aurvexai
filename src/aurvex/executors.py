@@ -33,6 +33,7 @@ from typing import List, Optional, Sequence, Tuple
 
 from .config import Config
 from .models import (LIVE, LONG, OPEN, PAPER, SHORT, CLOSED, Decision, Trade,
+                     profile_of,
                      TPTarget, now_ms)
 
 _log = logging.getLogger("aurvex.executors")
@@ -123,6 +124,9 @@ class BaseExecutor:
                           "exit_time_stop_bars"),
                       "exit_channel_bars": decision.metadata.get(
                           "exit_channel_bars"),
+                      # Ichimoku TK-cross exit: pre-entry (high, low) history
+                      # so tenkan/kijun are computable from the first bar.
+                      "ich_hl": decision.metadata.get("ich_hl_seed"),
                       "exit_ltf": decision.metadata.get("exit_ltf", "")},
         )
         return trade
@@ -369,7 +373,7 @@ class BaseExecutor:
         if _chan_bars is None:
             _chan_bars = self.cfg.don_exit_bars
         _chan_bars = int(_chan_bars)
-        if (bar_ts is not None and trade.setup_type == "donchian_trend"
+        if (bar_ts is not None and profile_of(trade.setup_type) == "donchian_trend"
                 and _chan_bars > 0 and trade.status == OPEN):
             hist = list(trade.metadata.get("chan_hist") or [])
             x = _chan_bars
@@ -388,6 +392,34 @@ class BaseExecutor:
                     events.append(FillEvent("CHANNEL", close, frac, net, True))
             hist.append(low if trade.side == LONG else high)
             trade.metadata["chan_hist"] = hist[-max(x, 1):]
+
+        # 5) Streaming Ichimoku TK-cross exit (ichimoku_trend): tenkan(9)
+        #    crosses against kijun(26) on a CLOSED bar → close everything at
+        #    this bar's close (reason "TKCROSS"). The (high, low) window is
+        #    seeded at decision time with pre-entry history, so the exit is
+        #    live from the first post-entry bar — identical in engine,
+        #    backtest and (future) live, exactly like the channel exit.
+        if (bar_ts is not None
+                and profile_of(trade.setup_type) == "ichimoku_trend"
+                and trade.status == OPEN):
+            hl = [list(x) for x in (trade.metadata.get("ich_hl") or [])]
+            hl.append([high, low])
+            hl = hl[-26:]
+            trade.metadata["ich_hl"] = hl
+            if len(hl) >= 26:
+                t9 = (max(h for h, _ in hl[-9:])
+                      + min(l for _, l in hl[-9:])) / 2
+                k26 = (max(h for h, _ in hl)
+                       + min(l for _, l in hl)) / 2
+                crossed = (t9 < k26) if trade.side == LONG else (t9 > k26)
+                if crossed:
+                    frac = trade.remaining_fraction
+                    net = self._close_fraction(trade, close, frac)
+                    trade.status = CLOSED
+                    trade.close_time = close_ts
+                    trade.close_price = close
+                    trade.close_reason = "TKCROSS"
+                    events.append(FillEvent("TKCROSS", close, frac, net, True))
         return events
 
     def force_close(self, trade: Trade, price: float, reason: str = "MANUAL") -> FillEvent:

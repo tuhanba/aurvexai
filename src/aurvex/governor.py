@@ -218,6 +218,47 @@ def _tiered_recommendations(diagnosis: Dict[str, Any],
     }
 
 
+def shadow_readiness(shadow_stats: Dict[str, Any],
+                     bucket_stats: Dict[str, Any],
+                     cfg: Config) -> Dict[str, Any]:
+    """Per-strategy SHADOW ACTIVATION readiness — report-only, owner-gated.
+
+    Makes the ROADMAP staircase explicit and measurable instead of implied:
+      stage 1 (SHADOW_APPLY, soft score nudges): a setup/strategy is eligible
+              at >=50 resolved shadows of its own.
+      stage 2 (RISK_MODULATION_ENABLED, sizing within caps): additionally
+              needs the score buckets sufficient (N>=100) AND monotone —
+              i.e. the score has PROVEN its sign before it may size anything.
+    Nothing here changes behaviour: the governor prints what the evidence
+    supports; the owner flips the env flags (reversible) if they agree.
+    """
+    per: List[Dict[str, Any]] = []
+    for s in shadow_stats.get("by_setup", []):
+        n = int(s.get("n", 0) or 0)
+        per.append({
+            "setup": s.get("setup"),
+            "resolved": n,
+            "avg_r": s.get("avg_r"),
+            "stage1_shadow_apply": "ELIGIBLE" if n >= 50 else f"NEEDS {50 - n} more",
+        })
+    sufficient = bool(bucket_stats.get("sufficient_data"))
+    monotone = bucket_stats.get("monotone_expected")
+    if sufficient and monotone is True:
+        stage2 = "ELIGIBLE — buckets sufficient AND monotone-positive"
+    elif sufficient:
+        stage2 = "BLOCKED — buckets sufficient but NOT monotone (score unproven as sizer)"
+    else:
+        stage2 = f"BLOCKED — need >=100 resolved (have {bucket_stats.get('total', 0)})"
+    return {
+        "per_setup": per,
+        "stage1_flag": "SHADOW_APPLY (currently %s)" % ("ON" if cfg.shadow_apply else "OFF"),
+        "stage2_flag": "RISK_MODULATION_ENABLED (currently %s)"
+                       % ("ON" if cfg.risk_modulation_enabled else "OFF"),
+        "stage2_verdict": stage2,
+        "note": "report-only: owner flips flags; both are reversible and never veto",
+    }
+
+
 def build_report(cfg: Config, db: Storage, shadow: ShadowLearner) -> Dict[str, Any]:
     """Assemble the full read-only Governor report as a structured dict."""
     health = _engine_health(db, cfg)
@@ -287,6 +328,7 @@ def build_report(cfg: Config, db: Storage, shadow: ShadowLearner) -> Dict[str, A
                                shadow_stats, cfg, ready_aggressive)
     tiered = _tiered_recommendations(loss_diagnosis, recommended_experiments,
                                      recommended_cloud_tasks)
+    readiness = shadow_readiness(shadow_stats, shadow.score_bucket_stats(), cfg)
 
     return {
         "EPOCH": {
@@ -334,6 +376,7 @@ def build_report(cfg: Config, db: Storage, shadow: ShadowLearner) -> Dict[str, A
                 "by_setup": shadow_stats.get("by_setup", []),
                 "basis": shadow_stats.get("basis", "")}),
         },
+        "SHADOW_READINESS": readiness,
         "MISSED_OPPORTUNITIES": missed,
         "SETUP_HEALTH": health_rows,
         "LOSS_DIAGNOSIS": loss_diagnosis,

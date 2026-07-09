@@ -249,3 +249,231 @@ edgeless coins (proven loss), edge-killing looseness (proven), or scalp
 fully mapped. Genuinely MORE activity with positive edge must come from a
 DIFFERENT edge (carry — uncorrelated funding harvest), not from pushing the
 directional edges past their limits.
+
+---
+
+## 12. Edge-expansion + system wave (2026-07-08, second session wave)
+
+Owner directive: faster data flow, useful Shadow/Friday management, MORE
+edge (not more filters). Pre-registered cells, real archive data 2023-07 →
+2026-06 (1h/4h, 17 validated + 12 new coins), split-half at 2025-01-01,
+taker+slip+funding costs, kill-rule. Campaign trial ledger: 88 → 95.
+
+### Killed (kill-rule, both documented and final)
+
+| cell | H1 | H2 | verdict |
+|---|---|---|---|
+| donchian @4h on 12 NEW coins (PEPE WIF SEI TIA JUP WLD FET STX IMX ENA ONDO HBAR) | +0.63R (t 2.4) | **−0.02R** | **KILL — edge stays coin-specific (3rd confirmation)** |
+| squeeze @1h on expansion-5 + 12 new | +0.055R | **−0.02R** | **KILL — and the expansion-5 are NEGATIVE at 1h** |
+| donchian @1d (17) | +1.29R | −0.01R | KILL |
+| BTC-SMA200 regime hard-filter on donchian @4h | H2 +0.035 vs baseline +0.029, trades −46% | — | NO IMPROVEMENT — regime stays advisory-only |
+| squeeze @2h (17) | +0.066R | +0.071R | WATCH (both halves +, t<2/half; not deployed — TF-correlation stacking) |
+
+### ACCEPTED: squeeze_breakout @4h/1d (ts=24 bars = 96h)
+
+Replication sim: +0.193R, t 4.09, H1 +0.21 / H2 +0.18, 15/17 coins positive
+(calibration: the same sim UNDER-reports the known 1h edge, +0.037 vs
++0.088 harness — conservative). Then the REAL walk-forward harness
+(offline data_override from the archive, warmup 525, funding charged,
+deflated n_trials=95):
+
+| run | net Exp-R | PF | MaxDD @1.5% | DSR | decision |
+|---|---|---|---|---|---|
+| 5 majors | +0.193 | 1.49 | 15.5% | +2.63 | **ACCEPTED** |
+| validated 17 | +0.211 | 1.56 | 9.5% | +3.30 | **ACCEPTED** |
+
+Deployed as the third leg. Combined validated ceiling is now ≈5.5–6
+trades/day (donchian 4h ~1.4–2 + squeeze 1h ~3 + squeeze 4h ~1).
+
+### Engineering shipped with this wave
+
+- **Same profile at two TFs** in STRATEGIES (second instance's setup_type =
+  "profile@ltf"; models.profile_of() keeps risk/exit profile semantics).
+- **Per-strategy universe** (`:u=BTC+ETH+...`): squeeze@1h pinned to its
+  validated 12 — it measured NEGATIVE on the donchian-expansion coins.
+- **Closed-bar-aware kline cache** + **universe re-rank interval**: per-cycle
+  REST calls ~69 → ~17–18 at the deployed config; parity-safe by
+  construction (closed bars only change on bar close). Failed refetch serves
+  last good cache; stale-entry guard covers the tail risk.
+- **SHADOW_READINESS** governor section: explicit activation staircase
+  (stage 1 SHADOW_APPLY ≥50 resolved/setup; stage 2 risk modulation only at
+  N≥100 AND monotone buckets). Friday stays excluded; the governor report
+  is its measured replacement.
+
+### Watch flag (honest)
+
+donchian @4h recent-half softness in the replication sim (2025+ ≈ +0.03R vs
++0.48R in 2023–24; the 5.8y harness validation remains authoritative). The
+30–50-trade paper window is exactly the instrument to confirm or refute
+this. squeeze@4h is strong in BOTH halves including 2025+.
+
+Test floor: 684 green.
+
+---
+
+## 13. Frequency frontier @4h (wave 3, 2026-07-08) — trials 95 → 99
+
+Owner: "fastest, quickest to profit." Pre-registered cells on the strongest
+recent-regime edge (squeeze@4h) + donchian variant revalidation:
+
+| cell | trades/day | R/trade | daily yield | halves | verdict |
+|---|---|---|---|---|---|
+| squeeze@4h Q20/W24 (deployed) | 0.99 | +0.193 | 0.191 R/d | + / + | **baseline stays — yield-optimal** |
+| squeeze@4h **Q30**/W24 | 1.25 (+27%) | +0.130 | 0.162 R/d (85%) | +0.16 / +0.10 | **VALIDATED OPTION** — real harness: net +0.161R, PF 1.43, DD 14%, DSR +2.82 (n_trials=99), ACCEPTED |
+| squeeze@4h Q20/**W12** | 1.34 | +0.090 | — | H2 t 1.0 | KILL |
+| squeeze@4h on 12 NEW coins | — | — | — | H1-picked 7 coins → H2 +0.088R t 0.89 | **WATCH only** — positive but insignificant; NOT deployed |
+| donchian@4h **N10**/X20 | +12% trades | +0.194 | ~93% of N20 | + / + (H2 soft both) | validated option (phase-5 confirmed) |
+
+Pattern (third time measured): **more frequency always costs per-trade edge**;
+the deployed baseline sits at the yield optimum. The validated "more action"
+package for the owner is `:q=30` on the squeeze@4h leg and/or `:n=10` on the
+donchian leg — both harness/holdout-validated, both ~85–93% of max yield.
+STRATEGIES specs now support per-leg `:n=` and `:q=` so these flip without
+touching global config.
+
+### §13 addendum — universe frontier check for squeeze@4h (trials 99 → 100)
+
+Owner asked whether OTHER assets were researched. The one genuinely untested
+gap: the 10 phase-4-rejected liquid coins (LTC BCH ETC FIL UNI AAVE OP INJ
+APT LDO) had never seen the newly-validated squeeze@4h. Tested (36mo real 4h,
+H1-select/H2-confirm): H1-picked 7-coin group +0.234R (t 2.27) →
+**H2 −0.116R (t −1.68) — KILL.** Squeeze@4h is coin-specific exactly like
+donchian. Combined with wave-2/3: every liquid Binance USDT-M perp with ≥2y
+history outside the validated 17 has now been tested against at least one
+validated edge and failed holdout. **The 17-coin universe IS the frontier**;
+coins with <18mo history remain untestable by protocol (insufficient split
+material), and sub-liquid names fail the spread guard before ever reaching a
+signal.
+
+---
+
+## 14. FINAL popular trend-TA wave (2026-07-09) — trials 100 → 111
+
+Owner: "one last deep pass over the popular trend-following TA never tested."
+Seven families @4h on the validated 17 (Ichimoku cloud+TK, Heikin-Ashi flip,
+MACD histogram cross, Parabolic SAR flip, DMI cross ADX>20, Golden cross
+50/200, Bollinger band-ride — each with the SMA200 alignment where popular
+usage has it), plus 1h re-checks and 3 overlap cells. Same protocol.
+
+### Raw split-half results
+
+| family @4h | n (/day) | R | H1 / H2 | verdict |
+|---|---|---|---|---|
+| MACD hist cross | 3,564 (3.3) | +0.091 (t 3.6) | +0.124 / +0.060 | candidate → overlap test |
+| Parabolic SAR flip | 3,960 (3.6) | +0.078 (t 3.5) | +0.100 / +0.058 | candidate → overlap test |
+| Bollinger band-ride | 2,751 (2.5) | +0.116 (t 3.3) | +0.147 / +0.087 | candidate → overlap test |
+| Ichimoku cloud+TK | 2,028 | +0.089 | +0.174 / **+0.015** | WEAK — H2 flat, killed |
+| Golden cross 50/200 | 461 | +0.873 | +1.716 / +0.197 (t 1.05) | WEAK — n too small, killed |
+| Heikin-Ashi flip | 4,041 | −0.004 | +0.027 / −0.032 | KILL |
+| DMI cross ADX>20 | 1,892 | +0.059 | +0.178 / **−0.056** | KILL |
+| (all @1h re-checks) | — | — | MACD −0.024 · PSAR −0.036 · Ichimoku −0.044 | KILL — the 4h floor holds |
+
+### The decisive overlap test (marginal value vs the deployed legs)
+
+Are these NEW trades, or the donchian@4h + squeeze@4h trades under another
+name? Entry overlap (same symbol+side within ±2 bars) and the edge of the
+NON-overlapping remainder:
+
+| family | overlap w/ don+sqz@4h | non-overlap H2 R | verdict |
+|---|---|---|---|
+| Bollinger band-ride | **50%** | **−0.164 (t −3.9)** | its edge WAS our trades; the rest loses — KILL |
+| MACD hist | 14% direct, but 72% shared w/ BAND, 86% w/ PSAR | **−0.005** | incremental trades have no holdout edge — KILL as a leg |
+| Parabolic SAR | 11% / one family with MACD (86%) | **+0.001** | same — KILL as a leg |
+
+**Conclusion (final for trend-TA):** the popular trend indicators that
+survive split-half at 4h are all measuring the SAME underlying 4h-trend
+phenomenon the deployed donchian@4h + squeeze@4h legs already harvest — with
+worse per-trade quality. Their incremental (non-overlapping) trades carry
+ZERO holdout edge. Adding any of them would duplicate winners we already
+take and add pure-noise fills. **The trend-TA inventory is now complete: no
+popular family adds a fourth directional leg.** Positive side-finding: three
+independent indicator families confirming the same edge is strong evidence
+the deployed legs sit near the efficient frontier of what OHLCV trend
+signals can extract from these instruments.
+
+Reproducible: `scripts/trend_ta_wave.py` (+ overlap analysis in session log).
+
+---
+
+## 15. Ichimoku deep-dive (2026-07-09, owner-directed) — trials 111 → 121
+
+Owner: "focus on Ichimoku; find the TF/conditions where it is positive."
+Bounded pre-registered grid: 10 cells (TK-cross strong / Kijun-cross / cloud
+breakout / +chikou / doubled 20-60-120 params × 2h/4h/1d), validated 17,
+same protocol. 9 of 10 cells KILL or WEAK. One exceptional survivor:
+
+### I1 TK-cross "strong" @4h — the strongest harness result in the project
+
+Rules: fresh Tenkan(9)×Kijun(26) cross while close is on the matching side
+of the displaced cloud; stop 2×ATR; exit on opposite TK cross; no TP.
+
+| stage | result |
+|---|---|
+| Research sim | +0.253R, t 5.30, H1 +0.344 (t 4.6) / H2 +0.175 (t 2.9), **17/17 coins positive**, 1.7 trades/day |
+| Overlap bar | 29% overlap w/ don+sqz@4h; non-overlap H2 +0.046 (t 0.7) — additive edge UNPROVEN |
+| **REAL harness @4h/1d ×17** (n_trials=121) | **net +0.314R, PF 1.71, MaxDD 14.7% @1.5%, DSR +4.14, 698 OOS trades — ACCEPTED** |
+
+Regime note: Ichimoku TK-cross H2 (2025+) = +0.175R where donchian's same-
+window H2 = +0.03R — it is the strongest recent-regime directional edge
+measured on this system.
+
+### Deployment decision (discipline over excitement)
+
+As an ADDITIVE 4th risk leg it fails the marginal-evidence bar (its
+non-overlapping trades are unproven — same bar that killed MACD/PSAR/
+band-ride). As a STANDALONE system it is harness-ACCEPTED with the best
+numbers in the book. Resolution: **ported to the engine as the
+`ichimoku_trend` profile (full tests) and deployed SHADOW-ONLY** —
+`SHADOW_ONLY_SETUPS=ichimoku_trend` — so it is scored and tracked on live
+data, takes ZERO risk, and accumulates the evidence to become donchian's
+REPLACEMENT if the paper window confirms donchian's 2025+ softness.
+Engine port: detector (setups.py), streaming TKCROSS exit (executors.py,
+seeded with pre-entry (high,low) history at decide() time — parity across
+paper/backtest/live), risk branches (stop ceiling + no-TP contract),
+7 dedicated tests.
+
+Other cells for the ledger: I1@2h KILL (H2 −0.01), I1@1d WEAK, I2 Kijun-
+cross @4h WEAK (H2 t 0.6) / @1d KILL, I3 cloud-break @2h non-overlap
+NEGATIVE / @1d WEAK, I4 chikou @4h WEAK (H2 t 0.4), I5 doubled @4h KILL /
+@1d WEAK. The 4h TK-cross is the only Ichimoku system with real edge here.
+
+---
+
+## 16. Composite confluence wave + THE FINAL SYSTEM (2026-07-09) — trials 121 → 126
+
+Owner: "EMA alignment + Supertrend agreement + Ichimoku agreement as a
+COMPOSITE — then decide the best system of everything and merge it."
+
+### Composite results (@4h validated 17; control = plain ichimoku TK-cross)
+
+| system | trades/day | R/trade | H2 (2025+) | verdict |
+|---|---|---|---|---|
+| plain ichimoku TK-cross (control) | 1.72 | +0.253 (t 5.3) | **+0.175 (t 2.9)** | **wins** |
+| ichimoku + EMA9/21 + Supertrend(10,3) filter | 1.49 | +0.272 | +0.187 (t 2.8) | −14% trades for ≈same holdout quality → ~7% LESS total yield; NOT adopted |
+| triple-agreement fresh trigger, any-flip exit | 3.47 | +0.109 | +0.060 (t 1.7) | worse per-trade; alignment fires LATE |
+| triple-agreement, TK exit | 2.92 | +0.147 | +0.058 (t 1.4) | same |
+| triple-agreement @1h | 14.5 | −0.025 | negative | KILL — the 4h floor holds an 8th time |
+
+**Measured answer:** the Ichimoku cloud-side confirmation already IS the
+trend confluence; stacking EMA+Supertrend on top adds correlation, not
+information. Confluence filters trim frequency without improving holdout
+edge. The pure TK-cross stays the best form of this family.
+
+### THE FINAL SYSTEM (decision of record)
+
+Everything measured across 126 trials / 6 campaigns converges on the
+four-leg configuration already written in FINAL_OWNER_DECISION.md §6:
+
+1. **donchian_trend@4h/1d** on the 17 (strongest long-history edge, 5.8y)
+2. **squeeze_breakout@1h/4h:ts=24** on ITS 12 (fastest positive leg)
+3. **squeeze_breakout@4h/1d:ts=24** on the 17 (best DD/DSR balance)
+4. **ichimoku_trend@4h/1d SHADOW-ONLY** (best harness numbers; live
+   evidence collector and donchian's regime-substitute candidate)
+
+Rails: RISK_PCT 1.5 / 6 slots / 200% exposure / pinned 17-coin universe /
+stale-entry guard / closed-bar kline cache / edge-ranked slot allocation /
+±10% kill switch + profit lock / five-gate live lock (disarmed).
+≈5.5–6 risk trades/day at the measured yield optimum; owner "more action"
+options (:q=30, :n=10) validated and documented. No measured alternative
+beats any component in its role. This configuration is merged as the
+production recommendation.

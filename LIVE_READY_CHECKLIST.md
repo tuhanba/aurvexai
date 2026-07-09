@@ -53,11 +53,15 @@ Acceptance Bar**. Current verdicts:
 
 | Strategy family | Verdict | Detail |
 |---|---|---|
-| Directional TA (Buğra scalp, current paper engine) | **NO-GO (formal)** | Measured edge is not positive-stable; numeric score measured ANTI-predictive and demoted from gate (`SCORE_AS_GATE=false`). Paper continues for evidence collection only. |
-| Carry | **Conditional-GO, Phase 1 only** | Cross-margin, universe = 5. **NOT yet promoted** — promotion is a separate future wave with its own Acceptance Bar review. |
+| donchian_trend @4h | **ACCEPTED (harness 5/5)** | net +0.284R, PF 1.37, MaxDD 19.3% @2%, DSR +2.44 over ~5.8y OOS. Deployed in PAPER; needs 30–50 paper trades on the current epoch before live consideration. |
+| squeeze_breakout @1h | **ACCEPTED (harness)** | net +0.088R, PF 1.12, DSR +1.58. Deployed in PAPER as the secondary leg; same paper-evidence requirement. |
+| Directional TA scalp (Buğra & all scalp families) | **NO-GO (formal, final)** | ~17 families / 60+ cells net-negative after cost across four campaigns — `SCALP_EDGE_RESEARCH_REPORT.md`. Retired. |
+| Carry | **Conditional-GO, Phase 1 only** | Cross-margin, universe = 5. Research-validated; engine executor NOT built — promotion is a separate future wave. |
 
-No strategy currently satisfies the EVIDENCE GATE. Therefore, even with a
-perfect infrastructure checklist, **going live is not on the table today**.
+The HARNESS half of the evidence gate has passed for donchian/squeeze; the
+PAPER half (30–50 trades at validated expectancy on the current epoch) has
+not yet accumulated. Therefore **going live is still not on the table
+today** — but the path is now concrete, not hypothetical.
 
 ## 4. Operational preconditions (deploy host)
 
@@ -86,6 +90,8 @@ perfect infrastructure checklist, **going live is not on the table today**.
 ## 6. Bottom line
 
 **Real order sending is OFF by default.** The Stage-3 adapter exists and is
-tested, but it is disarmed behind the five-gate lock, and the strategy
-evidence gate is still failed (directional TA NO-GO; Carry not promoted) —
-so live promotion remains blocked by design until the evidence changes.
+tested, but it is disarmed behind the five-gate lock. The harness evidence
+gate has passed for donchian_trend/squeeze_breakout, but the paper-evidence
+leg (30–50 trades on the current epoch at validated expectancy) has not —
+so live promotion remains blocked by design until it accumulates. Scalp is
+a final NO-GO and cannot be promoted on any setting.

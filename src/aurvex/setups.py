@@ -546,6 +546,64 @@ def detect_donchian_trend(ctx: Context) -> Optional[Signal]:
     )
 
 
+def detect_ichimoku_trend(ctx: Context) -> Optional[Signal]:
+    """Ichimoku TK-cross "strong" — faithful port of the I1 research rules
+    (dossier §15, 2026-07-09): fresh Tenkan(9) × Kijun(26) cross while the
+    close is on the matching side of the DISPLACED cloud (span A/B computed
+    from bars ≤ i−26, so the cloud at the signal bar is fully causal).
+
+    Rules exactly as tested:
+      1. tenkan/kijun = (period-high + period-low) / 2 over CLOSED bars.
+      2. LONG: close above the cloud top AND tenkan crosses above kijun on
+         the signal bar (mirror for SHORT below the cloud bottom).
+      3. Stop: ich_atr_mult × ATR(14) from entry. No profit target.
+      4. Exit: opposite TK cross — streaming, close-based, maintained by the
+         executor (reason "TKCROSS") — or the stop.
+    Validated @4h ONLY (2h/1d/other variants measured and killed)."""
+    cfg = ctx.cfg
+    T, K, SB, D = 9, 26, 52, 26
+    n = len(ctx.ltf)
+    if n < SB + D + 3 or ctx.ltf_atr is None or ctx.ltf_atr <= 0:
+        return None
+    highs, lows, closes = ctx.ltf.highs, ctx.ltf.lows, ctx.ltf.closes
+
+    def mid(p: int, i: int) -> float:
+        return (max(highs[i - p + 1:i + 1]) + min(lows[i - p + 1:i + 1])) / 2
+
+    i = n - 1
+    t_now, t_prev = mid(T, i), mid(T, i - 1)
+    k_now, k_prev = mid(K, i), mid(K, i - 1)
+    j = i - D
+    span_a = (mid(T, j) + mid(K, j)) / 2
+    span_b = mid(SB, j)
+    top, bot = max(span_a, span_b), min(span_a, span_b)
+    close = closes[i]
+    if close > top and t_now > k_now and t_prev <= k_prev:
+        side = LONG
+    elif close < bot and t_now < k_now and t_prev >= k_prev:
+        side = SHORT
+    else:
+        return None
+    stop_dist = cfg.ich_atr_mult * ctx.ltf_atr
+    stop = close - stop_dist if side == LONG else close + stop_dist
+    tk_gap = abs(t_now - k_now) / max(stop_dist, 1e-12)
+    cloud_dist = ((close - top) if side == LONG else (bot - close))
+    strength = _clamp01(cloud_dist / max(stop_dist, 1e-12) * 2.0)
+    return Signal(
+        symbol=ctx.snap.symbol, side=side, setup_type="ichimoku_trend",
+        entry_hint=close, stop_hint=stop,
+        base_confidence=0.55 + 0.1 * strength,
+        factors={
+            "breakout_strength": strength,
+            "tk_momentum": _clamp01(tk_gap),
+            "trend_alignment": _clamp01(0.5 + 0.5 * ctx.htf_bias *
+                                        (1 if side == LONG else -1)),
+        },
+        notes=f"ichimoku TK-cross {side} · cloud-side confirmed · stop "
+              f"{cfg.ich_atr_mult:g}xATR",
+    )
+
+
 def _build_registry(cfg: Config) -> List[Callable[[Context], Optional[Signal]]]:
     """Return the detector list for the configured strategy profile.
 
@@ -566,6 +624,8 @@ def _build_registry(cfg: Config) -> List[Callable[[Context], Optional[Signal]]]:
         return [detect_squeeze_breakout]
     if cfg.strategy_profile == "donchian_trend":
         return [detect_donchian_trend]
+    if cfg.strategy_profile == "ichimoku_trend":
+        return [detect_ichimoku_trend]
     return [detect_aurvex_enhanced]
 
 
@@ -616,28 +676,49 @@ class StrategySpec:
     pcfg: Config
     exit_meta: dict
     detector: object
+    # setup_type stamped on this spec's signals. Equals ``profile`` normally;
+    # when the SAME profile runs at two timeframes the later instances get
+    # "profile@ltf" so routing / shadow stats / journal stay separate
+    # (models.profile_of() recovers the profile for risk/exit branching).
+    key: str = ""
+    # Optional per-strategy universe restriction (base assets, e.g. {"BTC",
+    # "ETH"}). Empty = trade the shared engine universe. Lets each edge trade
+    # ONLY the coins it was validated on (e.g. squeeze@1h measured negative
+    # on the donchian-only expansion coins).
+    universe: frozenset = frozenset()
 
 
 def _parse_one_spec(base: Config, spec: str) -> Optional[StrategySpec]:
     spec = spec.strip()
     if not spec:
         return None
-    # profile@ltf/htf[:ts=N][:ch=N]
+    # profile@ltf/htf[:ts=N][:ch=N][:n=N][:q=N][:u=BTC+ETH+...]
     head, *opts = spec.split(":")
     if "@" not in head or "/" not in head:
         raise ValueError(f"bad STRATEGIES spec '{spec}' "
-                         "(want profile@ltf/htf[:ts=N][:ch=N])")
+                         "(want profile@ltf/htf[:ts=N][:ch=N][:n=N][:q=N]"
+                         "[:u=BTC+ETH])")
     profile, tfs = head.split("@", 1)
     ltf, htf = tfs.split("/", 1)
     profile, ltf, htf = profile.strip(), ltf.strip(), htf.strip()
     overrides = {"strategy_profile": profile, "ltf": ltf, "htf": htf}
     ts = None
     ch = None
+    universe: frozenset = frozenset()
     for o in opts:
         if o.startswith("ts="):
             ts = int(o[3:]); overrides["time_stop_bars"] = ts
         elif o.startswith("ch="):
             ch = int(o[3:]); overrides["don_exit_bars"] = ch
+        elif o.startswith("n="):
+            # donchian entry-channel bars (validated more-action option N10)
+            overrides["don_entry_bars"] = int(o[2:])
+        elif o.startswith("q="):
+            # squeeze percentile (validated more-action option Q30 @4h)
+            overrides["sqz_pctile"] = int(o[2:])
+        elif o.startswith("u="):
+            universe = frozenset(b.strip().upper()
+                                 for b in o[2:].split("+") if b.strip())
     pcfg = _dc.replace(base, **overrides)
     exit_meta = {
         "exit_ltf": ltf,
@@ -647,7 +728,8 @@ def _parse_one_spec(base: Config, spec: str) -> Optional[StrategySpec]:
     }
     return StrategySpec(name=f"{profile}@{ltf}/{htf}", profile=profile,
                         ltf=ltf, htf=htf, pcfg=pcfg, exit_meta=exit_meta,
-                        detector=SetupDetector(pcfg))
+                        detector=SetupDetector(pcfg), key=profile,
+                        universe=universe)
 
 
 def parse_strategies(cfg: Config) -> List[StrategySpec]:
@@ -663,6 +745,21 @@ def parse_strategies(cfg: Config) -> List[StrategySpec]:
         if s.name in seen:
             raise ValueError(f"duplicate strategy spec {s.name}")
         seen.add(s.name)
+    # Same profile at several timeframes: the FIRST instance keeps the bare
+    # profile as its key (shadow-history continuity for existing deployments);
+    # later instances are disambiguated as "profile@ltf".
+    profile_counts = {}
+    for s in specs:
+        profile_counts[s.profile] = profile_counts.get(s.profile, 0) + 1
+    first_seen = set()
+    for s in specs:
+        if profile_counts[s.profile] > 1 and s.profile in first_seen:
+            s.key = f"{s.profile}@{s.ltf}"
+        first_seen.add(s.profile)
+    keys = [s.key for s in specs]
+    if len(keys) != len(set(keys)):
+        raise ValueError(f"strategy keys not unique: {keys} "
+                         "(same profile may appear once per LTF)")
     return specs
 
 

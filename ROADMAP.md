@@ -42,8 +42,13 @@ partial-fill accumulation across retries, the Stage-2 timeout/retry policy,
 reconciliation, and emergency stop — behind the five-gate lock
 (`LIVE_ENABLED` + `LIVE_HUMAN_CONFIRM` + live mode + `LIVE_SEND_ORDERS` +
 keys). Remaining before any real arming:
-- Positive, stable expectancy across paper/shadow/backtest (**still NOT
-  met: directional TA is formally NO-GO** — `PAPER_PERFORMANCE_REPORT.md`).
+- Positive, stable expectancy across paper/shadow/backtest. **Status
+  2026-07-08: the harness evidence gate has PASSED for donchian_trend @4h
+  and squeeze_breakout @1h (see `SYSTEM_STATE.md`); the PAPER leg is still
+  accumulating — 30–50 trades on the current multi-strategy epoch are
+  required before any live consideration.** (The old blanket "directional
+  TA NO-GO" applied to the retired scalp profiles — see
+  `SCALP_EDGE_RESEARCH_REPORT.md`.)
 - Private TRADE-ONLY Binance key in `.env` (withdraw-capable keys are
   flagged unsafe).
 - Start in **canary** mode (`LIVE_CANARY_RISK_PCT`) with minimal size. Known

@@ -169,6 +169,18 @@ class Config:
     # deterministic generator for tests / local demo with no network).
     data_provider: str = field(default_factory=lambda: _str("DATA_PROVIDER", "ccxt"))
 
+    # Closed-bar-aware kline cache (ccxt provider): a timeframe's CLOSED view
+    # can only change when a new bar closes, so klines are refetched only when
+    # a new bar can exist. Parity-safe (identical decision inputs), removes
+    # most per-cycle REST calls at 4h/1d. false = legacy fetch-every-cycle.
+    kline_cache_enabled: bool = field(
+        default_factory=lambda: _bool("KLINE_CACHE_ENABLED", True))
+    # Universe re-rank interval (sec). fetch_tickers is the heaviest public
+    # call and volume ranks don't move minute-to-minute; the pinned
+    # UNIVERSE_INCLUDE deployment barely uses the ranking at all. 0 = every cycle.
+    universe_refresh_sec: int = field(
+        default_factory=lambda: _int("UNIVERSE_REFRESH_SEC", 600))
+
     # -- Universe scanner --------------------------------------------------
     universe_size: int = field(default_factory=lambda: _int("UNIVERSE_SIZE", 40))
     min_quote_volume_24h: float = field(
@@ -392,6 +404,16 @@ class Config:
     max_stop_dist_pct_don: float = field(
         default_factory=lambda: _float("MAX_STOP_DIST_PCT_DON", 12.0))
 
+    # -- Ichimoku trend (ichimoku_trend profile) ----------------------------
+    # I1 TK-cross "strong": Tenkan(9) x Kijun(26) cross while price is on the
+    # matching side of the displaced cloud (spans from bars <= i-26). Exit =
+    # opposite TK cross (streaming, close-based) or the stop; no TP by design
+    # (ICH_TP_R sentinel keeps the 3-slot TP contract). Validated @4h only.
+    ich_atr_mult: float = field(default_factory=lambda: _float("ICH_ATR_MULT", 2.0))
+    ich_tp_r: float = field(default_factory=lambda: _float("ICH_TP_R", 1000.0))
+    max_stop_dist_pct_ich: float = field(
+        default_factory=lambda: _float("MAX_STOP_DIST_PCT_ICH", 12.0))
+
     # -- Bugra replica parameters ------------------------------------------
     bugra_stop_pct: float = field(default_factory=lambda: _float("BUGRA_STOP_PCT", 4.49))
     bugra_tp1_pct: float = field(default_factory=lambda: _float("BUGRA_TP1_PCT", 1.50))
@@ -497,6 +519,13 @@ class Config:
     heartbeat_stale_ms: int = field(default_factory=lambda: _int(
         "HEARTBEAT_STALE_MS",
         max(120_000, int(6 * _float("CYCLE_INTERVAL_SEC", 20.0) * 1000))))
+    # Stale-data guard for NEW entries: if the freshest CLOSED signal-timeframe
+    # bar is more than this many bar-lengths behind wall clock, the symbol is
+    # skipped for new entries this cycle (reject reason "stale_data"). Open-trade
+    # management is untouched. 0 disables. The synthetic provider is exempt
+    # (deterministic offline timestamps).
+    stale_entry_guard_bars: int = field(
+        default_factory=lambda: _int("STALE_ENTRY_GUARD_BARS", 3))
     # Optional HTTP Basic auth (Task 4): when BOTH are set, every dashboard
     # route requires credentials EXCEPT /health (docker healthcheck hits it
     # from localhost). Unset (default) = behaviour unchanged.
