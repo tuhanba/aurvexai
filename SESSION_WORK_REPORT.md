@@ -198,3 +198,73 @@ scripts/edge_expansion.py, scripts/harness_sqz4h.py.
   KILLED (H2 -0.12R) — the 17-coin universe is the measured frontier.
 - Tests: **692 passed**. Docs: dossier §13-addendum/§14/§15, SYSTEM_STATE,
   .env.example, FINAL_OWNER_DECISION.
+
+---
+
+# FINAL CONSOLIDATED REPORT — full session (2026-07-08 → 2026-07-09)
+
+Eight waves, PRs #35–#38 merged to main. Campaign trial ledger 76 → 147.
+Test floor 654 → **694 green**. Everything below is on real Binance USDT-M
+archive data under the pre-registered protocol (no lookahead, full costs,
+split-half/walk-forward, DSR deflation, kill-rule).
+
+## Validated & deployed (the final system — FINAL_OWNER_DECISION §6/§10)
+
+| leg | numbers (real harness) | role |
+|---|---|---|
+| donchian_trend@4h/1d ×17 | +0.284R, PF 1.37, DSR +2.44 (5.8y) | primary; 2025+ softness on watch |
+| squeeze_breakout@1h/4h ×12 | +0.088R, PF 1.12, DSR +1.58 | fastest leg (24h holds) |
+| squeeze_breakout@4h/1d ×17 (NEW) | +0.211R, PF 1.56, DD 9.5%, DSR +3.30 | best DD/DSR balance |
+| ichimoku_trend@4h/1d ×17 (NEW, SHADOW-ONLY) | **+0.314R, PF 1.71, DSR +4.14** — best in book | zero-risk evidence collector; donchian substitute candidate |
+
+Profiles: aggressive_paper (balanced, §6) and NEW **aggressive_plus** (§10:
+risk 3%, 6 slots, profit lock 20%, kill switch fixed 10%) with the
+validated more-action package (:n=10, :q=30). Per-leg spec options shipped:
+:ts= :ch= :n= :q= :r= :u=.
+
+## Killed with evidence this session (do not reopen without new data/infra)
+
+Scalp (12 final families — structural NO-GO, 5 campaigns total); 34
+additional coins across 3 edges (universe growth = dilution, 4×
+confirmed); donchian@1d; squeeze@2h(W12)/looser variants; BTC-regime hard
+filter; 7 popular trend-TA families (MACD/PSAR/BandRide pass split-half
+but overlap analysis shows they ARE our trades); 9 of 10 Ichimoku
+variants; EMA+Supertrend+Ichimoku composites (confluence = correlation,
+not information); ALL 13 shorter-exit variants (yield −27…−85% — the edge
+lives in multi-day winners).
+
+## Engineering shipped (all tested, all merged)
+
+ichimoku_trend profile (detector + streaming TKCROSS exit + risk
+branches); same-profile-multi-TF; per-leg universe/params/risk; stale-data
+entry guard; closed-bar kline cache + universe re-rank interval (~69→~18
+REST calls/cycle); governor SHADOW_READINESS staircase; aggressive_plus
+profile. Docs: SYSTEM_STATE (single truth), SCALP_EDGE_RESEARCH_REPORT,
+SERVER_RUNBOOK, FINAL_OWNER_DECISION, dossier §9–§18.
+
+## Honest growth outlook
+
+Balanced (§6): ~0.3–0.45%/day expectation (~8–12%/mo). aggressive_plus
+(§10): ~0.75–1%/day (~25–35%/mo) with 30–40% DD and losing weeks.
+3–5%/day AVERAGE is unreachable with this edge — documented with the math.
+Individual +3–6% days will occur (runner days at 3% risk).
+
+## Queued next waves (owner to trigger)
+
+1. **Pyramiding (turtle adds at +1R/+2R)** and **side asymmetry
+   (long/short split per leg)** — the two genuinely untested classical
+   accelerators; cheap pre-registered tests, sketched and ready.
+2. **Carry engine port** — the only validated-but-unbuilt edge
+   (+4–8%/yr uncorrelated; smooths portfolio DD → supports higher
+   directional risk).
+3. **The evidence window** — run the system 30–50 trades; then live
+   decision + ichimoku/donchian comparison + sizing activation.
+
+## Owner actions (one per line, Termius-safe)
+
+    git pull
+    nano .env        (paste §6 balanced or §10 aggressive_plus block)
+    docker compose down
+    docker volume rm aurvexai_aurvex-data
+    docker compose up -d --build
+    curl -fsS http://localhost:5000/health
