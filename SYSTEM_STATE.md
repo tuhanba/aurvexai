@@ -198,6 +198,17 @@ slow), not faster direction-calling.
   is soft (+0.03R vs +0.48R in 2023–24). The authoritative 5.8-year harness
   validation stands, but this is exactly what the 30–50-trade paper window
   must confirm. Squeeze@4h is strong in BOTH halves including 2025+.
+- **Campaign 7 (2026-07-09, conditional swing TA — `CONDITIONAL_TA_WAVE_REPORT.md`):**
+  first discovery-gate passes since ichimoku. (a) **band_walk @4h
+  CANDIDATE** — two closes outside BB(20,2) + rising ADX, net +0.076R,
+  PF 1.17, DSR +3.08 (192 trials), 11/12 coins, H2>H1, only 8% entry
+  overlap with the donchian family (+0.5 regime corr) — pending the
+  engine walk-forward + holdout + additivity stage before any deployment;
+  (b) **BBW<40 contraction gate on donchian** — keeps ~70% of trades,
+  per-trade net +0.118→+0.169R on 6y, candidate FILTER pending engine-
+  harness test with real channel exits; (c) reversal TA (RSI divergence)
+  fails at swing TFs too; F1-contraction-break replicates squeeze (89%
+  overlap — independent replication, not a new leg). Trial count now 192.
 - **Carry executor**: engine port of the validated funding-harvest strategy
   (cross-margin, universe 5) as a separate low-frequency engine with its own
   risk rules. This is engineering, not research.
