@@ -344,3 +344,51 @@ validated edge and failed holdout. **The 17-coin universe IS the frontier**;
 coins with <18mo history remain untestable by protocol (insufficient split
 material), and sub-liquid names fail the spread guard before ever reaching a
 signal.
+
+---
+
+## 14. FINAL popular trend-TA wave (2026-07-09) — trials 100 → 111
+
+Owner: "one last deep pass over the popular trend-following TA never tested."
+Seven families @4h on the validated 17 (Ichimoku cloud+TK, Heikin-Ashi flip,
+MACD histogram cross, Parabolic SAR flip, DMI cross ADX>20, Golden cross
+50/200, Bollinger band-ride — each with the SMA200 alignment where popular
+usage has it), plus 1h re-checks and 3 overlap cells. Same protocol.
+
+### Raw split-half results
+
+| family @4h | n (/day) | R | H1 / H2 | verdict |
+|---|---|---|---|---|
+| MACD hist cross | 3,564 (3.3) | +0.091 (t 3.6) | +0.124 / +0.060 | candidate → overlap test |
+| Parabolic SAR flip | 3,960 (3.6) | +0.078 (t 3.5) | +0.100 / +0.058 | candidate → overlap test |
+| Bollinger band-ride | 2,751 (2.5) | +0.116 (t 3.3) | +0.147 / +0.087 | candidate → overlap test |
+| Ichimoku cloud+TK | 2,028 | +0.089 | +0.174 / **+0.015** | WEAK — H2 flat, killed |
+| Golden cross 50/200 | 461 | +0.873 | +1.716 / +0.197 (t 1.05) | WEAK — n too small, killed |
+| Heikin-Ashi flip | 4,041 | −0.004 | +0.027 / −0.032 | KILL |
+| DMI cross ADX>20 | 1,892 | +0.059 | +0.178 / **−0.056** | KILL |
+| (all @1h re-checks) | — | — | MACD −0.024 · PSAR −0.036 · Ichimoku −0.044 | KILL — the 4h floor holds |
+
+### The decisive overlap test (marginal value vs the deployed legs)
+
+Are these NEW trades, or the donchian@4h + squeeze@4h trades under another
+name? Entry overlap (same symbol+side within ±2 bars) and the edge of the
+NON-overlapping remainder:
+
+| family | overlap w/ don+sqz@4h | non-overlap H2 R | verdict |
+|---|---|---|---|
+| Bollinger band-ride | **50%** | **−0.164 (t −3.9)** | its edge WAS our trades; the rest loses — KILL |
+| MACD hist | 14% direct, but 72% shared w/ BAND, 86% w/ PSAR | **−0.005** | incremental trades have no holdout edge — KILL as a leg |
+| Parabolic SAR | 11% / one family with MACD (86%) | **+0.001** | same — KILL as a leg |
+
+**Conclusion (final for trend-TA):** the popular trend indicators that
+survive split-half at 4h are all measuring the SAME underlying 4h-trend
+phenomenon the deployed donchian@4h + squeeze@4h legs already harvest — with
+worse per-trade quality. Their incremental (non-overlapping) trades carry
+ZERO holdout edge. Adding any of them would duplicate winners we already
+take and add pure-noise fills. **The trend-TA inventory is now complete: no
+popular family adds a fourth directional leg.** Positive side-finding: three
+independent indicator families confirming the same edge is strong evidence
+the deployed legs sit near the efficient frontier of what OHLCV trend
+signals can extract from these instruments.
+
+Reproducible: `scripts/trend_ta_wave.py` (+ overlap analysis in session log).
