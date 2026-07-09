@@ -175,3 +175,26 @@ scripts/edge_expansion.py, scripts/harness_sqz4h.py.
   per-trade edge; deployed baseline stays yield-optimal. "More action" now
   flips per leg via new STRATEGIES spec options `:n=` and `:q=`.
 - Tests: **685 passed**. Docs: dossier §13, SYSTEM_STATE §7, .env.example.
+
+---
+
+# Wave 4-5 (2026-07-09): trend-TA inventory closed + Ichimoku port
+
+- Popular trend-TA final wave (7 families @4h/1h): MACD/PSAR/band-ride pass
+  raw split-half but the OVERLAP bar kills all three (50-86% same trades as
+  deployed legs; non-overlap remainder has zero/negative holdout edge).
+  Ichimoku@4h flagged WEAK -> owner directed a deep-dive.
+- Ichimoku deep-dive (10 pre-registered cells, trials -> 121): **I1
+  TK-cross strong @4h is the strongest harness result in the project** —
+  net +0.314R, PF 1.71, DD 14.7%, DSR +4.14, 698 OOS trades, ACCEPTED;
+  17/17 coins positive in the sim; H2 (2025+) +0.175R vs donchian's +0.03.
+  All other 9 cells killed/weak.
+- **Engine port shipped**: `ichimoku_trend` profile — detector, streaming
+  TKCROSS exit (seeded pre-entry history at decide() time, parity across
+  executors), risk branches, 7 tests. Deployed **SHADOW-ONLY**
+  (`SHADOW_ONLY_SETUPS=ichimoku_trend`): zero risk, live evidence, ready
+  as donchian's regime-substitute if the paper window confirms softness.
+- Universe frontier re-check: squeeze@4h on the 10 phase-4-rejected coins
+  KILLED (H2 -0.12R) — the 17-coin universe is the measured frontier.
+- Tests: **692 passed**. Docs: dossier §13-addendum/§14/§15, SYSTEM_STATE,
+  .env.example, FINAL_OWNER_DECISION.

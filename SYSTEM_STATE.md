@@ -34,6 +34,7 @@ cell tried, out-of-symbol holdout, kill-rule discipline.
 | **donchian_trend** (20-bar channel breakout, 2×ATR stop, channel exit) | 4h | **+0.284** | 1.37 | 19.3% | +2.44 | **ACCEPTED 5/5** — primary |
 | **squeeze_breakout** (vol-squeeze + range break, 24h time-stop, SMA200 filter) | 1h | **+0.088** | 1.12 | 32% (≈24% @1.5%) | +1.58 | **ACCEPTED** — secondary. **Universe: its validated 12 coins ONLY** (measured negative on the 5 donchian-expansion coins — use `u=` in STRATEGIES) |
 | **squeeze_breakout @4h** (same rules, 24-bar=96h time-stop) — NEW 2026-07-08 | 4h | **+0.193** (majors) / **+0.211** (17 coins) | 1.49 / 1.56 | 15.5% / 9.5% @1.5% | **+2.63 / +3.30** (deflated n_trials=95) | **ACCEPTED — real harness, both split halves positive (H1 +0.21 / H2 +0.18), 15/17 coins** |
+| **ichimoku_trend** (TK-cross + cloud-side confirm, TKCROSS exit) — NEW 2026-07-09 | 4h | **+0.314** | **1.71** | 14.7% @1.5% | **+4.14** (n_trials=121) | **ACCEPTED — strongest harness result in the book.** Deployed **SHADOW-ONLY** (additive-edge bar unproven vs don+sqz; positioned as donchian's regime-substitute candidate) |
 | **carry** (spot-long + perp-short funding harvest, cross-margin) | 8h settle | +4…8%/yr on capital, t>11, maxDD <3% | — | — | — | validated in research; **NOT built into the engine yet** |
 
 Character warning: both directional edges are **swing/positional** (hours to
@@ -93,7 +94,8 @@ Everything. Live promotion requires ALL of:
 ```
 RISK_PROFILE=aggressive_paper
 INITIAL_PAPER_BALANCE=200
-STRATEGIES=donchian_trend@4h/1d squeeze_breakout@1h/4h:ts=24:u=BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TON+TRX+DOT squeeze_breakout@4h/1d:ts=24
+STRATEGIES=donchian_trend@4h/1d squeeze_breakout@1h/4h:ts=24:u=BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TON+TRX+DOT squeeze_breakout@4h/1d:ts=24 ichimoku_trend@4h/1d
+SHADOW_ONLY_SETUPS=ichimoku_trend
 GLOBAL_RANKING=true
 RANK_KEY=edge
 LTF_LIMIT=525

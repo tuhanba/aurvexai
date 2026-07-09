@@ -145,6 +145,9 @@ class DecisionEngine:
         d.risk_pct = rr.risk_pct
         d.entry = rr.entry
         d.stop_loss = rr.stop_loss
+        if profile_of(signal.setup_type) == "ichimoku_trend":
+            _bars = snap.closed_ltf(cfg.ltf)
+            d.metadata["ich_hl_seed"] = [[b.high, b.low] for b in _bars[-26:]]
         d.tp1 = rr.tp_targets[0].price
         d.tp2 = rr.tp_targets[1].price
         d.tp3 = rr.tp_targets[2].price

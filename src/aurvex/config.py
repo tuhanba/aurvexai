@@ -404,6 +404,16 @@ class Config:
     max_stop_dist_pct_don: float = field(
         default_factory=lambda: _float("MAX_STOP_DIST_PCT_DON", 12.0))
 
+    # -- Ichimoku trend (ichimoku_trend profile) ----------------------------
+    # I1 TK-cross "strong": Tenkan(9) x Kijun(26) cross while price is on the
+    # matching side of the displaced cloud (spans from bars <= i-26). Exit =
+    # opposite TK cross (streaming, close-based) or the stop; no TP by design
+    # (ICH_TP_R sentinel keeps the 3-slot TP contract). Validated @4h only.
+    ich_atr_mult: float = field(default_factory=lambda: _float("ICH_ATR_MULT", 2.0))
+    ich_tp_r: float = field(default_factory=lambda: _float("ICH_TP_R", 1000.0))
+    max_stop_dist_pct_ich: float = field(
+        default_factory=lambda: _float("MAX_STOP_DIST_PCT_ICH", 12.0))
+
     # -- Bugra replica parameters ------------------------------------------
     bugra_stop_pct: float = field(default_factory=lambda: _float("BUGRA_STOP_PCT", 4.49))
     bugra_tp1_pct: float = field(default_factory=lambda: _float("BUGRA_TP1_PCT", 1.50))

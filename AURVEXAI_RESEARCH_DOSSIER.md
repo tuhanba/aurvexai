@@ -392,3 +392,47 @@ the deployed legs sit near the efficient frontier of what OHLCV trend
 signals can extract from these instruments.
 
 Reproducible: `scripts/trend_ta_wave.py` (+ overlap analysis in session log).
+
+---
+
+## 15. Ichimoku deep-dive (2026-07-09, owner-directed) — trials 111 → 121
+
+Owner: "focus on Ichimoku; find the TF/conditions where it is positive."
+Bounded pre-registered grid: 10 cells (TK-cross strong / Kijun-cross / cloud
+breakout / +chikou / doubled 20-60-120 params × 2h/4h/1d), validated 17,
+same protocol. 9 of 10 cells KILL or WEAK. One exceptional survivor:
+
+### I1 TK-cross "strong" @4h — the strongest harness result in the project
+
+Rules: fresh Tenkan(9)×Kijun(26) cross while close is on the matching side
+of the displaced cloud; stop 2×ATR; exit on opposite TK cross; no TP.
+
+| stage | result |
+|---|---|
+| Research sim | +0.253R, t 5.30, H1 +0.344 (t 4.6) / H2 +0.175 (t 2.9), **17/17 coins positive**, 1.7 trades/day |
+| Overlap bar | 29% overlap w/ don+sqz@4h; non-overlap H2 +0.046 (t 0.7) — additive edge UNPROVEN |
+| **REAL harness @4h/1d ×17** (n_trials=121) | **net +0.314R, PF 1.71, MaxDD 14.7% @1.5%, DSR +4.14, 698 OOS trades — ACCEPTED** |
+
+Regime note: Ichimoku TK-cross H2 (2025+) = +0.175R where donchian's same-
+window H2 = +0.03R — it is the strongest recent-regime directional edge
+measured on this system.
+
+### Deployment decision (discipline over excitement)
+
+As an ADDITIVE 4th risk leg it fails the marginal-evidence bar (its
+non-overlapping trades are unproven — same bar that killed MACD/PSAR/
+band-ride). As a STANDALONE system it is harness-ACCEPTED with the best
+numbers in the book. Resolution: **ported to the engine as the
+`ichimoku_trend` profile (full tests) and deployed SHADOW-ONLY** —
+`SHADOW_ONLY_SETUPS=ichimoku_trend` — so it is scored and tracked on live
+data, takes ZERO risk, and accumulates the evidence to become donchian's
+REPLACEMENT if the paper window confirms donchian's 2025+ softness.
+Engine port: detector (setups.py), streaming TKCROSS exit (executors.py,
+seeded with pre-entry (high,low) history at decide() time — parity across
+paper/backtest/live), risk branches (stop ceiling + no-TP contract),
+7 dedicated tests.
+
+Other cells for the ledger: I1@2h KILL (H2 −0.01), I1@1d WEAK, I2 Kijun-
+cross @4h WEAK (H2 t 0.6) / @1d KILL, I3 cloud-break @2h non-overlap
+NEGATIVE / @1d WEAK, I4 chikou @4h WEAK (H2 t 0.4), I5 doubled @4h KILL /
+@1d WEAK. The 4h TK-cross is the only Ichimoku system with real edge here.

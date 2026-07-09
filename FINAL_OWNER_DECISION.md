@@ -62,7 +62,8 @@ equity swings of the 2% config. The kill switch (−10%/day) and profit lock
 AX_MODE=paper
 RISK_PROFILE=aggressive_paper
 INITIAL_PAPER_BALANCE=200
-STRATEGIES=donchian_trend@4h/1d squeeze_breakout@1h/4h:ts=24:u=BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TON+TRX+DOT squeeze_breakout@4h/1d:ts=24
+STRATEGIES=donchian_trend@4h/1d squeeze_breakout@1h/4h:ts=24:u=BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TON+TRX+DOT squeeze_breakout@4h/1d:ts=24 ichimoku_trend@4h/1d
+SHADOW_ONLY_SETUPS=ichimoku_trend
 GLOBAL_RANKING=true
 RANK_KEY=edge
 LTF_LIMIT=525
