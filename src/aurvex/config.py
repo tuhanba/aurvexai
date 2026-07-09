@@ -431,6 +431,20 @@ class Config:
     max_stop_dist_pct_ich: float = field(
         default_factory=lambda: _float("MAX_STOP_DIST_PCT_ICH", 12.0))
 
+    # -- Band-walk continuation (band_walk profile) --------------------------
+    # Campaign-7 F3 (CONDITIONAL_TA_WAVE_REPORT.md): two consecutive closes
+    # outside BB(BW_BB_N, BW_BB_K) with ADX(14) rising over BW_ADX_LOOK bars →
+    # enter with the walk. Stop BW_ATR_MULT × ATR(14); exit = stop or the
+    # generic time-stop (researched shape: ts=12 @4h); no TP by design
+    # (BW_TP_R sentinel keeps the 3-slot TP contract).
+    bw_bb_n: int = field(default_factory=lambda: _int("BW_BB_N", 20))
+    bw_bb_k: float = field(default_factory=lambda: _float("BW_BB_K", 2.0))
+    bw_adx_look: int = field(default_factory=lambda: _int("BW_ADX_LOOK", 3))
+    bw_atr_mult: float = field(default_factory=lambda: _float("BW_ATR_MULT", 2.0))
+    bw_tp_r: float = field(default_factory=lambda: _float("BW_TP_R", 1000.0))
+    max_stop_dist_pct_bw: float = field(
+        default_factory=lambda: _float("MAX_STOP_DIST_PCT_BW", 12.0))
+
     # -- Bugra replica parameters ------------------------------------------
     bugra_stop_pct: float = field(default_factory=lambda: _float("BUGRA_STOP_PCT", 4.49))
     bugra_tp1_pct: float = field(default_factory=lambda: _float("BUGRA_TP1_PCT", 1.50))

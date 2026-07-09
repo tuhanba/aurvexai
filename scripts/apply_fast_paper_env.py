@@ -38,22 +38,29 @@ U17 = ("BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,"
        "NEAR/USDT:USDT,ARB/USDT:USDT,SUI/USDT:USDT,ICP/USDT:USDT,"
        "ATOM/USDT:USDT")
 
+MAJORS = "BTC+ETH+SOL+BNB+XRP"
+
+# Owner decision 2026-07-09: ichimoku ACTIVE (shadow-only removed) and the
+# walkforward-ACCEPTED band_walk@4h added on its validated majors universe
+# (net +0.082R, PF 1.17, DSR +2.43 — scripts/harness_bandwalk.py).
 STRATEGIES_FAST = (
     "donchian_trend@4h/1d:n=10 "
     f"squeeze_breakout@1h/4h:ts=24:u={U12} "
     "squeeze_breakout@4h/1d:ts=24:q=30 "
-    "ichimoku_trend@4h/1d")
+    "ichimoku_trend@4h/1d "
+    f"band_walk@4h/1d:ts=12:u={MAJORS}")
 STRATEGIES_BASE = (
     "donchian_trend@4h/1d "
     f"squeeze_breakout@1h/4h:ts=24:u={U12} "
     "squeeze_breakout@4h/1d:ts=24 "
-    "ichimoku_trend@4h/1d")
+    "ichimoku_trend@4h/1d "
+    f"band_walk@4h/1d:ts=12:u={MAJORS}")
 
 BLOCK = {
     "RISK_PROFILE": "aggressive_paper",
     "INITIAL_PAPER_BALANCE": "200",
     "STRATEGIES": STRATEGIES_FAST,          # or STRATEGIES_BASE (--baseline)
-    "SHADOW_ONLY_SETUPS": "ichimoku_trend",
+    "SHADOW_ONLY_SETUPS": "",               # ichimoku promoted to active
     "GLOBAL_RANKING": "true",
     "RANK_KEY": "edge",
     "LTF_LIMIT": "525",

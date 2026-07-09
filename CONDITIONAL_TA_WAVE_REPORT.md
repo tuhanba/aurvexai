@@ -83,6 +83,24 @@ grammar here is, consistently, **trend/breakout-with-a-regime-condition**.
    H1-regime artifact (F5), reversal families dead (F4), 1d contraction
    break fails H1. All recorded at trial count 192.
 
+## Addendum (same day): engine walk-forward validation — band_walk ACCEPTED
+
+The acceptance stage ran immediately (`scripts/harness_bandwalk.py`): the
+REAL engine profile (`detect_band_walk` + risk model + generic 12-bar
+time-stop) through `aurvex.walkforward` on the 6-year 4h data, funding and
+costs charged, DSR at 193 trials:
+
+| universe | OOS trades | gross Exp-R | net Exp-R | PF | MaxDD @1.5% | DSR | decision |
+|---|---|---|---|---|---|---|---|
+| 5 majors | 1,561 | +0.130 | **+0.082** | 1.17 | 27.6% | **+2.43** | **ACCEPTED** |
+| validated 12 | 846 | +0.073 | +0.041 | 1.07 | 30.9% | +0.87 | positive but thin |
+
+Owner decision (2026-07-09): deploy band_walk ACTIVE on its validated
+majors universe (`band_walk@4h/1d:ts=12:u=BTC+ETH+SOL+BNB+XRP`) as the
+fifth leg, and promote ichimoku from shadow-only to ACTIVE. The BBW<40
+donchian gate is NOT applied (owner chose trade count over the filter;
+it remains a measured option).
+
 Answer to the owner's question: **yes — under specific conditions
 (volatility-contraction regimes for breakouts; band-walk trend-strength
 regimes for continuation), conditional TA measurably wins at 4h on six

@@ -604,6 +604,67 @@ def detect_ichimoku_trend(ctx: Context) -> Optional[Signal]:
     )
 
 
+def detect_band_walk(ctx: Context) -> Optional[Signal]:
+    """Band-walk continuation — faithful port of the campaign-7 F3 rules
+    (CONDITIONAL_TA_WAVE_REPORT.md, 2026-07-09): +0.076R net / PF 1.17 /
+    DSR +3.08 over 6y × 12 coins in discovery; engine walk-forward is the
+    acceptance authority.
+
+    Rules exactly as tested:
+      1. Condition: ADX(14) rising — ADX now > ADX ``bw_adx_look`` bars ago.
+      2. Trigger: the last TWO closed bars each close outside the SAME side
+         of their own Bollinger band BB(bw_bb_n, bw_bb_k).
+      3. Stop: ``bw_atr_mult`` × ATR(14) from entry. No profit target.
+      4. Exit: the generic close-based time-stop (researched ts=12 @4h) or
+         the stop — no new exit machinery.
+    """
+    cfg = ctx.cfg
+    N = max(5, cfg.bw_bb_n)
+    look = max(1, cfg.bw_adx_look)
+    n = len(ctx.ltf)
+    if n < max(N + 2, 30 + look) or ctx.ltf_atr is None or ctx.ltf_atr <= 0:
+        return None
+    highs, lows, closes = ctx.ltf.highs, ctx.ltf.lows, ctx.ltf.closes
+    sig_i = n - 1
+    bb_now = ind.bollinger(closes[:sig_i + 1], N, cfg.bw_bb_k)
+    bb_prev = ind.bollinger(closes[:sig_i], N, cfg.bw_bb_k)
+    if not bb_now or not bb_prev:
+        return None
+    c_now, c_prev = closes[sig_i], closes[sig_i - 1]
+    if c_now > bb_now["upper"] and c_prev > bb_prev["upper"]:
+        side = LONG
+    elif c_now < bb_now["lower"] and c_prev < bb_prev["lower"]:
+        side = SHORT
+    else:
+        return None
+    adx_now = ind.adx(highs[:sig_i + 1], lows[:sig_i + 1],
+                             closes[:sig_i + 1])
+    adx_then = ind.adx(highs[:sig_i + 1 - look],
+                              lows[:sig_i + 1 - look],
+                              closes[:sig_i + 1 - look])
+    if adx_now is None or adx_then is None or adx_now <= adx_then:
+        return None
+    stop_dist = cfg.bw_atr_mult * ctx.ltf_atr
+    stop = c_now - stop_dist if side == LONG else c_now + stop_dist
+    band_excess = ((c_now - bb_now["upper"]) if side == LONG
+                   else (bb_now["lower"] - c_now))
+    strength = _clamp01(band_excess / max(stop_dist, 1e-12) * 5.0)
+    return Signal(
+        symbol=ctx.snap.symbol, side=side, setup_type="band_walk",
+        entry_hint=c_now, stop_hint=stop,
+        base_confidence=0.55 + 0.1 * strength,
+        factors={
+            "breakout_strength": strength,
+            "adx_rise": _clamp01((adx_now - adx_then) / 10.0),
+            "trend_alignment": _clamp01(0.5 + 0.5 * ctx.htf_bias *
+                                        (1 if side == LONG else -1)),
+        },
+        notes=(f"band-walk {side} · 2 closes outside BB({N},{cfg.bw_bb_k:g}) "
+               f"· ADX {adx_then:.1f}->{adx_now:.1f} · stop "
+               f"{cfg.bw_atr_mult:g}xATR"),
+    )
+
+
 def _build_registry(cfg: Config) -> List[Callable[[Context], Optional[Signal]]]:
     """Return the detector list for the configured strategy profile.
 
@@ -626,6 +687,8 @@ def _build_registry(cfg: Config) -> List[Callable[[Context], Optional[Signal]]]:
         return [detect_donchian_trend]
     if cfg.strategy_profile == "ichimoku_trend":
         return [detect_ichimoku_trend]
+    if cfg.strategy_profile == "band_walk":
+        return [detect_band_walk]
     return [detect_aurvex_enhanced]
 
 
