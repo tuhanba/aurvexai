@@ -692,12 +692,12 @@ def _parse_one_spec(base: Config, spec: str) -> Optional[StrategySpec]:
     spec = spec.strip()
     if not spec:
         return None
-    # profile@ltf/htf[:ts=N][:ch=N][:n=N][:q=N][:u=BTC+ETH+...]
+    # profile@ltf/htf[:ts=N][:ch=N][:n=N][:q=N][:r=PCT][:u=BTC+ETH+...]
     head, *opts = spec.split(":")
     if "@" not in head or "/" not in head:
         raise ValueError(f"bad STRATEGIES spec '{spec}' "
                          "(want profile@ltf/htf[:ts=N][:ch=N][:n=N][:q=N]"
-                         "[:u=BTC+ETH])")
+                         "[:r=PCT][:u=BTC+ETH])")
     profile, tfs = head.split("@", 1)
     ltf, htf = tfs.split("/", 1)
     profile, ltf, htf = profile.strip(), ltf.strip(), htf.strip()
@@ -716,6 +716,14 @@ def _parse_one_spec(base: Config, spec: str) -> Optional[StrategySpec]:
         elif o.startswith("q="):
             # squeeze percentile (validated more-action option Q30 @4h)
             overrides["sqz_pctile"] = int(o[2:])
+        elif o.startswith("r="):
+            # Per-leg risk %, clamped to the account risk band. This is the
+            # honest form of "dynamic leverage": sizing follows the leg's
+            # measured edge/DD profile; leverage itself never grows risk
+            # (it only sets locked margin — LEVERAGE_POLICY=efficient).
+            r = float(o[2:])
+            overrides["risk_pct"] = max(base.min_risk_pct,
+                                        min(base.max_risk_pct, r))
         elif o.startswith("u="):
             universe = frozenset(b.strip().upper()
                                  for b in o[2:].split("+") if b.strip())

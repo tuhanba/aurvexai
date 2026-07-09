@@ -507,3 +507,40 @@ the deployed 17, donchian's H2 softness is concentrated in the majors
 (BTC/ETH/SOL H2 negative) while the expansion-5 stay positive — and
 ichimoku's H2 is broadly positive across the 17. This sharpens the
 shadow-leg comparison the current deployment is designed to collect.
+
+---
+
+## 18. Exit-engineering wave: shorter exits + per-leg sizing (2026-07-09) — trials 134 → 147
+
+Owner: "trades run for days — can we take profit shorter and cleaner, and
+apply dynamic leverage?" 13 pre-registered exit variants on the three 4h
+edges (validated 17, full costs):
+
+| variant | R/trade | avg hold | daily yield | vs baseline |
+|---|---|---|---|---|
+| donchian baseline (channel) | +0.237 | 141h | **0.482 R/d** | — |
+| donchian TP2R / TP3R / ts=30 / ATR-trail / partial | +0.03…+0.13 | 77–126h | 0.07–0.30 | **−38…−85% yield, H2 ~0 everywhere** |
+| squeeze@4h baseline ts=24 | +0.195 | 82h | **0.190** | — |
+| squeeze ts=12 / TP1.5R / TP2R | +0.08…+0.11 | 45–75h | 0.08–0.10 | **−45…−60%** |
+| ichimoku baseline (TK-cross) | +0.254 | 86h | **0.436** | — |
+| ichimoku TP2R / trail / partial | +0.13…+0.19 | 82–87h | 0.19–0.32 | −27…−57% |
+
+**Measured law (13/13 cells): every shortened exit destroys total yield.**
+The edge of these systems lives in the tail of long winners — median holds
+are ~3–4 days BECAUSE that is where the money is. Cutting them early is a
+transfer to the market. The validated exits stay. (Only near-exception:
+ichimoku partial 50%@1.5R keeps H2 t=3.8 with smoother equity at −27%
+yield — documented as a variance-reduction option, NOT adopted.) The
+portfolio's genuinely fast money remains squeeze@1h (24h cap).
+
+### "Dynamic leverage" — the honest architecture answer
+
+Leverage in this system NEVER grows profit or risk: position size comes
+from RISK_PCT; leverage only sets locked margin, and
+`LEVERAGE_POLICY=efficient` already minimizes that (freeing margin for
+more concurrent positions). The correct lever is per-leg SIZING — shipped
+as the `:r=` STRATEGIES option (per-leg risk %, clamped to the account
+band, e.g. `squeeze_breakout@4h/1d:ts=24:r=2.0` to overweight the best
+DD-profile leg). Config-only, parity-safe, tested. Evidence-gated dynamic
+sizing beyond that already exists as RISK_MODULATION_ENABLED (stage-2
+shadow staircase, governor SHADOW_READINESS).
