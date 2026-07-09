@@ -94,6 +94,35 @@ def test_time_stop_countdown_fields():
     assert d["age_min"] >= 0
 
 
+def test_equity_curve_endpoint(tmp_path):
+    """/api/equity_curve = ledger points + one live equity point (cash+MTM)."""
+    from aurvex.config import Config
+    from aurvex.dashboard.app import create_app
+    from aurvex.models import now_ms
+    from aurvex.storage import Storage
+
+    cfg = Config()
+    cfg.db_path = str(tmp_path / "e.db")
+    db = Storage(cfg.db_path)
+    t0 = now_ms() - 3_600_000
+    for i, (bal, chg) in enumerate([(205.0, 5.0), (198.0, -7.0)]):
+        db.conn.execute(
+            "INSERT INTO balance_ledger (ts, mode, balance, change, reason, "
+            "trade_id) VALUES (?,?,?,?,?,?)",
+            (t0 + i * 60_000, cfg.mode, bal, chg, "TP", f"t{i}"))
+    db.upsert_trade(_trade(mode=cfg.mode))
+    db.set_meta("marks", {"ts": now_ms(),
+                          "prices": {"ETH/USDT:USDT": 3060.0}})
+    db.conn.commit()
+
+    app = create_app(cfg)
+    payload = app.test_client().get("/api/equity_curve").get_json()
+    assert [p["balance"] for p in payload["points"]] == [205.0, 198.0]
+    # live equity = cash + 30 USDT unrealized on the seeded open trade
+    assert abs(payload["equity"] - (payload["balance"] + 30.0)) < 1e-6
+    assert payload["initial_balance"] == cfg.initial_paper_balance
+
+
 def test_endpoint_summary(tmp_path):
     """/api/trades/open returns unrealized_total + equity from marks meta."""
     from aurvex.config import Config

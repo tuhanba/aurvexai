@@ -590,6 +590,33 @@ def create_app(cfg=None) -> Flask:
             "session_clip_breakdown": session_clip_breakdown,
         })
 
+    @app.route("/api/equity_curve")
+    def equity_curve():
+        """Equity history for the chart: realised balance after every fill
+        (balance_ledger) plus one LIVE point = cash + open mark-to-market.
+        Read-only aggregation of what the engine already wrote."""
+        rows = db.conn.execute(
+            "SELECT ts, balance FROM balance_ledger WHERE mode=? "
+            "ORDER BY ts ASC LIMIT 5000", (cfg.mode,)).fetchall()
+        points = [{"ts": int(r["ts"]), "balance": round(r["balance"], 4)}
+                  for r in rows]
+        balance = db.get_balance()
+        marks_meta = db.get_meta("marks") or {}
+        marks = marks_meta.get("prices", {}) if isinstance(marks_meta, dict) else {}
+        unreal = 0.0
+        for t in db.get_open_trades(mode=cfg.mode):
+            mark = marks.get(t.symbol)
+            if mark and t.entry:
+                qty = t.position_size * t.remaining_fraction / t.entry
+                unreal += qty * (mark - t.entry) * (1 if t.side == "LONG" else -1)
+        return jsonify({
+            "points": points,
+            "initial_balance": cfg.initial_paper_balance,
+            "balance": round(balance, 4),
+            "equity": round(balance + unreal, 4),
+            "ts_now": now_ms(),
+        })
+
     @app.route("/api/telegram")
     def telegram_health():
         hb = db.get_heartbeat("telegram")

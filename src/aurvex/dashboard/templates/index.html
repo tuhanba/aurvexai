@@ -565,12 +565,18 @@ tr:last-child td{border-bottom:none}
     <div id="openTrades"></div>
   </div>
 
+  <!-- Equity curve -->
+  <div class="card">
+    <div class="card-title">Equity curve <span id="eqLabel" style="font-weight:normal;font-size:11px;color:var(--muted)"></span></div>
+    <div id="equityChart" style="width:100%"></div>
+  </div>
+
   <!-- Closed trades -->
   <div class="card">
     <div class="card-title">Closed trades</div>
     <div class="tbl-wrap" style="max-height:280px;overflow-y:auto">
       <table id="closedTbl">
-        <thead><tr><th>sym</th><th>side</th><th>setup</th><th>reason</th><th>PnL</th><th>R</th></tr></thead>
+        <thead><tr><th>closed</th><th>sym</th><th>side</th><th>setup</th><th>dur</th><th>reason</th><th>PnL</th><th>R</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -695,7 +701,7 @@ async function getJSON(u){const r=await fetch(u);return r.json();}
 
 async function refresh(){
   try{
-    const [st,fn,me,op,cl,sg,sh,ac,tg,pm,sv,ss,qp,mo,shl,dg,bn] = await Promise.all([
+    const [st,fn,me,op,cl,sg,sh,ac,tg,pm,sv,ss,qp,mo,shl,dg,bn,eq] = await Promise.all([
       getJSON('/api/status'), getJSON('/api/funnel'), getJSON('/api/metrics'),
       getJSON('/api/trades/open'), getJSON('/api/trades/closed'),
       getJSON('/api/signals'), getJSON('/api/shadow'),
@@ -703,7 +709,8 @@ async function refresh(){
       getJSON('/api/portfolio_metrics'), getJSON('/api/score_validity'),
       getJSON('/api/system_state'), getJSON('/api/quality'),
       getJSON('/api/missed_opportunity'), getJSON('/api/setup_health'),
-      getJSON('/api/diagnosis'), getJSON('/api/binance')
+      getJSON('/api/diagnosis'), getJSON('/api/binance'),
+      getJSON('/api/equity_curve')
     ]);
 
     // ── Mode banner (Task 4): PAPER / DRY_RUN / TESTNET / LIVE ──
@@ -1121,13 +1128,60 @@ async function refresh(){
       sparkEl.style.display='none';
     }
 
+    // ── Equity curve (realised balance ledger + live MTM point) ──
+    if(eq){
+      const el = document.getElementById('equityChart');
+      const pts = (eq.points||[]).slice();
+      // Anchor at the initial balance so the very first trades have a baseline.
+      if(!pts.length || pts[0].balance !== eq.initial_balance){
+        const t0 = pts.length ? pts[0].ts - 1 : eq.ts_now - 1;
+        pts.unshift({ts: t0, balance: eq.initial_balance});
+      }
+      pts.push({ts: eq.ts_now, balance: eq.equity});   // live equity point
+      const W=920, H=160, PAD=6;
+      const xs = pts.map(p=>p.ts), ys = pts.map(p=>p.balance);
+      const xmin=Math.min(...xs), xmax=Math.max(...xs);
+      const ymin=Math.min(...ys), ymax=Math.max(...ys);
+      const xr = xmax-xmin || 1, yr = ymax-ymin || 1;
+      const X=t=>PAD+(t-xmin)/xr*(W-2*PAD), Y=v=>H-PAD-(v-ymin)/yr*(H-2*PAD);
+      const poly = pts.map(p=>`${X(p.ts).toFixed(1)},${Y(p.balance).toFixed(1)}`).join(' ');
+      const y0 = Y(eq.initial_balance);
+      const up = eq.equity >= eq.initial_balance;
+      const line = up ? 'var(--green)' : 'var(--red)';
+      const lastX = X(eq.ts_now), lastY = Y(eq.equity);
+      el.innerHTML = `
+        <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:${H}px;display:block">
+          <line x1="${PAD}" y1="${y0}" x2="${W-PAD}" y2="${y0}"
+                stroke="var(--muted)" stroke-dasharray="4 4" stroke-width="1" opacity="0.5"/>
+          <polyline points="${poly}" fill="none" stroke="${line}" stroke-width="1.8"/>
+          <circle cx="${lastX}" cy="${lastY}" r="3.5" fill="${line}"/>
+        </svg>`;
+      const pnl = eq.equity - eq.initial_balance;
+      document.getElementById('eqLabel').innerHTML =
+        `start ${fmt(eq.initial_balance)} · cash ${fmt(eq.balance)} · `+
+        `equity <b class="${cls(pnl)}">${fmt(eq.equity)}</b> `+
+        `(<span class="${cls(pnl)}">${signed(pnl)} / ${signed(pnl/eq.initial_balance*100)}%</span>) · `+
+        `${(eq.points||[]).length} fills`;
+    }
+
     // ── Closed trades ──
+    const durTxt = t=>{
+      if(!t.open_time||!t.close_time) return '—';
+      const m = Math.max(0,(t.close_time-t.open_time)/60000);
+      return m>=90 ? fmt(m/60,1)+'h' : Math.round(m)+'m';
+    };
+    const whenTxt = t=>{
+      if(!t.close_time) return '—';
+      const d = new Date(t.close_time);
+      return `${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')} ${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}`;
+    };
     document.querySelector('#closedTbl tbody').innerHTML = cl.trades.map(t=>
-      `<tr><td>${t.symbol}</td><td>${t.side}</td><td>${t.setup_type}</td>
-       <td>${t.close_reason}</td>
+      `<tr><td style="color:var(--muted)">${whenTxt(t)}</td>
+       <td>${t.symbol}</td><td>${t.side}</td><td>${t.setup_type}</td>
+       <td>${durTxt(t)}</td><td>${t.close_reason}</td>
        <td class="${cls(t.realized_pnl)}">${signed(t.realized_pnl)}</td>
        <td class="${cls(t.realized_pnl_pct)}">${fmt(t.realized_pnl_pct,2)}</td></tr>`).join('')
-      ||'<tr><td colspan="6" style="color:var(--muted)">none</td></tr>';
+      ||'<tr><td colspan="8" style="color:var(--muted)">none</td></tr>';
 
     // ── Signals ──
     document.querySelector('#sigTbl tbody').innerHTML = sg.signals.map(s=>
