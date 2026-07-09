@@ -1,6 +1,8 @@
 # SYSTEM_STATE.md — the single source of truth
 
-**Updated: 2026-07-08 (wave 2: edge expansion + data-flow speed).** If any
+**Updated: 2026-07-09 (campaigns 5+6: liquidity-sweep multi-TF and ALL
+remaining data axes — NO-GO; the sub-1h search space is exhausted).**
+If any
 other document contradicts this file, this file wins. (README/ROADMAP/
 LIVE_READY_CHECKLIST were written at different stages of the project; they
 are aligned to this file as of this date.)
@@ -34,7 +36,8 @@ cell tried, out-of-symbol holdout, kill-rule discipline.
 | **donchian_trend** (20-bar channel breakout, 2×ATR stop, channel exit) | 4h | **+0.284** | 1.37 | 19.3% | +2.44 | **ACCEPTED 5/5** — primary |
 | **squeeze_breakout** (vol-squeeze + range break, 24h time-stop, SMA200 filter) | 1h | **+0.088** | 1.12 | 32% (≈24% @1.5%) | +1.58 | **ACCEPTED** — secondary. **Universe: its validated 12 coins ONLY** (measured negative on the 5 donchian-expansion coins — use `u=` in STRATEGIES) |
 | **squeeze_breakout @4h** (same rules, 24-bar=96h time-stop) — NEW 2026-07-08 | 4h | **+0.193** (majors) / **+0.211** (17 coins) | 1.49 / 1.56 | 15.5% / 9.5% @1.5% | **+2.63 / +3.30** (deflated n_trials=95) | **ACCEPTED — real harness, both split halves positive (H1 +0.21 / H2 +0.18), 15/17 coins** |
-| **ichimoku_trend** (TK-cross + cloud-side confirm, TKCROSS exit) — NEW 2026-07-09 | 4h | **+0.314** | **1.71** | 14.7% @1.5% | **+4.14** (n_trials=121) | **ACCEPTED — strongest harness result in the book.** Deployed **SHADOW-ONLY** (additive-edge bar unproven vs don+sqz; positioned as donchian's regime-substitute candidate) |
+| **ichimoku_trend** (TK-cross + cloud-side confirm, TKCROSS exit) — NEW 2026-07-09 | 4h | **+0.314** | **1.71** | 14.7% @1.5% | **+4.14** (n_trials=121) | **ACCEPTED — strongest harness result in the book.** Deployed **ACTIVE** since 2026-07-09 (owner decision: shadow-only removed) |
+| **band_walk** (2 closes outside BB(20,2) + rising ADX, 12-bar time-stop) — NEW 2026-07-09 | 4h | **+0.082** (majors) / +0.041 (12) | 1.17 / 1.07 | 27.6% @1.5% | **+2.43** (majors, n_trials=193) | **ACCEPTED on majors — deployed ACTIVE with `u=BTC+ETH+SOL+BNB+XRP`** (12-coin run positive but thin, DSR +0.87 — universe stays majors). Discovery: `CONDITIONAL_TA_WAVE_REPORT.md`; validation: `scripts/harness_bandwalk.py` |
 | **carry** (spot-long + perp-short funding harvest, cross-margin) | 8h settle | +4…8%/yr on capital, t>11, maxDD <3% | — | — | — | validated in research; **NOT built into the engine yet** |
 
 Character warning: both directional edges are **swing/positional** (hours to
@@ -43,9 +46,10 @@ every faster cell measured net-negative.
 
 ## 3. Failed edges (evidence-gate NO-GO — do not retry without new data)
 
-Roughly **17 families / 60+ cells** of short-timeframe scalping have been
-tested across four campaigns (2026-06-29, 2026-07-05 ×2, 2026-07-08). Every
-cell net-negative after realistic taker+slippage cost. The graveyard:
+Roughly **25 families / 95+ cells** of short-timeframe trading have been
+tested across six campaigns (2026-06-29, 2026-07-05 ×2, 2026-07-08,
+2026-07-09 ×2). Every cell net-negative after realistic taker+slippage
+cost. The graveyard:
 
 - Buğra 5-condition directional TA — 20/20 cells net-negative (5m→4h).
 - Mean-reversion (Bollinger stretch), RSI2/Connors, VWAP reversion.
@@ -53,12 +57,31 @@ cell net-negative after realistic taker+slippage cost. The graveyard:
   momentum continuation (5m/15m).
 - Cross-sectional momentum (daily), funding-extreme directional (regime
   mirage caught by holdout), pullback-in-trend.
-- **2026-07-08 wave (this session)**: cross-symbol leader-lag (BTC impulse →
+- **2026-07-08 wave**: cross-symbol leader-lag (BTC impulse →
   alt follow AND fade, 5m/15m), rejection-wick reversal, high-volume failed
   breakout, volume+range impulse continuation, break-and-retest, inside-bar
   breakout, prior-day sweep-reclaim — **12/12 cells NO-GO**, both halves
   negative, **0 of 12 coins positive in any cell**
   (`SCALP_EDGE_RESEARCH_REPORT.md`).
+- **2026-07-09 campaign 5 (owner-requested)**: htf_liquidity_sweep_bos_fvg —
+  the full ICT/SMC multi-TF model (HTF liquidity map sweep → 5m BOS/IFVG
+  confirm → 1m BOS trigger → liquidity-draw TP; strict spec ordering
+  enforced and spot-verified), 1m execution data, 20 cells over
+  confirmation/trigger/entry/stop/TP-pool-type/session-window/trend axes —
+  **20/20 NO-GO, 16/20 gross-negative before cost, 0/12 coins positive,
+  all acceptance criteria failed**
+  (`HTF_LIQUIDITY_SWEEP_RESEARCH_REPORT.md`).
+- **2026-07-09 campaign 6 (owner mandate "leave nothing untried")**: every
+  remaining archive DATA AXIS beyond OHLCV — aggressor flow (taker-buy
+  volume / trade count: CVD divergence, imbalance follow+fade, absorption,
+  large-print proxy), spot-perp basis (fade + impulse), funding-window
+  harvest, H1-discovered/H2-traded hour seasonality, open-interest
+  breakout/divergence (majors) — **15/15 NO-GO**. Positive gross exists
+  (+0.02…+0.07R: CVD, absorption, OI-breakout) but never approaches the
+  0.22–0.81R cost bar. aggTrades sub-minute data can't beat the bound its
+  own 1m aggregation just measured; L2 depth is not archived. **The sub-1h
+  search space is exhausted: every family AND every accessible information
+  source is measured.** Trial count now 182.
 
 **Structural reason:** gross edge on OHLCV signals at scalp horizons is at
 best +0.03…+0.08R; taker round-trip cost (~0.13–0.14%) is 0.2–0.6R at
@@ -89,13 +112,28 @@ Everything. Live promotion requires ALL of:
    clean `reconcile()`,
 5. the five-gate lock opened deliberately, gate by gate.
 
-## 6. Recommended `.env` for paper (current)
+## 6. Recommended `.env` for paper (current — owner-selected FAST variant, 2026-07-09)
+
+The owner selected the validated "more action" package (§7): donchian
+enters on the 10-bar channel (`n=10`, +12% trades at ~93% yield) and
+squeeze@4h on the loosened Q30 squeeze (`q=30`, +27% trades at ~85%
+yield). Both options are harness-ACCEPTED; nothing outside the measured
+book. Earlier EXITS were measured separately (13 variants, 2026-07-08)
+and ALL destroy yield — exits stay as validated. Baseline (non-fast)
+variant: drop `:n=10` and `:q=30` from the STRATEGIES line.
+
+2026-07-09 (later wave, owner decision): ichimoku promoted to ACTIVE
+(shadow-only removed — its +0.314R/DSR +4.14 is the strongest harness
+result in the book) and the newly walkforward-ACCEPTED **band_walk@4h**
+added as a fifth leg on its validated majors universe. Five legs, one
+shared account; the slot pool + global ranking + exposure caps are the
+correlation containment.
 
 ```
 RISK_PROFILE=aggressive_paper
 INITIAL_PAPER_BALANCE=200
-STRATEGIES=donchian_trend@4h/1d squeeze_breakout@1h/4h:ts=24:u=BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TON+TRX+DOT squeeze_breakout@4h/1d:ts=24 ichimoku_trend@4h/1d
-SHADOW_ONLY_SETUPS=ichimoku_trend
+STRATEGIES=donchian_trend@4h/1d:n=10 squeeze_breakout@1h/4h:ts=24:u=BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TON+TRX+DOT squeeze_breakout@4h/1d:ts=24:q=30 ichimoku_trend@4h/1d band_walk@4h/1d:ts=12:u=BTC+ETH+SOL+BNB+XRP
+SHADOW_ONLY_SETUPS=
 GLOBAL_RANKING=true
 RANK_KEY=edge
 LTF_LIMIT=525
@@ -151,9 +189,11 @@ slow), not faster direction-calling.
 
 ## 8. What is still being researched
 
-- **Scalp: nothing.** The families are exhausted; the verdict is structural
-  (cost > gross edge), not parameter-sensitive. Reopen only with L2/tick data
-  or materially lower fees.
+- **Scalp: nothing.** As of campaign 6 both the signal families AND every
+  archive-accessible data axis (aggressor flow, basis, funding windows,
+  seasonality, OI) are measured net-negative; the verdict is structural
+  (cost > gross edge ceiling ≈ +0.07R), not parameter-sensitive. Reopen
+  only with L2 order-book data + latency infra or materially lower fees.
 - **Closed this wave (2026-07-08), do not retry without new data:**
   donchian on 12 NEW coins (H1 +0.63R → H2 −0.02R, killed — the edge stays
   coin-specific); squeeze@1h on expansion/new coins (killed); donchian@1d
@@ -166,6 +206,17 @@ slow), not faster direction-calling.
   is soft (+0.03R vs +0.48R in 2023–24). The authoritative 5.8-year harness
   validation stands, but this is exactly what the 30–50-trade paper window
   must confirm. Squeeze@4h is strong in BOTH halves including 2025+.
+- **Campaign 7 (2026-07-09, conditional swing TA — `CONDITIONAL_TA_WAVE_REPORT.md`):**
+  first discovery-gate passes since ichimoku. (a) **band_walk @4h
+  CANDIDATE** — two closes outside BB(20,2) + rising ADX, net +0.076R,
+  PF 1.17, DSR +3.08 (192 trials), 11/12 coins, H2>H1, only 8% entry
+  overlap with the donchian family (+0.5 regime corr) — pending the
+  engine walk-forward + holdout + additivity stage before any deployment;
+  (b) **BBW<40 contraction gate on donchian** — keeps ~70% of trades,
+  per-trade net +0.118→+0.169R on 6y, candidate FILTER pending engine-
+  harness test with real channel exits; (c) reversal TA (RSI divergence)
+  fails at swing TFs too; F1-contraction-break replicates squeeze (89%
+  overlap — independent replication, not a new leg). Trial count now 192.
 - **Carry executor**: engine port of the validated funding-harvest strategy
   (cross-margin, universe 5) as a separate low-frequency engine with its own
   risk rules. This is engineering, not research.

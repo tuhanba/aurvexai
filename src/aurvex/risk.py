@@ -98,7 +98,11 @@ def normalize_stop(cfg: Config, side: str, entry: float, stop: float,
                    cfg.strategy_profile == "donchian_trend")
     is_ichimoku = (profile_of(setup_type) == "ichimoku_trend" or
                    cfg.strategy_profile == "ichimoku_trend")
-    if is_ichimoku:
+    is_bandwalk = (profile_of(setup_type) == "band_walk" or
+                   cfg.strategy_profile == "band_walk")
+    if is_bandwalk:
+        max_stop = cfg.max_stop_dist_pct_bw
+    elif is_ichimoku:
         max_stop = cfg.max_stop_dist_pct_ich
     elif is_donchian:
         max_stop = cfg.max_stop_dist_pct_don
@@ -370,14 +374,18 @@ class RiskManager:
                        cfg.strategy_profile == "donchian_trend")
         is_ichimoku = (profile_of(setup_type) == "ichimoku_trend" or
                        cfg.strategy_profile == "ichimoku_trend")
-        if is_squeeze or is_donchian or is_ichimoku:
+        is_bandwalk = (profile_of(setup_type) == "band_walk" or
+                       cfg.strategy_profile == "band_walk")
+        if is_squeeze or is_donchian or is_ichimoku or is_bandwalk:
             # No profit target by design — the validated exits are the stop
-            # plus the time-stop (squeeze) or the streaming channel exit
-            # (donchian). A single unreachable target (SQZ_TP_R / DON_TP_R,
-            # default 1000R) keeps the 3-slot TP contract intact without
-            # ever realising; no TP1 → no break-even move, no runner —
-            # exactly the researched exit shapes.
-            tp_r = (cfg.ich_tp_r if is_ichimoku
+            # plus the time-stop (squeeze, band_walk) or the streaming
+            # channel/TK-cross exit (donchian/ichimoku). A single unreachable
+            # target (SQZ_TP_R / DON_TP_R / ICH_TP_R / BW_TP_R, default
+            # 1000R) keeps the 3-slot TP contract intact without ever
+            # realising; no TP1 → no break-even move, no runner — exactly
+            # the researched exit shapes.
+            tp_r = (cfg.bw_tp_r if is_bandwalk
+                    else cfg.ich_tp_r if is_ichimoku
                     else cfg.don_tp_r if is_donchian else cfg.sqz_tp_r)
             tp = entry + sign * r * tp_r
             return [
