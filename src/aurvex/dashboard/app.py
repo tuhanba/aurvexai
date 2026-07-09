@@ -41,12 +41,23 @@ from ..storage import Storage
 _missed_reason_bucket = missed_reason_bucket
 
 
-def _trade_dict(t, balance: float = 0.0) -> Dict[str, Any]:
+def _trade_dict(t, balance: float = 0.0,
+                marks: Dict[str, float] | None = None) -> Dict[str, Any]:
     """Serialize a Trade to a dict, including the six distinct leverage-concept numbers.
 
     T1b: price_move_to_stop_pct, account_risk_pct, margin_roe_at_stop_pct,
     notional (position_size), leverage, liq_distance_pct are shown as DISTINCT
     numbers so the dashboard never conflates them.
+
+    When ``marks`` (the engine-written last mark prices) is provided and the
+    trade is OPEN, live mark-to-market fields are added: ``mark``,
+    ``unrealized_pnl`` (USDT, remaining size, same formula as accounting.py),
+    ``unrealized_r`` (vs the actually-risked amount), ``price_move_pct``
+    (signed, from entry in trade direction), ``stop_room_pct`` (share of the
+    entry→stop distance still unspent; 0 = at the stop, 100 = at entry, >100 =
+    in profit) and ``total_pnl`` (booked partial + unrealized). Read-only
+    derivations of what the engine already wrote — the dashboard still
+    decides nothing.
     """
     entry = t.entry or 0.0
     stop_dist_pct = (abs(entry - t.stop_loss) / entry * 100.0) if entry else 0.0
@@ -56,7 +67,7 @@ def _trade_dict(t, balance: float = 0.0) -> Dict[str, Any]:
     margin_used = t.margin_used or (t.position_size / (t.leverage or 1))
     account_risk_pct = (actual_risk / balance * 100.0) if balance else t.risk_pct
     margin_roe_pct = (actual_risk / margin_used * 100.0) if margin_used else 0.0
-    return {
+    d = {
         "id": t.id, "symbol": t.symbol, "side": t.side, "setup_type": t.setup_type,
         "entry": entry, "stop_loss": t.stop_loss, "current_stop": t.current_stop,
         "position_size": round(t.position_size, 2), "leverage": t.leverage,
@@ -101,7 +112,36 @@ def _trade_dict(t, balance: float = 0.0) -> Dict[str, Any]:
         "open_time": t.open_time, "close_time": t.close_time,
         "tp_targets": [{"price": tp.price, "fraction": tp.fraction, "hit": tp.hit}
                        for tp in t.tp_targets],
+        # Exit-shape context for the live view (time-stop countdown).
+        "bars_held": int(t.metadata.get("bars_held", 0) or 0),
+        "time_stop_bars": int(t.metadata.get("exit_time_stop_bars") or 0),
+        "exit_ltf": t.metadata.get("exit_ltf", ""),
+        "age_min": round(max(0, now_ms() - (t.open_time or now_ms())) / 60_000.0, 1),
     }
+    # Live mark-to-market block (open trades only, when a mark exists).
+    mark = (marks or {}).get(t.symbol)
+    if t.status == "OPEN" and mark and entry:
+        sign = 1 if t.side == "LONG" else -1
+        rem_notional = t.position_size * t.remaining_fraction
+        qty = rem_notional / entry
+        upnl = qty * (mark - entry) * sign
+        risk_base = actual_risk or 0.0
+        stop_ref = t.current_stop or t.stop_loss
+        stop_dist = (entry - stop_ref) * sign
+        d.update({
+            "mark": mark,
+            "unrealized_pnl": round(upnl, 4),
+            "unrealized_r": round(upnl / risk_base, 3) if risk_base > 0 else None,
+            "price_move_pct": round((mark - entry) / entry * 100.0 * sign, 4),
+            "stop_room_pct": round((mark - stop_ref) * sign / stop_dist * 100.0,
+                                   1) if stop_dist > 0 else None,
+            "total_pnl": round(t.realized_pnl + upnl, 4),
+        })
+    else:
+        d.update({"mark": mark, "unrealized_pnl": None, "unrealized_r": None,
+                  "price_move_pct": None, "stop_room_pct": None,
+                  "total_pnl": round(t.realized_pnl, 4)})
+    return d
 
 
 def _mode_banner(cfg) -> str:
@@ -320,8 +360,19 @@ def create_app(cfg=None) -> Flask:
     @app.route("/api/trades/open")
     def trades_open():
         balance = db.get_balance()
-        return jsonify({"trades": [_trade_dict(t, balance=balance)
-                                   for t in db.get_open_trades(mode=cfg.mode)]})
+        marks_meta = db.get_meta("marks") or {}
+        marks = marks_meta.get("prices", {}) if isinstance(marks_meta, dict) else {}
+        rows = [_trade_dict(t, balance=balance, marks=marks)
+                for t in db.get_open_trades(mode=cfg.mode)]
+        upnls = [r["unrealized_pnl"] for r in rows
+                 if r["unrealized_pnl"] is not None]
+        return jsonify({
+            "trades": rows,
+            "marks_ts": marks_meta.get("ts") if isinstance(marks_meta, dict) else None,
+            "unrealized_total": round(sum(upnls), 4) if upnls else 0.0,
+            "unrealized_marked": len(upnls),
+            "equity": round(balance + (sum(upnls) if upnls else 0.0), 4),
+        })
 
     @app.route("/api/trades/closed")
     def trades_closed():
