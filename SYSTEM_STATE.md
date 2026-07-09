@@ -135,11 +135,17 @@ measured flat-to-negative — more universe = less edge.
 
 Three-leg multi-strategy (§6): donchian@4h (~1.4–2/day) + squeeze@1h
 (~3/day on its 12) + squeeze@4h (~1/day on the 17) ≈ **5.5–6 trades/day
-fleet-wide** — the new measured frequency ceiling with positive edge.
-Optional still-validated bump: `DON_ENTRY_BARS=10` (+14% donchian trades at
-~94% of yield). Anything faster requires an edge that does not exist in
-this data (§3). Beyond this, the honest path is the carry engine
-(uncorrelated, slow), not faster direction-calling.
+fleet-wide** — the measured frequency ceiling at optimal yield.
+
+**Validated "more action" package (owner-selectable, per-leg spec options;
+each costs some per-trade edge — dossier §13):**
+- `squeeze_breakout@4h/1d:ts=24:q=30` → +27% trades on that leg at ~85% of
+  its yield (harness ACCEPTED: net +0.161R, PF 1.43, DSR +2.82).
+- `donchian_trend@4h/1d:n=10` → +12% trades at ~93% of yield (phase-5 +
+  wave-3 validated).
+Anything faster than this requires an edge that does not exist in this
+data (§3). Beyond this, the honest path is the carry engine (uncorrelated,
+slow), not faster direction-calling.
 
 ## 8. What is still being researched
 

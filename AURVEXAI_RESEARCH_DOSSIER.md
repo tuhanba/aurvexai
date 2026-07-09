@@ -308,3 +308,25 @@ donchian @4h recent-half softness in the replication sim (2025+ ≈ +0.03R vs
 this. squeeze@4h is strong in BOTH halves including 2025+.
 
 Test floor: 684 green.
+
+---
+
+## 13. Frequency frontier @4h (wave 3, 2026-07-08) — trials 95 → 99
+
+Owner: "fastest, quickest to profit." Pre-registered cells on the strongest
+recent-regime edge (squeeze@4h) + donchian variant revalidation:
+
+| cell | trades/day | R/trade | daily yield | halves | verdict |
+|---|---|---|---|---|---|
+| squeeze@4h Q20/W24 (deployed) | 0.99 | +0.193 | 0.191 R/d | + / + | **baseline stays — yield-optimal** |
+| squeeze@4h **Q30**/W24 | 1.25 (+27%) | +0.130 | 0.162 R/d (85%) | +0.16 / +0.10 | **VALIDATED OPTION** — real harness: net +0.161R, PF 1.43, DD 14%, DSR +2.82 (n_trials=99), ACCEPTED |
+| squeeze@4h Q20/**W12** | 1.34 | +0.090 | — | H2 t 1.0 | KILL |
+| squeeze@4h on 12 NEW coins | — | — | — | H1-picked 7 coins → H2 +0.088R t 0.89 | **WATCH only** — positive but insignificant; NOT deployed |
+| donchian@4h **N10**/X20 | +12% trades | +0.194 | ~93% of N20 | + / + (H2 soft both) | validated option (phase-5 confirmed) |
+
+Pattern (third time measured): **more frequency always costs per-trade edge**;
+the deployed baseline sits at the yield optimum. The validated "more action"
+package for the owner is `:q=30` on the squeeze@4h leg and/or `:n=10` on the
+donchian leg — both harness/holdout-validated, both ~85–93% of max yield.
+STRATEGIES specs now support per-leg `:n=` and `:q=` so these flip without
+touching global config.

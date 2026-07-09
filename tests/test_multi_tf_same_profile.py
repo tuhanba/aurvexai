@@ -125,3 +125,14 @@ def test_universe_filter_blocks_other_symbols(dual_squeeze_engine):
     keys = {s.setup_type for s in sigs}
     assert "squeeze_breakout" in keys
     assert "squeeze_breakout@4h" not in keys
+
+
+def test_n_and_q_spec_options():
+    c = Config()
+    c.strategies = ("donchian_trend@4h/1d:n=10 "
+                    "squeeze_breakout@4h/1d:ts=24:q=30")
+    specs = parse_strategies(c)
+    assert specs[0].pcfg.don_entry_bars == 10
+    assert specs[0].pcfg.sqz_pctile == c.sqz_pctile      # untouched
+    assert specs[1].pcfg.sqz_pctile == 30
+    assert specs[1].pcfg.don_entry_bars == c.don_entry_bars

@@ -161,3 +161,17 @@ SYSTEM_STATE.md §2/§6/§7/§8/§10/§11/§12, dossier §12, FINAL_OWNER_DECISI
 (.env + monitoring), DEPLOYMENT.md (3-leg block), .env.example (u= + new
 knobs). Research scripts archived: scripts/fetch_swing_klines.py,
 scripts/edge_expansion.py, scripts/harness_sqz4h.py.
+
+---
+
+# Wave 3 (2026-07-08): squeeze@4h frequency frontier + per-leg options
+
+- Pre-registered cells (trials 95 → 99): squeeze@4h Q30 → **VALIDATED
+  OPTION** (harness ACCEPTED: +0.161R, PF 1.43, DD 14%, DSR +2.82; +27%
+  trades at ~85% yield). W12 killed (H2 t 1.0). squeeze@4h on 12 new coins
+  → WATCH only (H2 +0.088R, t 0.89 — insignificant, NOT deployed).
+  donchian N10/X20 reconfirmed (+12% trades, ~93% yield).
+- Third consecutive measurement of the same law: more frequency costs
+  per-trade edge; deployed baseline stays yield-optimal. "More action" now
+  flips per leg via new STRATEGIES spec options `:n=` and `:q=`.
+- Tests: **685 passed**. Docs: dossier §13, SYSTEM_STATE §7, .env.example.
