@@ -981,36 +981,55 @@ async function refresh(){
     ar.textContent = ac.reconciled?'✓ ok':'✗ MISMATCH';
     ar.className = 'row-val '+(ac.reconciled?'pos':'neg');
 
-    // ── Open trades ──
+    // ── Open trades (live mark-to-market) ──
     const ot = document.getElementById('openTrades');
     if(!op.trades.length){
       ot.innerHTML='<div style="color:var(--muted);font-size:12px;padding:8px 0">no open trades</div>';
     } else {
-      ot.innerHTML = op.trades.map(t=>`
+      const marksAge = op.marks_ts ? Math.round((Date.now()-op.marks_ts)/1000) : null;
+      const summary = `
+        <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;padding:4px 0 10px">
+          <span>unrealized total <b class="${cls(op.unrealized_total)}">${signed(op.unrealized_total)} USDT</b></span>
+          <span>equity <b>${fmt(op.equity)} USDT</b></span>
+          <span style="color:var(--muted)">marks: ${op.unrealized_marked}/${op.trades.length}${marksAge!==null?` · ${marksAge}s ago`:''}</span>
+        </div>`;
+      ot.innerHTML = summary + op.trades.map(t=>{
+        const ageH = Math.floor(t.age_min/60), ageM = Math.round(t.age_min%60);
+        const tsLeft = t.time_stop_bars>0 ? Math.max(0,t.time_stop_bars-t.bars_held) : null;
+        const uCls = cls(t.unrealized_pnl||0);
+        const upnl = t.unrealized_pnl===null ? '<span class="neu">no mark yet</span>'
+          : `<b class="${uCls}" style="font-size:14px">${signed(t.unrealized_pnl)} USDT</b>
+             <span class="${uCls}">(${t.unrealized_r!==null?signed(t.unrealized_r)+'R':'—'} · ${signed(t.price_move_pct)}%)</span>`;
+        const room = t.stop_room_pct===null ? '' : `
+            <div class="trade-item">stop room <span class="${t.stop_room_pct<25?'neg':t.stop_room_pct<50?'neu':'pos'}">${fmt(t.stop_room_pct,0)}% of stop dist</span></div>`;
+        return `
         <div class="trade-card">
           <div class="trade-header">
             <span class="trade-sym">${t.symbol}</span>
             <span class="trade-side ${t.side}">${t.side}</span>
+            <span style="margin-left:auto">${upnl}</span>
           </div>
           <div class="trade-grid">
             <div class="trade-item">setup <span>${t.setup_type}</span></div>
-            <div class="trade-item">grade <span>${t.quality_grade||'—'} (label)</span></div>
-            <div class="trade-item">weight <span>x${fmt(t.risk_multiplier,2)}</span></div>
-            <div class="trade-item">score <span>${fmt(t.score,0)} (not a gate)</span></div>
+            <div class="trade-item">age <span>${ageH?ageH+'h ':''}${ageM}m${tsLeft!==null?` · TIME exit in ${tsLeft} bars`:''}</span></div>
             <div class="trade-item">entry <span>${fmt(t.entry,4)}</span></div>
-            <div class="trade-item">stop <span>${fmt(t.current_stop,4)}</span></div>
+            <div class="trade-item">mark <span>${t.mark?fmt(t.mark,4):'—'}</span></div>
+            <div class="trade-item">stop <span>${fmt(t.current_stop,4)}</span></div>${room}
+            <div class="trade-item">booked pnl <span class="${cls(t.realized_pnl)}">${signed(t.realized_pnl)}</span></div>
+            <div class="trade-item">total pnl <span class="${cls(t.total_pnl)}">${signed(t.total_pnl)}</span></div>
             <div class="trade-item">notional <span>${fmt(t.position_size)} USDT</span></div>
             <div class="trade-item">lev <span>${t.leverage}x</span></div>
             <div class="trade-item">margin <span>${fmt(t.margin_used)} USDT</span></div>
             <div class="trade-item">configured risk <span>${fmt(t.configured_risk_pct,2)}%</span></div>
             <div class="trade-item">applied risk <span>${fmt(t.applied_risk_pct,3)}% (${fmt(t.actual_risk_usdt,3)} USDT)</span></div>
-            <div class="trade-item">risk util <span>${fmt(t.risk_utilisation_pct,1)}%</span></div>
+            <div class="trade-item">grade <span>${t.quality_grade||'—'} (label)</span></div>
+            <div class="trade-item">weight <span>x${fmt(t.risk_multiplier,2)}</span></div>
+            <div class="trade-item">score <span>${fmt(t.score,0)} (not a gate)</span></div>
             <div class="trade-item">clip <span>${t.clip_reason||'none'}</span></div>
             <div class="trade-item">path <span>${t.rank_basis||'—'}</span></div>
             <div class="trade-item">remaining <span>${fmt(t.remaining_fraction*100,0)}%</span></div>
-            <div class="trade-item">pnl <span class="${cls(t.realized_pnl)}">${signed(t.realized_pnl)}</span></div>
           </div>
-        </div>`).join('');
+        </div>`;}).join('');
     }
 
     // ── Shadow (Task 4: report-only label hardcoded + verdict + suggestion) ──
