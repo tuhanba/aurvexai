@@ -1,6 +1,7 @@
 # SYSTEM_STATE.md — the single source of truth
 
-**Updated: 2026-07-08 (wave 2: edge expansion + data-flow speed).** If any
+**Updated: 2026-07-09 (campaign 5: htf_liquidity_sweep_bos_fvg — NO-GO).**
+If any
 other document contradicts this file, this file wins. (README/ROADMAP/
 LIVE_READY_CHECKLIST were written at different stages of the project; they
 are aligned to this file as of this date.)
@@ -43,9 +44,10 @@ every faster cell measured net-negative.
 
 ## 3. Failed edges (evidence-gate NO-GO — do not retry without new data)
 
-Roughly **17 families / 60+ cells** of short-timeframe scalping have been
-tested across four campaigns (2026-06-29, 2026-07-05 ×2, 2026-07-08). Every
-cell net-negative after realistic taker+slippage cost. The graveyard:
+Roughly **18 families / 75+ cells** of short-timeframe scalping have been
+tested across five campaigns (2026-06-29, 2026-07-05 ×2, 2026-07-08,
+2026-07-09). Every cell net-negative after realistic taker+slippage cost.
+The graveyard:
 
 - Buğra 5-condition directional TA — 20/20 cells net-negative (5m→4h).
 - Mean-reversion (Bollinger stretch), RSI2/Connors, VWAP reversion.
@@ -53,12 +55,19 @@ cell net-negative after realistic taker+slippage cost. The graveyard:
   momentum continuation (5m/15m).
 - Cross-sectional momentum (daily), funding-extreme directional (regime
   mirage caught by holdout), pullback-in-trend.
-- **2026-07-08 wave (this session)**: cross-symbol leader-lag (BTC impulse →
+- **2026-07-08 wave**: cross-symbol leader-lag (BTC impulse →
   alt follow AND fade, 5m/15m), rejection-wick reversal, high-volume failed
   breakout, volume+range impulse continuation, break-and-retest, inside-bar
   breakout, prior-day sweep-reclaim — **12/12 cells NO-GO**, both halves
   negative, **0 of 12 coins positive in any cell**
   (`SCALP_EDGE_RESEARCH_REPORT.md`).
+- **2026-07-09 campaign 5 (owner-requested)**: htf_liquidity_sweep_bos_fvg —
+  the full ICT/SMC multi-TF model (HTF liquidity map sweep → 5m BOS/IFVG
+  confirm → 1m BOS trigger → liquidity-draw TP), 1m execution data, 14
+  pre-registered cells over confirmation/trigger/entry/stop/TP/session/trend
+  axes — **14/14 NO-GO, 11/14 gross-negative before cost, 0/12 coins
+  positive, all acceptance criteria failed**
+  (`HTF_LIQUIDITY_SWEEP_RESEARCH_REPORT.md`). Trial count now 161.
 
 **Structural reason:** gross edge on OHLCV signals at scalp horizons is at
 best +0.03…+0.08R; taker round-trip cost (~0.13–0.14%) is 0.2–0.6R at

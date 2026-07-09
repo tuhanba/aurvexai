@@ -1,8 +1,9 @@
 # SCALP_EDGE_RESEARCH_REPORT.md — the complete scalp verdict
 
-**Updated: 2026-07-08.** Consolidates every scalp/faster-edge family ever
-tested on this system, including the final 2026-07-08 wave that closed the
-remaining untested families. **Definitive verdict: NO-GO — there is no
+**Updated: 2026-07-09.** Consolidates every scalp/faster-edge family ever
+tested on this system, including the 2026-07-08 wave that closed the
+remaining untested families and the 2026-07-09 owner-requested campaign 5
+(htf_liquidity_sweep_bos_fvg). **Definitive verdict: NO-GO — there is no
 taker-executable, OHLCV-signal scalp edge on Binance USDT-M perps with this
 system's execution and data.**
 
@@ -21,7 +22,24 @@ system's execution and data.**
   cell tried in a campaign; kill-rule — a holdout sign flip kills the cell,
   no re-tuning to rescue it.
 
-## Campaign 4 (2026-07-08, this session): the last untested families
+## Campaign 5 (2026-07-09): htf_liquidity_sweep_bos_fvg (owner-requested)
+
+The full ICT/SMC multi-timeframe model: HTF liquidity map (PDH/PDL, session
+H/L, 1h/4h swings, EQH/EQL) → 5m sweep → 5m BOS / inverse-FVG confirmation
+→ 1m BOS trigger → TP at the opposite liquidity draw. 1m execution data
+(1,051,200 bars/coin × 12 coins, 24 months), 14 pre-registered cells
+covering confirmation (BOS/IFVG/both), trigger (1m/5m), entry
+(market/limit/FVG-mid), stop (sweep-wick/1m-structure/IFVG-invalidation),
+TP (liquidity-draw/2R/partials+runner), sessions and a 4h trend filter.
+
+**14/14 cells NO-GO; 11/14 gross-negative BEFORE cost; 0/12 coins positive
+in the base cell; both halves negative everywhere.** Best cell: limit-entry
+variant, net −0.178R (PF 0.70). Base gross −0.045R, cost drag 0.13–0.45R.
+The multi-TF confirmation stack changes which trades are taken, not what
+they earn. Full detail: `HTF_LIQUIDITY_SWEEP_RESEARCH_REPORT.md`;
+harness `scripts/liquidity_sweep_wave.py`. Campaign-wide trial count: 161.
+
+## Campaign 4 (2026-07-08): the last untested families
 
 Data: 24 months (2024-07 → 2026-06) of 5m and 15m klines, 12 validated coins
 (BTC ETH SOL BNB XRP DOGE ADA AVAX LINK TON TRX DOT), 70,080 15m + 210,240 5m
