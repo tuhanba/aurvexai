@@ -431,6 +431,14 @@ class Config:
     max_stop_dist_pct_ich: float = field(
         default_factory=lambda: _float("MAX_STOP_DIST_PCT_ICH", 12.0))
 
+    # -- Telegram periodic open-position summary -----------------------------
+    # Every TG_POS_SUMMARY_MIN minutes (default 60; 0 disables) the engine
+    # sends a compact open-positions digest: per trade uPnL (USDT/R/%), plus
+    # equity and today's realised PnL. Sent only when positions are open.
+    # Pure notification — reads the same marks the dashboard uses.
+    tg_pos_summary_min: int = field(
+        default_factory=lambda: _int("TG_POS_SUMMARY_MIN", 60))
+
     # -- Band-walk continuation (band_walk profile) --------------------------
     # Campaign-7 F3 (CONDITIONAL_TA_WAVE_REPORT.md): two consecutive closes
     # outside BB(BW_BB_N, BW_BB_K) with ADX(14) rising over BW_ADX_LOOK bars →

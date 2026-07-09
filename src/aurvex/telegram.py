@@ -196,6 +196,34 @@ class BaseNotifier:
             f" · shadows kept {shadows_kept}"
         )
 
+    def position_summary(self, rows, equity: float, balance: float,
+                         daily_pnl: float) -> None:
+        """Periodic open-positions digest (TG_POS_SUMMARY_MIN).
+
+        ``rows`` = list of dicts: symbol, side, setup, upnl (USDT or None),
+        upnl_r, move_pct, age_min. Mobile-first: one line per position,
+        totals up top. Sent by the engine only when positions are open.
+        """
+        total = sum(r["upnl"] for r in rows if r["upnl"] is not None)
+        head = (f"📊 <b>Open positions ({len(rows)})</b>"
+                f"\nunrealized {total:+.2f} USDT · equity {equity:.2f}"
+                f" · cash {balance:.2f} · today {daily_pnl:+.2f}")
+        lines = []
+        for r in rows:
+            base = r["symbol"].split("/")[0]
+            age_h, age_m = divmod(int(r["age_min"]), 60)
+            age = f"{age_h}h{age_m:02d}m" if age_h else f"{age_m}m"
+            if r["upnl"] is None:
+                pnl = "no mark yet"
+            else:
+                pnl = (f"{r['upnl']:+.2f} USDT"
+                       + (f" ({r['upnl_r']:+.2f}R · {r['move_pct']:+.2f}%)"
+                          if r["upnl_r"] is not None else ""))
+            arrow = "🟢" if (r["upnl"] or 0) >= 0 else "🔴"
+            lines.append(f"{arrow} {base} {r['side']} · {_esc(r['setup'])}"
+                         f" · {pnl} · {age}")
+        self.send(head + "\n" + "\n".join(lines))
+
     def kill_switch_hit(self, daily_pnl: float, limit: float) -> None:
         # Task 5 copy check: must state both halves — entries pause, exits run.
         self.send(
