@@ -111,12 +111,20 @@ Everything. Live promotion requires ALL of:
    clean `reconcile()`,
 5. the five-gate lock opened deliberately, gate by gate.
 
-## 6. Recommended `.env` for paper (current)
+## 6. Recommended `.env` for paper (current — owner-selected FAST variant, 2026-07-09)
+
+The owner selected the validated "more action" package (§7): donchian
+enters on the 10-bar channel (`n=10`, +12% trades at ~93% yield) and
+squeeze@4h on the loosened Q30 squeeze (`q=30`, +27% trades at ~85%
+yield). Both options are harness-ACCEPTED; nothing outside the measured
+book. Earlier EXITS were measured separately (13 variants, 2026-07-08)
+and ALL destroy yield — exits stay as validated. Baseline (non-fast)
+variant: drop `:n=10` and `:q=30` from the STRATEGIES line.
 
 ```
 RISK_PROFILE=aggressive_paper
 INITIAL_PAPER_BALANCE=200
-STRATEGIES=donchian_trend@4h/1d squeeze_breakout@1h/4h:ts=24:u=BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TON+TRX+DOT squeeze_breakout@4h/1d:ts=24 ichimoku_trend@4h/1d
+STRATEGIES=donchian_trend@4h/1d:n=10 squeeze_breakout@1h/4h:ts=24:u=BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TON+TRX+DOT squeeze_breakout@4h/1d:ts=24:q=30 ichimoku_trend@4h/1d
 SHADOW_ONLY_SETUPS=ichimoku_trend
 GLOBAL_RANKING=true
 RANK_KEY=edge
