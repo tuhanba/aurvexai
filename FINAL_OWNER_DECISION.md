@@ -151,3 +151,38 @@ reports separately as `squeeze_breakout@4h`):
 
 When those 30–50 trades exist, come back with the numbers and make the live
 decision against §2 — not before.
+
+
+## 10. AGGRESSIVE MODE (owner-requested, 2026-07-09) — the measured middle
+
+The demand was 3–5%/day minimum. The honest math: +3%/day average needs
+~2 R/day of net edge; the entire measured portfolio produces 0.2–0.3 R/day.
+Bridging that gap with size means ~10–15% risk/trade, where one ordinary
+5-loss streak is −40…−75% — the kill switch would (correctly) halt the
+account long before. No measured configuration averages 3–5%/day; anything
+claiming to is sizing into ruin. INDIVIDUAL +3…6% days will happen at 3%
+risk (one 2R runner = +6%); the average cannot.
+
+**The measured middle — maximum aggression the edge survives:**
+
+```
+RISK_PROFILE=aggressive_plus
+STRATEGIES=donchian_trend@4h/1d:n=10 squeeze_breakout@1h/4h:ts=24:u=BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TON+TRX+DOT squeeze_breakout@4h/1d:ts=24:q=30 ichimoku_trend@4h/1d
+SHADOW_ONLY_SETUPS=ichimoku_trend
+```
+
+(risk 3% — the max-eff study's winning multiplier; 6 slots; profit lock 20%
+so runner days are not capped; kill switch UNCHANGED at 10% — it is the
+ruin guard, never a tunable; + the validated more-action package n=10/q=30
+for ~+25–30% trade frequency at ~85–93% per-trade yield.)
+
+Honest expectation at validated numbers: **~0.75–1%/day compounding
+(~25–35%/month)** with 30–40% drawdowns and losing WEEKS. That is the
+ceiling this edge supports. The next multipliers after the evidence window:
+evidence-gated sizing (RISK_MODULATION staircase), the ichimoku swap if it
+beats donchian live, and CAPITAL — the percentage machine scales linearly.
+
+Rule of engagement: run aggressive_plus in PAPER for the 30–50-trade
+window like everything else. If the numbers hold, it is the live-candidate
+config; if they don't, drop back to §6. Never both loosen risk AND skip
+the evidence window.

@@ -113,6 +113,23 @@ _PROFILE_DEFAULTS: dict = {
         "MAX_OPEN_TRADES": 4,
         "DASHBOARD_PORT": 5000,
     },
+    # Maximum aggression the MEASURED edge survives (owner-requested,
+    # 2026-07-09). Risk 3% = the donchian max-eff study's winning multiplier
+    # (+19% growth, DD ~20->30% band); 6 slots; profit lock raised to 20% so
+    # big runner days are not capped early. The kill switch stays 10% — it is
+    # the ruin guard, never a tunable. Expectation at the validated numbers:
+    # ~0.75-1%/day compounding with ~30-40% drawdowns and losing WEEKS.
+    # Anything promising more per-day than this is sizing into ruin.
+    "aggressive_plus": {
+        "INITIAL_PAPER_BALANCE": 200.0,
+        "RISK_PCT": 3.0,
+        "MIN_RISK_PCT": 1.5,
+        "MAX_RISK_PCT": 4.0,
+        "MAX_DAILY_LOSS_PCT": 10.0,
+        "DAILY_PROFIT_LOCK_PCT": 20.0,
+        "MAX_OPEN_TRADES": 6,
+        "DASHBOARD_PORT": 5000,
+    },
 }
 _DEFAULT_RISK_PROFILE = "aggressive_paper"
 
