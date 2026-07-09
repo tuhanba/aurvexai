@@ -436,3 +436,44 @@ Other cells for the ledger: I1@2h KILL (H2 −0.01), I1@1d WEAK, I2 Kijun-
 cross @4h WEAK (H2 t 0.6) / @1d KILL, I3 cloud-break @2h non-overlap
 NEGATIVE / @1d WEAK, I4 chikou @4h WEAK (H2 t 0.4), I5 doubled @4h KILL /
 @1d WEAK. The 4h TK-cross is the only Ichimoku system with real edge here.
+
+---
+
+## 16. Composite confluence wave + THE FINAL SYSTEM (2026-07-09) — trials 121 → 126
+
+Owner: "EMA alignment + Supertrend agreement + Ichimoku agreement as a
+COMPOSITE — then decide the best system of everything and merge it."
+
+### Composite results (@4h validated 17; control = plain ichimoku TK-cross)
+
+| system | trades/day | R/trade | H2 (2025+) | verdict |
+|---|---|---|---|---|
+| plain ichimoku TK-cross (control) | 1.72 | +0.253 (t 5.3) | **+0.175 (t 2.9)** | **wins** |
+| ichimoku + EMA9/21 + Supertrend(10,3) filter | 1.49 | +0.272 | +0.187 (t 2.8) | −14% trades for ≈same holdout quality → ~7% LESS total yield; NOT adopted |
+| triple-agreement fresh trigger, any-flip exit | 3.47 | +0.109 | +0.060 (t 1.7) | worse per-trade; alignment fires LATE |
+| triple-agreement, TK exit | 2.92 | +0.147 | +0.058 (t 1.4) | same |
+| triple-agreement @1h | 14.5 | −0.025 | negative | KILL — the 4h floor holds an 8th time |
+
+**Measured answer:** the Ichimoku cloud-side confirmation already IS the
+trend confluence; stacking EMA+Supertrend on top adds correlation, not
+information. Confluence filters trim frequency without improving holdout
+edge. The pure TK-cross stays the best form of this family.
+
+### THE FINAL SYSTEM (decision of record)
+
+Everything measured across 126 trials / 6 campaigns converges on the
+four-leg configuration already written in FINAL_OWNER_DECISION.md §6:
+
+1. **donchian_trend@4h/1d** on the 17 (strongest long-history edge, 5.8y)
+2. **squeeze_breakout@1h/4h:ts=24** on ITS 12 (fastest positive leg)
+3. **squeeze_breakout@4h/1d:ts=24** on the 17 (best DD/DSR balance)
+4. **ichimoku_trend@4h/1d SHADOW-ONLY** (best harness numbers; live
+   evidence collector and donchian's regime-substitute candidate)
+
+Rails: RISK_PCT 1.5 / 6 slots / 200% exposure / pinned 17-coin universe /
+stale-entry guard / closed-bar kline cache / edge-ranked slot allocation /
+±10% kill switch + profit lock / five-gate live lock (disarmed).
+≈5.5–6 risk trades/day at the measured yield optimum; owner "more action"
+options (:q=30, :n=10) validated and documented. No measured alternative
+beats any component in its role. This configuration is merged as the
+production recommendation.
