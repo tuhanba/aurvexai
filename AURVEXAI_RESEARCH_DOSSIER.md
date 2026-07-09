@@ -477,3 +477,33 @@ stale-entry guard / closed-bar kline cache / edge-ranked slot allocation /
 options (:q=30, :n=10) validated and documented. No measured alternative
 beats any component in its role. This configuration is merged as the
 production recommendation.
+
+---
+
+## 17. Universe-size optimization over 51 coins (2026-07-09) — trials 126 → 134
+
+Owner: "test with MORE coins; find the most optimized form." All three
+strong 4h edges (donchian, squeeze@4h, ichimoku TK-cross) were run per-coin
+over EVERY candidate with ≥2y history: deployed 17 + newgen 12 + phase-4-
+rejected 10 + a fresh batch of 12 established alts (XLM ALGO VET RUNE GALA
+SAND MANA EOS XTZ THETA CHZ CRV). Protocol: H1-select (positive, n≥15) →
+H2-confirm the GROUP; deployed-17 H2 as the control.
+
+| edge @4h | deployed-17 H2 | H1-picked expanded H2 | new-picks-only H2 | verdict |
+|---|---|---|---|---|
+| donchian | +0.029 | **−0.041 (t −1.2) FAIL** | −0.066 | 17 stays |
+| squeeze@4h | **+0.179 (t 2.7)** | +0.075 (t 1.8) — worse | +0.004 (t 0.1) | 17 stays |
+| ichimoku | **+0.175 (t 2.9)** | +0.092 (t 2.7) — worse | +0.037 (t 0.9) | 17 stays |
+
+Fourth consecutive measurement of the same law: coins that look brilliant
+in H1 (PEPE +2.5R, XLM +1.5R, EOS +1.4R donchian H1!) collapse or invert
+in H2. Adding universe = adding trades with diluted-to-negative expectancy.
+**The optimized form is the deployed configuration itself**: donchian 17 /
+squeeze@1h 12 / squeeze@4h 17 / ichimoku(shadow) 17 — every expansion
+measured worse on holdout, every leg already sits at its measured optimum.
+
+Secondary observation (for the paper window, not a config change): within
+the deployed 17, donchian's H2 softness is concentrated in the majors
+(BTC/ETH/SOL H2 negative) while the expansion-5 stay positive — and
+ichimoku's H2 is broadly positive across the 17. This sharpens the
+shadow-leg comparison the current deployment is designed to collect.
