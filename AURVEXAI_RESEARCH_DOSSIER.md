@@ -330,3 +330,17 @@ package for the owner is `:q=30` on the squeeze@4h leg and/or `:n=10` on the
 donchian leg — both harness/holdout-validated, both ~85–93% of max yield.
 STRATEGIES specs now support per-leg `:n=` and `:q=` so these flip without
 touching global config.
+
+### §13 addendum — universe frontier check for squeeze@4h (trials 99 → 100)
+
+Owner asked whether OTHER assets were researched. The one genuinely untested
+gap: the 10 phase-4-rejected liquid coins (LTC BCH ETC FIL UNI AAVE OP INJ
+APT LDO) had never seen the newly-validated squeeze@4h. Tested (36mo real 4h,
+H1-select/H2-confirm): H1-picked 7-coin group +0.234R (t 2.27) →
+**H2 −0.116R (t −1.68) — KILL.** Squeeze@4h is coin-specific exactly like
+donchian. Combined with wave-2/3: every liquid Binance USDT-M perp with ≥2y
+history outside the validated 17 has now been tested against at least one
+validated edge and failed holdout. **The 17-coin universe IS the frontier**;
+coins with <18mo history remain untestable by protocol (insufficient split
+material), and sub-liquid names fail the spread guard before ever reaching a
+signal.
