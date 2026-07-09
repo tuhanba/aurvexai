@@ -35,7 +35,7 @@ from .filters import PortfolioView
 from .funnel import FunnelLogger
 from .journal import TradeJournal
 from .market_data import build_provider
-from .models import (ALLOW, OPEN, REJECT, Decision, MarketSnapshot,
+from .models import (ALLOW, LONG, OPEN, REJECT, Decision, MarketSnapshot,
                      interval_to_ms, now_ms)
 from .quality import grade as quality_grade
 from .scanner import UniverseScanner
@@ -102,6 +102,7 @@ class Engine:
         self._stop = asyncio.Event()
         self._cycles = 0
         self._last_summary_day = -1
+        self._last_pos_summary_ms: int = 0
         self._kill_switch_fired_day: int = -1
         self._profit_lock_fired_day: int = -1
         self._last_error: str = ""
@@ -774,6 +775,9 @@ class Engine:
         # Daily summary once per UTC day (skip the very first cycle).
         self._maybe_daily_summary()
 
+        # Periodic open-position digest (TG_POS_SUMMARY_MIN; 0 disables).
+        self._maybe_position_summary()
+
         # Surface Telegram health to the dashboard (secret-free).
         self._persist_telegram_health()
 
@@ -864,6 +868,58 @@ class Engine:
                     predictivity=self.shadow.predictivity_verdict())
             except Exception as exc:
                 log.debug("daily summary error: %s", exc)
+
+    def _maybe_position_summary(self) -> None:
+        """Periodic Telegram open-positions digest (TG_POS_SUMMARY_MIN).
+
+        Pure notification: reads the open trades + the same marks the
+        dashboard uses; sent only when positions are open. First firing is
+        one interval after engine start (no startup spam).
+        """
+        interval_ms = int(self.cfg.tg_pos_summary_min) * 60_000
+        if interval_ms <= 0:
+            return
+        now = now_ms()
+        if self._last_pos_summary_ms == 0:
+            self._last_pos_summary_ms = now
+            return
+        if now - self._last_pos_summary_ms < interval_ms:
+            return
+        self._last_pos_summary_ms = now
+        try:
+            opens = self.db.get_open_trades(mode=self.cfg.mode)
+            if not opens:
+                return
+            marks_meta = self.db.get_meta("marks") or {}
+            marks = (marks_meta.get("prices", {})
+                     if isinstance(marks_meta, dict) else {})
+            rows = []
+            unreal_total = 0.0
+            for t in opens:
+                mark = marks.get(t.symbol)
+                upnl = upnl_r = move = None
+                if mark and t.entry:
+                    sign = 1 if t.side == LONG else -1
+                    qty = t.position_size * t.remaining_fraction / t.entry
+                    upnl = qty * (mark - t.entry) * sign
+                    unreal_total += upnl
+                    risk = t.metadata.get("actual_risk_amount", t.max_loss) or 0
+                    upnl_r = (upnl / risk) if risk > 0 else None
+                    move = (mark - t.entry) / t.entry * 100.0 * sign
+                rows.append({
+                    "symbol": t.symbol, "side": t.side, "setup": t.setup_type,
+                    "upnl": upnl, "upnl_r": upnl_r, "move_pct": move,
+                    "age_min": max(0, now - (t.open_time or now)) / 60_000.0,
+                })
+            balance = self.db.get_balance()
+            day_start = int(dt.datetime.now(dt.timezone.utc).replace(
+                hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
+            daily_pnl = self.db.daily_realized_pnl(day_start)
+            self.notifier.position_summary(rows, equity=balance + unreal_total,
+                                           balance=balance,
+                                           daily_pnl=daily_pnl)
+        except Exception as exc:
+            log.debug("position summary error: %s", exc)
 
 
 def run_engine(cfg: Config, max_cycles: Optional[int] = None,
