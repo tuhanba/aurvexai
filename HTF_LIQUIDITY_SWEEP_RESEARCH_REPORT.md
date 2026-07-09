@@ -5,13 +5,25 @@ Family requested by the owner: HTF liquidity sweep → 5m BOS / inverse-FVG
 confirmation → 1m BOS execution trigger → TP at the opposite-side liquidity
 draw (ICT/SMC multi-timeframe model).
 
-**Definitive verdict: NO-GO — all 14 pre-registered cells net-negative after
-cost; 11 of 14 cells negative even BEFORE cost.** The multi-timeframe
-confirmation stack (5m BOS/IFVG + 1m trigger) does not rescue the
-liquidity-sweep family that already failed in campaigns 1–3 as a single-TF
-rule (holdout −0.38R) and in campaign 4 as prior-day sweep-reclaim (−0.32R).
-Zero of 12 coins positive in the base cell; both time halves negative in
-every cell; every acceptance criterion fails.
+**Definitive verdict: NO-GO — all 20 cells net-negative after cost; 16 of
+20 negative even BEFORE cost.** The multi-timeframe confirmation stack
+(5m BOS/IFVG + 1m trigger) does not rescue the liquidity-sweep family that
+already failed in campaigns 1–3 as a single-TF rule (holdout −0.38R) and in
+campaign 4 as prior-day sweep-reclaim (−0.32R). Zero of 12 coins positive
+in the base cell; both time halves negative in every cell; every acceptance
+criterion fails.
+
+The strict spec ordering is enforced in code and was spot-verified
+trade-by-trade: a level exists in the map only if it formed BEFORE the
+sweep (closed-bar activation) → the sweep bar wicks the level and closes
+back inside (a close through it is a break: level removed, no trade) → 5m
+BOS/IFVG confirmation is searched only in bars AFTER the sweep bar (≤2h;
+no confirmation → no trade; a close back through the sweep extreme cancels
+the setup) → the 1m BOS trigger is searched only AFTER the confirmation
+bar's close (≤1h) → entry only after the trigger. Cells run in two passes:
+the original 14, then 6 spec-granularity cells (session open windows,
+London/NY overlap, TP pool-type variants) — every cell counts toward the
+DSR trial deflation (167 total).
 
 ## Protocol (identical to campaigns 1–4)
 
@@ -31,7 +43,7 @@ every cell; every acceptance criterion fails.
   closes back through the sweep extreme before confirmation.
 - Split-half time OOS (H1 discovery / H2 confirm), kill-rule: H2 ≤ 0 kills.
 - DSR via the engine's `deflated_sharpe` at the campaign-wide trial count
-  **161** (147 prior book trials + 14 cells here).
+  **167** (147 prior book trials + 20 cells here).
 - Not modeled (stated limitations): news-window avoidance (no offline
   calendar); order-book spread beyond the flat slippage charge — both would
   only make results *worse* or reduce trade count.
@@ -57,15 +69,17 @@ every cell; every acceptance criterion fails.
    confirming IFVG far edge (each + 0.1×ATR5m buffer).
 6. **TP** — nearest opposite-side liquidity level with RR ∈ [1.5, 12]
    (minimum-RR & minimum-liquidity-distance filter; no target → no trade) /
-   fixed 2R / TP1 50% @1R + stop-to-BE runner to the liquidity draw.
-   Time-stop 4h.
-7. **Filters** — session subsets (Asia / London / NY), 4h SMA50
-   trend-alignment variant.
+   fixed 2R / TP1 50% @1R + stop-to-BE runner to the liquidity draw /
+   the draw restricted by pool type (internal 1h/4h swings vs previous
+   session-and-day H/L vs equal highs/lows). Time-stop 4h.
+7. **Filters** — session subsets (Asia / London / NY), open windows
+   (London-open 08–10, NY-open 13–15, London/NY overlap 13–16 UTC),
+   4h SMA50 trend-alignment variant.
 
 Harness: `scripts/liquidity_sweep_wave.py` (rules pre-registered in its
 docstring); data fetcher `scripts/fetch_1m_klines.py`.
 
-## Results — all 14 pre-registered cells (12 coins, 24 months)
+## Results — all 20 cells (12 coins, 24 months)
 
 n = trades; t/d = trades/day fleet-wide; costs included in net.
 
@@ -85,6 +99,12 @@ n = trades; t/d = trades/day fleet-wide; costs included in net.
 | S1 base, London-only | 560 | 0.8 | **−0.201** | +0.007 | 0.208 | 37.3% | +1.19 | −1.03 | 0.69 | −3.7 | −3.8 | 125 | −0.123 (−1.6) | −0.278 (−3.7) | 2/12 | **NO-GO** |
 | S2 base, NY-only | 701 | 1.0 | **−0.211** | −0.019 | 0.192 | 36.7% | +1.08 | −0.96 | 0.65 | −4.7 | −4.8 | 160 | −0.291 (−4.8) | −0.131 (−2.0) | 1/12 | **NO-GO** |
 | S3 base, Asia-only | 606 | 0.8 | **−0.276** | −0.094 | 0.182 | 35.3% | +0.94 | −0.94 | 0.55 | −6.2 | −6.3 | 175 | −0.187 (−2.8) | −0.365 (−6.2) | 1/12 | **NO-GO** |
+| S4 base, London-open 08–10 | 318 | 0.4 | **−0.199** | +0.023 | 0.222 | 35.8% | +1.31 | −0.94 | 0.68 | −2.7 | −2.8 | 64 | −0.193 (−1.8) | −0.205 (−1.9) | 3/12 | **NO-GO** |
+| S5 base, NY-open 13–15 | 279 | 0.4 | **−0.267** | −0.037 | 0.230 | 33.0% | +1.13 | −0.96 | 0.63 | −3.3 | −3.5 | 81 | −0.375 (−3.6) | −0.159 (−1.3) | 2/12 | **NO-GO** |
+| S6 base, London/NY overlap 13–16 | 353 | 0.5 | **−0.202** | +0.018 | 0.220 | 34.8% | +1.34 | −1.03 | 0.70 | −2.8 | −2.9 | 84 | −0.283 (−3.0) | −0.121 (−1.1) | 1/12 | **NO-GO** |
+| T1 tp = internal liq (1h/4h swings) | 2,694 | 3.7 | **−0.219** | −0.039 | 0.180 | 37.2% | +1.00 | −0.94 | 0.64 | −9.8 | −9.8 | 613 | −0.177 (−5.5) | −0.260 (−8.4) | 0/12 | **NO-GO** |
+| T2 tp = prev session/day H-L | 2,350 | 3.2 | **−0.231** | −0.039 | 0.192 | 36.9% | +1.03 | −0.97 | 0.63 | −9.5 | −9.5 | 559 | −0.192 (−5.5) | −0.271 (−7.9) | 0/12 | **NO-GO** |
+| T3 tp = equal highs/lows | 1,302 | 1.8 | **−0.128** | +0.006 | 0.135 | 40.1% | +0.94 | −0.85 | 0.74 | −4.3 | −4.4 | 176 | −0.078 (−1.8) | −0.178 (−4.5) | 0/12 | **NO-GO** |
 
 MaxDD is reported in R on the merged chronological sequence; at any live
 sizing a negative-expectancy path is ruin, so the DD line only matters for
@@ -111,10 +131,17 @@ the (non-existent) positive cells.
   1m-structure and IFVG-invalidation stops are catastrophic (−0.41/−0.49R,
   cost drag 0.36–0.45R) — the exact cost-floor mechanism documented in
   `SCALP_EDGE_RESEARCH_REPORT.md`.
-- **Sessions**: London is the least bad (gross +0.007R — the only
-  gross-positive slice) but still −0.20R net; Asia worst (gross −0.094R).
-  No session rescues the family; no over-concentration question arises
-  because nothing is positive.
+- **Sessions** (whole sessions S1–S3, open windows S4–S6): London and the
+  London-open / London-NY-overlap windows are the only gross-positive
+  slices (+0.007…+0.023R) — the sweep-reversal signal is *least bad*
+  exactly where the spec expected it — but the 0.19–0.23R cost drag is
+  ~10× the best gross; all end −0.20…−0.28R net. NY-open is worse than the
+  NY session average. No window rescues the family.
+- **TP pool type** (T1–T3): internal 1h/4h swings −0.219R ≈ session/day
+  H/L −0.231R ≈ nearest-any (base) −0.239R. Equal-highs/lows targets are
+  the least-bad TP in the campaign (−0.128R net, gross +0.006R, PF 0.74,
+  40% win) because EQ pools sit closer (lower RR, higher hit-rate, less
+  time-stop bleed) — still firmly negative in both halves.
 - **Trend filter** (G1): improves gross to −0.013R while halving trades —
   directionally sensible, still dead.
 
@@ -138,10 +165,10 @@ the (non-existent) positive cells.
 
 | criterion | required | measured (best cell) | pass? |
 |---|---|---|---|
-| OOS net Exp-R | > 0 | −0.131R (best H2, S2 NY-only) | **FAIL** |
-| PF | > 1.1 | 0.70 (best, B2) | **FAIL** |
-| DSR | > 0 | −3.8 (best, S1) | **FAIL** |
-| Holdout pass | H2 > 0 | H2 < 0 in all 14 cells | **FAIL** |
+| OOS net Exp-R | > 0 | −0.121R (best H2, S6 overlap) | **FAIL** |
+| PF | > 1.1 | 0.74 (best, T3 EQ-target) | **FAIL** |
+| DSR | > 0 | −2.8 (best, S4 London-open) | **FAIL** |
+| Holdout pass | H2 > 0 | H2 < 0 in all 20 cells | **FAIL** |
 | MaxDD acceptable | — | moot (negative expectancy) | **FAIL** |
 | Cost included | yes | yes (0.13% RT taker / 0.085% maker) | met |
 | No coin/session concentration | — | moot (0/12 coins positive) | — |
@@ -160,4 +187,4 @@ they earn. **Scalp remains closed** — the reopening conditions are
 unchanged: L2/tick order-flow data + latency infra, or a several-times
 lower fee regime.
 
-Campaign-wide trial count after this wave: **161**.
+Campaign-wide trial count after this wave: **167**.

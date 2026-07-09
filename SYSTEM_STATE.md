@@ -44,7 +44,7 @@ every faster cell measured net-negative.
 
 ## 3. Failed edges (evidence-gate NO-GO — do not retry without new data)
 
-Roughly **18 families / 75+ cells** of short-timeframe scalping have been
+Roughly **18 families / 80+ cells** of short-timeframe scalping have been
 tested across five campaigns (2026-06-29, 2026-07-05 ×2, 2026-07-08,
 2026-07-09). Every cell net-negative after realistic taker+slippage cost.
 The graveyard:
@@ -63,11 +63,12 @@ The graveyard:
   (`SCALP_EDGE_RESEARCH_REPORT.md`).
 - **2026-07-09 campaign 5 (owner-requested)**: htf_liquidity_sweep_bos_fvg —
   the full ICT/SMC multi-TF model (HTF liquidity map sweep → 5m BOS/IFVG
-  confirm → 1m BOS trigger → liquidity-draw TP), 1m execution data, 14
-  pre-registered cells over confirmation/trigger/entry/stop/TP/session/trend
-  axes — **14/14 NO-GO, 11/14 gross-negative before cost, 0/12 coins
-  positive, all acceptance criteria failed**
-  (`HTF_LIQUIDITY_SWEEP_RESEARCH_REPORT.md`). Trial count now 161.
+  confirm → 1m BOS trigger → liquidity-draw TP; strict spec ordering
+  enforced and spot-verified), 1m execution data, 20 cells over
+  confirmation/trigger/entry/stop/TP-pool-type/session-window/trend axes —
+  **20/20 NO-GO, 16/20 gross-negative before cost, 0/12 coins positive,
+  all acceptance criteria failed**
+  (`HTF_LIQUIDITY_SWEEP_RESEARCH_REPORT.md`). Trial count now 167.
 
 **Structural reason:** gross edge on OHLCV signals at scalp horizons is at
 best +0.03…+0.08R; taker round-trip cost (~0.13–0.14%) is 0.2–0.6R at

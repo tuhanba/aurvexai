@@ -60,10 +60,15 @@ Stops (buffer 0.1 x ATR5m): S1 behind the sweep wick; S2 behind the last
 Take profit: nearest opposite-side liquidity level from the sweep-time
 snapshot with RR in [1.5, 12] (minimum-RR / minimum-liquidity-distance
 filter; no target -> no trade); vs fixed 2R; vs TP1 50% @1R + stop to BE,
-TP2 50% at the liquidity draw. Time-stop: 240 1m bars (4h), exit at close.
-One position per symbol (no overlapping trades). Session subsets (Asia /
-London / NY / London-NY overlap 13-16 UTC) and a 4h SMA50 trend-alignment
-variant are separate pre-registered rows in the trial count.
+TP2 50% at the liquidity draw; vs the draw restricted by pool type
+(internal 1h/4h swings / previous-session-and-day H-L / equal highs-lows).
+Time-stop: 240 1m bars (4h), exit at close. One position per symbol (no
+overlapping trades). Session subsets (Asia / London / NY / London-open
+08-10 / NY-open 13-15 / London-NY overlap 13-16 UTC) and a 4h SMA50
+trend-alignment variant are separate rows in the trial count. The
+session-window and TP-type cells (S4-S6, T1-T3) were added in a second
+pass to match the requested spec granularity — every added cell raises the
+campaign trial count used for DSR deflation.
 
 Not modeled (stated limitation): news-window avoidance (no offline
 calendar); order-book spread beyond the flat slippage charge.
@@ -252,8 +257,8 @@ class Sweep:
     session: str
     bos_level: float   # 5m structure level to break for BOS confirm
     ifvg: Optional[Tuple[float, float]]  # (gap_lo, gap_hi) of opposing FVG
-    snap_above: List[float] = field(default_factory=list)
-    snap_below: List[float] = field(default_factory=list)
+    snap_above: List[Tuple[float, str]] = field(default_factory=list)
+    snap_below: List[Tuple[float, str]] = field(default_factory=list)
     bos_i5: int = -1   # first 5m bar confirming BOS (-1 = never)
     ifvg_i5: int = -1  # first 5m bar confirming IFVG
     cancel_i5: int = 10 ** 9  # 5m bar that invalidates the setup
@@ -440,8 +445,8 @@ def build_sweeps(m5: Frame, h1f: Frame, h4f: Frame,
                       ltype=lv.ltype, session=session_of(int(m5.ts[i])),
                       bos_level=float(last_pl5[i]),
                       ifvg=ifvg,
-                      snap_above=sorted(x.price for x in above),
-                      snap_below=sorted(x.price for x in below))
+                      snap_above=sorted((x.price, x.ltype) for x in above),
+                      snap_below=sorted((x.price, x.ltype) for x in below))
             sweeps.append(s)
             open_setups.append(s)
         if swept_below and i + 1 < n5:
@@ -456,8 +461,8 @@ def build_sweeps(m5: Frame, h1f: Frame, h4f: Frame,
                       ltype=lv.ltype, session=session_of(int(m5.ts[i])),
                       bos_level=float(last_ph5[i]),
                       ifvg=ifvg,
-                      snap_above=sorted(x.price for x in above),
-                      snap_below=sorted(x.price for x in below))
+                      snap_above=sorted((x.price, x.ltype) for x in above),
+                      snap_below=sorted((x.price, x.ltype) for x in below))
             sweeps.append(s)
             open_setups.append(s)
     return sweeps
@@ -585,6 +590,11 @@ def run_cell(ctx: SymCtx, cfg: Dict) -> List[Trade]:
                 continue
         if cfg.get("session") and s.session not in cfg["session"]:
             continue
+        if cfg.get("hours"):
+            hr = (int(m5.ts[s.i5]) % DAY) // H1MS
+            lo_h, hi_h = cfg["hours"]
+            if not (lo_h <= hr < hi_h):
+                continue
 
         side = s.side
         atr_buf = STOP_BUF_ATR5 * ctx.atr5[s.i5]
@@ -665,13 +675,16 @@ def run_cell(ctx: SymCtx, cfg: Dict) -> List[Trade]:
 
         # --- target ---
         tmode = cfg["tp"]
+        allowed = cfg.get("tp_types")  # None = nearest pool of ANY type
         liq_target = None
         if side < 0:
-            below = [p for p in s.snap_below if p < entry]
+            below = [p for p, lt in s.snap_below
+                     if p < entry and (allowed is None or lt in allowed)]
             if below:
                 liq_target = max(below)
         else:
-            abv = [p for p in s.snap_above if p > entry]
+            abv = [p for p, lt in s.snap_above
+                   if p > entry and (allowed is None or lt in allowed)]
             if abv:
                 liq_target = min(abv)
         rr = ((liq_target - entry) * side / sd) if liq_target else np.nan
@@ -810,6 +823,15 @@ CELLS: List[Tuple[str, Dict]] = [
     ("S1 base London-only", dict(BASE, session=("london",))),
     ("S2 base NY-only", dict(BASE, session=("ny",))),
     ("S3 base Asia-only", dict(BASE, session=("asia",))),
+    ("S4 base London-open 08-10", dict(BASE, hours=(8, 10))),
+    ("S5 base NY-open 13-15", dict(BASE, hours=(13, 15))),
+    ("S6 base Ldn/NY-overlap 13-16", dict(BASE, hours=(13, 16))),
+    ("T1 tp=internal liq (1h/4h swings)", dict(BASE, tp_types=("sw1h",
+                                                               "sw4h"))),
+    ("T2 tp=prev session/day H-L", dict(BASE, tp_types=("sess_asia",
+                                                        "sess_london",
+                                                        "sess_ny", "pd"))),
+    ("T3 tp=equal highs/lows", dict(BASE, tp_types=("eq",))),
 ]
 N_TRIALS = N_TRIALS_PRIOR + len(CELLS)
 
