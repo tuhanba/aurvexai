@@ -173,6 +173,43 @@ the (non-existent) positive cells.
 | Cost included | yes | yes (0.13% RT taker / 0.085% maker) | met |
 | No coin/session concentration | — | moot (0/12 coins positive) | — |
 
+## Data verification (owner challenge: "is the history correct?")
+
+- **Internal integrity**: all 12 coins exactly 1,051,200 1m bars, zero
+  timestamp gaps (every diff = 60,000 ms), OHLC invariants
+  (H ≥ max(O,C), L ≤ min(O,C)) hold on every bar, all prices positive.
+  ~127 zero-volume bars/coin (exchange maintenance minutes; TON 11k —
+  thin-book coin, still full OHLC).
+- **Independent cross-check**: the harness's 1m→5m resample was compared
+  against Binance's OWN 5m archive files (separate files, aggregated by
+  Binance, not by us) for three random coin-months (BTC 2025-03,
+  DOGE 2024-11, TON 2026-02): **OHLC and volume match exactly, bar for
+  bar**.
+- **Known-event spot checks**: BTC 2024-08-05 (yen-carry crash) low
+  48,888; 2024-12-17 (ATH window) high 108,367; 2025-04-07 (tariff crash)
+  low 74,457 — all match the historical record.
+
+## Robustness (owner challenge: "there must be coins/periods where this is positive")
+
+There are positive-looking slices — that is expected from slicing 20 cells
+× 12 coins × sessions; the question is whether ANY of them persist. None
+do (base cell):
+
+- **Quarterly net Exp-R: 0/8 quarters positive** (−0.08 … −0.45R). There
+  is no regime window in 24 months where the sequence made money net.
+- **H1-winner → H2 persistence**: of all coin×session slices with n≥30 in
+  the first half, **zero were H1-positive**, and the half-to-half ordering
+  is noise (e.g. DOT-NY −0.31 in H1 → +0.48 in H2; SOL-Asia −0.26 → −0.56).
+- **Per-coin, both halves**: no coin is positive in both halves. Best:
+  DOGE +0.006 in H1 → −0.168 in H2.
+- **The one positive subgroup** (4h-swing-pool sweeps, +0.196R, n=30):
+  sign-flips across halves (H1 −0.10 → H2 +0.45) and shrinks when re-cut
+  under the 2R-TP cell (+0.084R, H1 −0.21 → H2 +0.29). A 0.04-trades/day
+  slice that is negative in one half is selection noise, not an edge —
+  precisely what the kill-rule + 167-trial DSR deflation exist to reject.
+- **Trend regimes**: the 4h-trend-aligned variant (G1) was a
+  pre-registered cell: −0.222R. Alignment does not rescue it.
+
 ## Why it fails (same structural wall as campaigns 1–4)
 
 The confirmation stack works as designed — the spot-checked trades sweep a
