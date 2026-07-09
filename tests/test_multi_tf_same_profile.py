@@ -136,3 +136,15 @@ def test_n_and_q_spec_options():
     assert specs[0].pcfg.sqz_pctile == c.sqz_pctile      # untouched
     assert specs[1].pcfg.sqz_pctile == 30
     assert specs[1].pcfg.don_entry_bars == c.don_entry_bars
+
+
+def test_r_spec_option_clamped_to_band():
+    c = Config()
+    c.strategies = ("donchian_trend@4h/1d:r=1.0 "
+                    "squeeze_breakout@4h/1d:ts=24:r=9.9")
+    specs = parse_strategies(c)
+    assert specs[0].pcfg.risk_pct == 1.0
+    # clamped to the band ceiling, never above MAX_RISK_PCT
+    assert specs[1].pcfg.risk_pct == c.max_risk_pct
+    # base config untouched
+    assert c.risk_pct != 9.9
