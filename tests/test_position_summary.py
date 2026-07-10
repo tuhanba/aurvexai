@@ -91,6 +91,34 @@ def test_disabled_when_interval_zero(tmp_path):
     assert eng.notifier.calls == []
 
 
+def test_marks_meta_uses_live_last_price(tmp_path):
+    """Display marks come from the LIVE last price, not the closed bar close
+    (which freezes uPnL for a whole bar on 4h legs). Exit decisions still run
+    on the closed bar — covered by test_closed_candle."""
+    import asyncio
+    from aurvex.models import Candle, MarketSnapshot
+    from conftest import make_book
+
+    eng, cfg = _engine(tmp_path)
+    sym = "ETH/USDT:USDT"
+    t = _open_trade(cfg)
+    eng.db.upsert_trade(t)
+
+    closed_bar = Candle(now_ms() - 5 * 60_000, 3000.0, 3005.0, 2995.0,
+                        3000.0, 1000.0)
+    forming = Candle(now_ms(), 3000.0, 3061.0, 2999.0, 3060.0, 500.0)
+    snap = MarketSnapshot(symbol=sym,
+                          candles={cfg.ltf: [closed_bar] * 3 + [forming],
+                                   cfg.htf: [closed_bar]},
+                          orderbook=make_book(3060.0), last_price=3060.0,
+                          quote_volume_24h=1e9)
+    asyncio.new_event_loop().run_until_complete(
+        eng._manage_open_trades({sym: snap}))
+    marks = eng.db.get_meta("marks")["prices"]
+    assert marks[sym] == 3060.0          # live price, not the 3000.0 close
+    eng.db.close()
+
+
 def test_notifier_formats_digest():
     """BaseNotifier.position_summary builds one line per position + totals."""
     sent = []
