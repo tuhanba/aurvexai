@@ -135,8 +135,17 @@ def _grid(rows, width: int = 12) -> str:
 
 
 class BaseNotifier:
-    def __init__(self, mode: str = "paper") -> None:
+    def __init__(self, mode: str = "paper", quiet_hours: str = "") -> None:
         self._mode = (mode or "paper").lower()
+        # Quiet hours "HH-HH" UTC: routine sends are suppressed inside the
+        # window; critical sends (send(..., critical=True)) always deliver.
+        self._quiet: Optional[tuple] = None
+        try:
+            if quiet_hours and "-" in quiet_hours:
+                a, b = quiet_hours.split("-", 1)
+                self._quiet = (int(a) % 24, int(b) % 24)
+        except ValueError:
+            self._quiet = None
         self._health: Dict[str, Any] = {
             "configured": False,
             "enabled": False,
@@ -161,10 +170,21 @@ class BaseNotifier:
         tag = mode_prefix(self._mode)
         return text if text.startswith(tag) else f"{tag} {text}"
 
-    def send(self, text: str) -> bool:
+    def _in_quiet_hours(self) -> bool:
+        if self._quiet is None:
+            return False
+        import datetime as _dt
+        h = _dt.datetime.now(_dt.timezone.utc).hour
+        a, b = self._quiet
+        return (a <= h < b) if a <= b else (h >= a or h < b)
+
+    def send(self, text: str, critical: bool = False) -> bool:
         """Tag-then-deliver. The mode tag is applied HERE, in one place, so no
         event helper (or direct caller) can forget it. Subclasses implement the
-        transport in ``_deliver`` only."""
+        transport in ``_deliver`` only. Routine sends are suppressed during
+        the configured quiet hours; critical ones always deliver."""
+        if not critical and self._in_quiet_hours():
+            return False
         return self._deliver(self._tag(text))
 
     def _deliver(self, text: str) -> bool:       # pragma: no cover - interface
@@ -197,7 +217,7 @@ class BaseNotifier:
         )
 
     def position_summary(self, rows, equity: float, balance: float,
-                         daily_pnl: float) -> None:
+                         daily_pnl: float, critical: bool = False) -> None:
         """Periodic open-positions digest (TG_POS_SUMMARY_MIN).
 
         ``rows`` = list of dicts: symbol, side, setup, upnl (USDT or None),
@@ -222,15 +242,54 @@ class BaseNotifier:
             arrow = "🟢" if (r["upnl"] or 0) >= 0 else "🔴"
             lines.append(f"{arrow} {base} {r['side']} · {_esc(r['setup'])}"
                          f" · {pnl} · {age}")
-        self.send(head + "\n" + "\n".join(lines))
+        self.send(head + "\n" + "\n".join(lines), critical=critical)
 
     def kill_switch_hit(self, daily_pnl: float, limit: float) -> None:
         # Task 5 copy check: must state both halves — entries pause, exits run.
         self.send(
             f"🛑 <b>DAILY LOSS KILL SWITCH</b>"
             f"\n{daily_pnl:+.2f} / -{limit:.2f} USDT"
-            f"\nnew entries paused, open trades still managed"
+            f"\nnew entries paused, open trades still managed",
+            critical=True,
         )
+
+    def stop_approach(self, t, room_pct: float, upnl: float) -> None:
+        """One-shot warning: a position has consumed most of its stop
+        distance (critical — delivers through quiet hours)."""
+        base = t.symbol.split("/")[0]
+        self.send(
+            f"⚠️ <b>{_esc(base)} {_esc(t.side)} stopa yaklaşıyor</b>"
+            f"\n{_esc(t.setup_type)} · stop mesafesinin %{room_pct:.0f}'i kaldı"
+            f" · uPnL {upnl:+.2f} USDT",
+            critical=True,
+        )
+
+    def loss_budget_alert(self, used_pct: float, daily_pnl: float,
+                          budget: float) -> None:
+        """One-shot per level per day: daily-loss budget usage crossed a
+        threshold (critical — delivers through quiet hours)."""
+        self.send(
+            f"🟠 <b>Günlük zarar bütçesi %{used_pct:.0f} doldu</b>"
+            f"\nbugün {daily_pnl:+.2f} USDT · kill-switch bütçesi "
+            f"{budget:.2f} USDT",
+            critical=True,
+        )
+
+    def weekly_report(self, rows, week_pnl: float, balance: float) -> None:
+        """Sunday per-strategy report + live-evidence progress.
+
+        rows: [{setup, n, week_n, net_r, winrate, target_lo, target_hi}].
+        """
+        lines = [f"📅 <b>Haftalık rapor</b>"
+                 f"\nhafta PnL {week_pnl:+.2f} USDT · bakiye {balance:.2f}"]
+        for r in rows:
+            prog = min(r["n"], r["target_hi"])
+            lines.append(
+                f"• {_esc(r['setup'])}: {r['week_n']} trade bu hafta · "
+                f"toplam {r['n']} · net {r['net_r']:+.3f}R · "
+                f"win {r['winrate']:.0f}% · kanıt {prog}/{r['target_lo']}"
+                f"–{r['target_hi']}")
+        self.send("\n".join(lines))
 
     def daily_profit_lock_activated(self, daily_pnl: float, target: float) -> None:
         """Task 5: fired once per activation (edge-triggered in the engine)."""
@@ -397,8 +456,8 @@ class TelegramNotifier(BaseNotifier):
     API = "https://api.telegram.org/bot{token}/{method}"
 
     def __init__(self, token: str, chat_id: str, timeout: float = 8.0,
-                 mode: str = "paper"):
-        super().__init__(mode=mode)
+                 mode: str = "paper", quiet_hours: str = ""):
+        super().__init__(mode=mode, quiet_hours=quiet_hours)
         self.token = token
         self.chat_id = chat_id
         self.timeout = timeout
@@ -496,4 +555,4 @@ def build_notifier(cfg: Config) -> BaseNotifier:
                             mode=cfg.mode)
     log.info("Telegram notifier enabled")
     return TelegramNotifier(cfg.telegram_bot_token, cfg.telegram_chat_id,
-                            mode=cfg.mode)
+                            mode=cfg.mode, quiet_hours=cfg.tg_quiet_hours)

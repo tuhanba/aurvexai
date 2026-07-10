@@ -438,6 +438,24 @@ class Config:
     # Pure notification — reads the same marks the dashboard uses.
     tg_pos_summary_min: int = field(
         default_factory=lambda: _int("TG_POS_SUMMARY_MIN", 60))
+    # Stop-approach alert: one Telegram warning per trade when the live mark
+    # has consumed all but TG_STOP_ALERT_ROOM_PCT % of the entry->stop
+    # distance (default 25; 0 disables). Display/notify only.
+    tg_stop_alert_room_pct: float = field(
+        default_factory=lambda: _float("TG_STOP_ALERT_ROOM_PCT", 25.0))
+    # Daily-loss budget alerts: one warning each when today's realised loss
+    # crosses these %s of the kill-switch budget (empty disables).
+    tg_loss_budget_alerts: List[float] = field(
+        default_factory=lambda: [float(x) for x in
+                                 _list("TG_LOSS_BUDGET_ALERTS", ["50", "80"])])
+    # Weekly per-strategy report (Sunday 18:00 UTC): 1 = on, 0 = off.
+    tg_weekly_report: bool = field(
+        default_factory=lambda: _bool("TG_WEEKLY_REPORT", True))
+    # Quiet hours "HH-HH" UTC (e.g. "0-7"): routine messages (digests,
+    # summaries, trade events) are suppressed; CRITICAL ones (kill switch,
+    # stop-approach, budget alerts, live-gate) always deliver. "" = off.
+    tg_quiet_hours: str = field(
+        default_factory=lambda: _str("TG_QUIET_HOURS", ""))
 
     # -- Band-walk continuation (band_walk profile) --------------------------
     # Campaign-7 F3 (CONDITIONAL_TA_WAVE_REPORT.md): two consecutive closes

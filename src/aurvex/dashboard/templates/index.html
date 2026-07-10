@@ -248,7 +248,7 @@ tr:last-child td{border-bottom:none}
 /* ── Responsive ── */
 @media(max-width:700px){
   .g4,.g3{grid-template-columns:1fr 1fr}
-  .g2{grid-template-columns:1fr 1fr}
+  .g2{grid-template-columns:1fr}
   .kpi-val{font-size:23px}
   header{padding:10px 12px}
   .brand{font-size:16px;letter-spacing:3px}
@@ -571,6 +571,36 @@ tr:last-child td{border-bottom:none}
     <div id="equityChart" style="width:100%"></div>
   </div>
 
+  <!-- Live-evidence progress + risk budgets -->
+  <div class="grid g2">
+    <div class="card">
+      <div class="card-title">Live-evidence progress <span style="font-weight:normal;font-size:11px;color:var(--muted)">30–50 closed trades per leg before live</span></div>
+      <div id="readiness"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Risk budgets</div>
+      <div id="riskBars"></div>
+    </div>
+  </div>
+
+  <!-- Daily PnL calendar + R histogram -->
+  <div class="grid g2">
+    <div class="card">
+      <div class="card-title">Daily PnL <span style="font-weight:normal;font-size:11px;color:var(--muted)">last 10 weeks, UTC days</span></div>
+      <div id="pnlCal"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">R-multiple distribution <span id="rHistLabel" style="font-weight:normal;font-size:11px;color:var(--muted)"></span></div>
+      <div id="rHist"></div>
+    </div>
+  </div>
+
+  <!-- Per-strategy cumulative PnL -->
+  <div class="card">
+    <div class="card-title">Strategy PnL curves <span style="font-weight:normal;font-size:11px;color:var(--muted)">cumulative realised USDT per leg</span></div>
+    <div id="stratCurves"></div>
+  </div>
+
   <!-- Closed trades -->
   <div class="card">
     <div class="card-title">Closed trades</div>
@@ -701,7 +731,7 @@ async function getJSON(u){const r=await fetch(u);return r.json();}
 
 async function refresh(){
   try{
-    const [st,fn,me,op,cl,sg,sh,ac,tg,pm,sv,ss,qp,mo,shl,dg,bn,eq] = await Promise.all([
+    const [st,fn,me,op,cl,sg,sh,ac,tg,pm,sv,ss,qp,mo,shl,dg,bn,eq,lr,hi] = await Promise.all([
       getJSON('/api/status'), getJSON('/api/funnel'), getJSON('/api/metrics'),
       getJSON('/api/trades/open'), getJSON('/api/trades/closed'),
       getJSON('/api/signals'), getJSON('/api/shadow'),
@@ -710,7 +740,8 @@ async function refresh(){
       getJSON('/api/system_state'), getJSON('/api/quality'),
       getJSON('/api/missed_opportunity'), getJSON('/api/setup_health'),
       getJSON('/api/diagnosis'), getJSON('/api/binance'),
-      getJSON('/api/equity_curve')
+      getJSON('/api/equity_curve'), getJSON('/api/live_readiness'),
+      getJSON('/api/history')
     ]);
 
     // ── Mode banner (Task 4): PAPER / DRY_RUN / TESTNET / LIVE ──
@@ -1162,6 +1193,132 @@ async function refresh(){
         `equity <b class="${cls(pnl)}">${fmt(eq.equity)}</b> `+
         `(<span class="${cls(pnl)}">${signed(pnl)} / ${signed(pnl/eq.initial_balance*100)}%</span>) · `+
         `${(eq.points||[]).length} fills`;
+    }
+
+    // ── Live-evidence progress (D1) ──
+    if(lr){
+      const el = document.getElementById('readiness');
+      if(!(lr.rows||[]).length){
+        el.innerHTML='<div style="color:var(--muted);font-size:12px;padding:6px 0">no closed trades this epoch yet — evidence window starts with the first close</div>';
+      } else {
+        el.innerHTML = lr.rows.map(r=>{
+          const pct = r.progress_pct;
+          const refTxt = r.validated_r!==null&&r.validated_r!==undefined
+            ? ` · ref ${fmt(r.validated_r,3)}R` : '';
+          const arTxt = r.avg_r!==null ? `<span class="${cls(r.avg_r)}">${fmt(r.avg_r,3)}R</span>` : '—';
+          return `<div style="margin:7px 0">
+            <div style="display:flex;justify-content:space-between;font-size:12px">
+              <span>${r.setup}</span>
+              <span>${r.n}/${r.target_lo}–${r.target_hi} · ${arTxt}${refTxt}</span>
+            </div>
+            <div style="height:7px;background:var(--line-soft);border-radius:4px;margin-top:4px;overflow:hidden">
+              <div style="height:100%;width:${pct}%;border-radius:4px;background:${pct>=100?'var(--green)':'var(--gold)'}"></div>
+            </div>
+          </div>`;}).join('') +
+          `<div style="color:var(--muted);font-size:11px;margin-top:6px">${lr.note}</div>`;
+      }
+    }
+
+    // ── Risk budgets (D4) — visual bars over portfolio_metrics numbers ──
+    if(pm){
+      const bar=(label,val,max,txt,warnAt)=>{
+        const pct=Math.min(100,Math.max(0,max>0?val/max*100:0));
+        const col=pct>=(warnAt||80)?'var(--red)':pct>=50?'var(--amber)':'var(--green)';
+        return `<div style="margin:7px 0">
+          <div style="display:flex;justify-content:space-between;font-size:12px">
+            <span>${label}</span><span>${txt}</span></div>
+          <div style="height:7px;background:var(--line-soft);border-radius:4px;margin-top:4px;overflow:hidden">
+            <div style="height:100%;width:${pct}%;border-radius:4px;background:${col}"></div>
+          </div></div>`;
+      };
+      document.getElementById('riskBars').innerHTML =
+        bar('daily loss budget', pm.daily_loss_used_pct, 100,
+            `${fmt(pm.daily_loss_used_pct,0)}% of ${fmt(pm.daily_loss_budget_usdt)} USDT`) +
+        bar('open risk (all stops hit)', pm.open_risk_usdt, pm.daily_loss_budget_usdt,
+            `${fmt(pm.open_risk_usdt)} USDT (${fmt(pm.open_risk_pct,1)}% of bal)`) +
+        bar('exposure cap', pm.exposure_pct, pm.max_portfolio_exposure_pct,
+            `${fmt(pm.exposure_pct,0)}% / ${fmt(pm.max_portfolio_exposure_pct,0)}%`) +
+        bar('slots', pm.open_count, pm.max_open_trades,
+            `${pm.open_count}/${pm.max_open_trades}`, 101) +
+        bar('margin used', pm.margin_util_pct, 100,
+            `${fmt(pm.margin_util_pct,0)}% · free ${fmt(pm.free_margin)} USDT`);
+    }
+
+    // ── Daily PnL calendar (D2) ──
+    if(hi){
+      const cal = document.getElementById('pnlCal');
+      const days = hi.daily||{};
+      const cells=[]; const today=new Date();
+      const vals=Object.values(days).map(Math.abs); const vmax=Math.max(0.01,...vals);
+      for(let i=69;i>=0;i--){
+        const d=new Date(today.getTime()-i*86400000);
+        const key=d.toISOString().slice(0,10);
+        const v=days[key];
+        let bg='var(--line-soft)', tip=key+' · —';
+        if(v!==undefined){
+          const a=(0.25+0.75*Math.min(1,Math.abs(v)/vmax)).toFixed(2);
+          bg=v>=0?`rgba(65,209,124,${a})`:`rgba(240,99,127,${a})`;
+          tip=`${key} · ${v>=0?'+':''}${v.toFixed(2)} USDT`;
+        }
+        cells.push(`<div title="${tip}" style="width:100%;aspect-ratio:1;border-radius:3px;background:${bg}"></div>`);
+      }
+      cal.innerHTML=`<div style="display:grid;grid-template-columns:repeat(14,1fr);gap:3px">${cells.join('')}</div>`;
+    }
+
+    // ── R-multiple histogram (D3) ──
+    if(hi){
+      const el = document.getElementById('rHist');
+      const rs = hi.rs||[];
+      if(!rs.length){
+        el.innerHTML='<div style="color:var(--muted);font-size:12px;padding:6px 0">no closed trades yet</div>';
+        document.getElementById('rHistLabel').textContent='';
+      } else {
+        const edges=[-3,-2,-1.5,-1,-0.5,0,0.5,1,1.5,2,3,5];
+        const bins=new Array(edges.length+1).fill(0);
+        rs.forEach(r=>{let i=edges.findIndex(e=>r<e); bins[i<0?edges.length:i]++;});
+        const bmax=Math.max(...bins,1);
+        const lab=i=>i===0?`<${edges[0]}`:i===edges.length?`≥${edges[edges.length-1]}`:`${edges[i-1]}`;
+        el.innerHTML = `<div style="display:flex;align-items:flex-end;gap:2px;height:110px">`+
+          bins.map((b,i)=>{
+            const mid=i===0?edges[0]-0.5:i===edges.length?edges[edges.length-1]:((edges[i-1]+edges[i])/2);
+            const col=mid>=0?'var(--green)':'var(--red)';
+            return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px">
+              <div title="${b} trades" style="width:100%;height:${Math.round(b/bmax*90)}px;background:${col};border-radius:2px 2px 0 0;opacity:.85"></div>
+              <div style="font-size:9px;color:var(--muted)">${lab(i)}</div></div>`;
+          }).join('')+`</div>`;
+        const mean=rs.reduce((a,b)=>a+b,0)/rs.length;
+        document.getElementById('rHistLabel').innerHTML =
+          `n=${rs.length} · mean <b class="${cls(mean)}">${fmt(mean,3)}R</b>`;
+      }
+    }
+
+    // ── Per-strategy cumulative PnL curves (D5) ──
+    if(hi){
+      const el = document.getElementById('stratCurves');
+      const curves = hi.curves||{};
+      const names = Object.keys(curves).filter(k=>curves[k].length>=2);
+      if(!names.length){
+        el.innerHTML='<div style="color:var(--muted);font-size:12px;padding:6px 0">needs ≥2 closed trades per leg</div>';
+      } else {
+        const palette=['var(--gold)','var(--blue)','var(--green)','var(--red)','#c07de8','#5adfd3'];
+        const W=920,H=150,PAD=6;
+        let xmin=Infinity,xmax=-Infinity,ymin=0,ymax=0;
+        names.forEach(k=>curves[k].forEach(p=>{
+          xmin=Math.min(xmin,p.ts);xmax=Math.max(xmax,p.ts);
+          ymin=Math.min(ymin,p.cum);ymax=Math.max(ymax,p.cum);}));
+        const xr=xmax-xmin||1, yr=(ymax-ymin)||1;
+        const X=t=>PAD+(t-xmin)/xr*(W-2*PAD), Y=v=>H-PAD-(v-ymin)/yr*(H-2*PAD);
+        const y0=Y(0);
+        const polys=names.map((k,i)=>`<polyline fill="none" stroke="${palette[i%palette.length]}" stroke-width="1.6" points="${curves[k].map(p=>`${X(p.ts).toFixed(1)},${Y(p.cum).toFixed(1)}`).join(' ')}"/>`).join('');
+        const legend=names.map((k,i)=>{
+          const last=curves[k][curves[k].length-1].cum;
+          return `<span style="font-size:11px;margin-right:12px"><span style="color:${palette[i%palette.length]}">●</span> ${k} <b class="${cls(last)}">${signed(last)}</b></span>`;
+        }).join('');
+        el.innerHTML=`<div style="margin-bottom:6px">${legend}</div>
+          <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:${H}px;display:block">
+            <line x1="${PAD}" y1="${y0}" x2="${W-PAD}" y2="${y0}" stroke="var(--muted)" stroke-dasharray="4 4" stroke-width="1" opacity="0.5"/>
+            ${polys}</svg>`;
+      }
     }
 
     // ── Closed trades ──

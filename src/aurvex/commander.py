@@ -210,6 +210,7 @@ class TelegramCommander(BaseCommander):
             "/start":      self._cmd_start,
             "/status":     self._cmd_status,
             "/trades":     self._cmd_trades,
+            "/pnl":        self._cmd_pnl,
             "/closed":     self._cmd_closed,
             "/summary":    self._cmd_summary,
             "/balance":    self._cmd_balance,
@@ -239,6 +240,7 @@ class TelegramCommander(BaseCommander):
             "<b>AurvexAI Bot</b>\n\n"
             "/status    — engine status\n"
             "/trades    — open positions\n"
+            "/pnl       — live PnL digest on demand\n"
             "/closed    — last 5 closed trades\n"
             "/summary   — today's PnL &amp; stats\n"
             "/balance   — account balance\n"
@@ -293,6 +295,22 @@ class TelegramCommander(BaseCommander):
                 f"{t.side} {t.symbol}  lev:{t.leverage}x\n"
                 f"  entry:{t.entry:.5g}  mark:{mark:.5g}  uPnL:{upnl:+.2f}")
         self._send("\n".join(lines))
+
+    def _cmd_pnl(self, _args: List[str]) -> None:
+        """On-demand version of the periodic open-positions digest."""
+        e = self._engine
+        if e is None:
+            self._send("Engine not attached.")
+            return
+        rows, unreal_total, _ = e.position_rows()
+        if not rows:
+            self._send("No open positions.")
+            return
+        balance = e.db.get_balance()
+        e.notifier.position_summary(rows, equity=balance + unreal_total,
+                                    balance=balance,
+                                    daily_pnl=e._daily_pnl_today(),
+                                    critical=True)   # user asked — always reply
 
     def _cmd_closed(self, _args: List[str]) -> None:
         e = self._engine

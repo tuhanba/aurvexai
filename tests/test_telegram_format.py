@@ -42,7 +42,7 @@ class Cap(BaseNotifier):
         super().__init__()
         self.msgs: list = []
 
-    def send(self, text: str) -> bool:
+    def send(self, text: str, critical: bool = False) -> bool:
         self.msgs.append(text)
         return True
 

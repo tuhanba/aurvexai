@@ -103,6 +103,9 @@ class Engine:
         self._cycles = 0
         self._last_summary_day = -1
         self._last_pos_summary_ms: int = 0
+        self._loss_alert_day: int = -1
+        self._loss_alerts_fired: set = set()
+        self._weekly_report_sent: tuple = ()
         self._kill_switch_fired_day: int = -1
         self._profit_lock_fired_day: int = -1
         self._last_error: str = ""
@@ -778,6 +781,12 @@ class Engine:
         # Periodic open-position digest (TG_POS_SUMMARY_MIN; 0 disables).
         self._maybe_position_summary()
 
+        # One-shot critical alerts: stop approach, daily-loss budget usage,
+        # Sunday weekly report. All notify-only.
+        self._maybe_stop_approach_alerts()
+        self._maybe_loss_budget_alerts()
+        self._maybe_weekly_report()
+
         # Surface Telegram health to the dashboard (secret-free).
         self._persist_telegram_health()
 
@@ -873,6 +882,45 @@ class Engine:
             except Exception as exc:
                 log.debug("daily summary error: %s", exc)
 
+    def position_rows(self):
+        """(rows, unreal_total, opens) — live uPnL per open trade from the
+        same marks the dashboard uses. Shared by the periodic digest, the
+        /pnl command and the stop-approach alert. Display only."""
+        now = now_ms()
+        opens = self.db.get_open_trades(mode=self.cfg.mode)
+        marks_meta = self.db.get_meta("marks") or {}
+        marks = (marks_meta.get("prices", {})
+                 if isinstance(marks_meta, dict) else {})
+        rows = []
+        unreal_total = 0.0
+        for t in opens:
+            mark = marks.get(t.symbol)
+            upnl = upnl_r = move = room = None
+            if mark and t.entry:
+                sign = 1 if t.side == LONG else -1
+                qty = t.position_size * t.remaining_fraction / t.entry
+                upnl = qty * (mark - t.entry) * sign
+                unreal_total += upnl
+                risk = t.metadata.get("actual_risk_amount", t.max_loss) or 0
+                upnl_r = (upnl / risk) if risk > 0 else None
+                move = (mark - t.entry) / t.entry * 100.0 * sign
+                stop_ref = t.current_stop or t.stop_loss
+                sd = (t.entry - stop_ref) * sign
+                if sd > 0:
+                    room = (mark - stop_ref) * sign / sd * 100.0
+            rows.append({
+                "symbol": t.symbol, "side": t.side, "setup": t.setup_type,
+                "upnl": upnl, "upnl_r": upnl_r, "move_pct": move,
+                "stop_room_pct": room, "trade": t,
+                "age_min": max(0, now - (t.open_time or now)) / 60_000.0,
+            })
+        return rows, unreal_total, opens
+
+    def _daily_pnl_today(self) -> float:
+        day_start = int(dt.datetime.now(dt.timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
+        return self.db.daily_realized_pnl(day_start)
+
     def _maybe_position_summary(self) -> None:
         """Periodic Telegram open-positions digest (TG_POS_SUMMARY_MIN).
 
@@ -891,39 +939,102 @@ class Engine:
             return
         self._last_pos_summary_ms = now
         try:
-            opens = self.db.get_open_trades(mode=self.cfg.mode)
-            if not opens:
+            rows, unreal_total, opens = self.position_rows()
+            if not rows:
                 return
-            marks_meta = self.db.get_meta("marks") or {}
-            marks = (marks_meta.get("prices", {})
-                     if isinstance(marks_meta, dict) else {})
-            rows = []
-            unreal_total = 0.0
-            for t in opens:
-                mark = marks.get(t.symbol)
-                upnl = upnl_r = move = None
-                if mark and t.entry:
-                    sign = 1 if t.side == LONG else -1
-                    qty = t.position_size * t.remaining_fraction / t.entry
-                    upnl = qty * (mark - t.entry) * sign
-                    unreal_total += upnl
-                    risk = t.metadata.get("actual_risk_amount", t.max_loss) or 0
-                    upnl_r = (upnl / risk) if risk > 0 else None
-                    move = (mark - t.entry) / t.entry * 100.0 * sign
-                rows.append({
-                    "symbol": t.symbol, "side": t.side, "setup": t.setup_type,
-                    "upnl": upnl, "upnl_r": upnl_r, "move_pct": move,
-                    "age_min": max(0, now - (t.open_time or now)) / 60_000.0,
-                })
             balance = self.db.get_balance()
-            day_start = int(dt.datetime.now(dt.timezone.utc).replace(
-                hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
-            daily_pnl = self.db.daily_realized_pnl(day_start)
             self.notifier.position_summary(rows, equity=balance + unreal_total,
                                            balance=balance,
-                                           daily_pnl=daily_pnl)
+                                           daily_pnl=self._daily_pnl_today())
         except Exception as exc:
             log.debug("position summary error: %s", exc)
+
+    def _maybe_stop_approach_alerts(self) -> None:
+        """One-shot Telegram warning per trade when the live mark has
+        consumed all but TG_STOP_ALERT_ROOM_PCT % of the stop distance.
+        The fired flag persists in trade.metadata so restarts don't respam.
+        Notify-only — no exit logic here."""
+        thresh = float(self.cfg.tg_stop_alert_room_pct)
+        if thresh <= 0:
+            return
+        try:
+            rows, _, _ = self.position_rows()
+            for r in rows:
+                t = r["trade"]
+                if r["stop_room_pct"] is None or r["upnl"] is None:
+                    continue
+                if r["stop_room_pct"] > thresh:
+                    continue
+                if t.metadata.get("stop_alert_fired"):
+                    continue
+                t.metadata["stop_alert_fired"] = True
+                self.db.upsert_trade(t)
+                self.notifier.stop_approach(t, r["stop_room_pct"], r["upnl"])
+        except Exception as exc:
+            log.debug("stop approach alert error: %s", exc)
+
+    def _maybe_loss_budget_alerts(self) -> None:
+        """One-shot per level per UTC day: today's realised loss crossed
+        TG_LOSS_BUDGET_ALERTS % of the kill-switch budget."""
+        levels = sorted(self.cfg.tg_loss_budget_alerts or [])
+        if not levels:
+            return
+        try:
+            today = dt.datetime.now(dt.timezone.utc).toordinal()
+            if today != self._loss_alert_day:
+                self._loss_alert_day = today
+                self._loss_alerts_fired = set()
+            balance = self.db.get_balance()
+            budget = balance * (self.cfg.max_daily_loss_pct / 100.0)
+            if budget <= 0:
+                return
+            daily_pnl = self._daily_pnl_today()
+            used_pct = max(0.0, -daily_pnl) / budget * 100.0
+            for lv in levels:
+                if used_pct >= lv and lv not in self._loss_alerts_fired:
+                    self._loss_alerts_fired.add(lv)
+                    self.notifier.loss_budget_alert(used_pct, daily_pnl,
+                                                    budget)
+        except Exception as exc:
+            log.debug("loss budget alert error: %s", exc)
+
+    def _maybe_weekly_report(self) -> None:
+        """Sunday >=18:00 UTC, once: per-strategy week + evidence progress."""
+        if not self.cfg.tg_weekly_report:
+            return
+        now = dt.datetime.now(dt.timezone.utc)
+        if now.weekday() != 6 or now.hour < 18:
+            return
+        week_key = now.isocalendar()[:2]
+        if self._weekly_report_sent == week_key:
+            return
+        self._weekly_report_sent = week_key
+        try:
+            closed = self.db.get_closed_trades(limit=5000, mode=self.cfg.mode)
+            week_start_ms = int((now - dt.timedelta(days=7)).timestamp() * 1000)
+            per: Dict[str, Dict] = {}
+            week_pnl = 0.0
+            for t in closed:
+                s = per.setdefault(t.setup_type,
+                                   {"n": 0, "wins": 0, "sum_r": 0.0,
+                                    "week_n": 0})
+                s["n"] += 1
+                s["sum_r"] += t.realized_pnl_pct or 0.0
+                if (t.realized_pnl or 0) > 0:
+                    s["wins"] += 1
+                if (t.close_time or 0) >= week_start_ms:
+                    s["week_n"] += 1
+                    week_pnl += t.realized_pnl or 0.0
+            rows = [{"setup": k, "n": v["n"], "week_n": v["week_n"],
+                     "net_r": (v["sum_r"] / v["n"]) if v["n"] else 0.0,
+                     "winrate": (v["wins"] / v["n"] * 100.0) if v["n"] else 0.0,
+                     "target_lo": 30, "target_hi": 50}
+                    for k, v in sorted(per.items())]
+            if rows:
+                self.notifier.weekly_report(rows, week_pnl,
+                                            self.db.get_balance())
+        except Exception as exc:
+            log.debug("weekly report error: %s", exc)
 
 
 def run_engine(cfg: Config, max_cycles: Optional[int] = None,
