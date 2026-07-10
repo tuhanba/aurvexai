@@ -617,6 +617,78 @@ def create_app(cfg=None) -> Flask:
             "ts_now": now_ms(),
         })
 
+    # Validated per-strategy expectancy references (SYSTEM_STATE §2) used by
+    # the live-readiness panel to compare realised paper Exp-R against the
+    # harness numbers. Display context only — never a gate.
+    VALIDATED_EXP_R = {
+        "donchian_trend": 0.284, "squeeze_breakout": 0.088,
+        "squeeze_breakout@4h": 0.193, "ichimoku_trend": 0.314,
+        "band_walk": 0.082,
+    }
+
+    @app.route("/api/live_readiness")
+    def live_readiness():
+        """Per-strategy 30-50-trade evidence progress (LIVE_READY_CHECKLIST).
+
+        For each strategy leg: closed-trade count vs the 30-50 window,
+        realised avg R vs the validated harness Exp-R. Read-only evidence
+        display; the live decision itself stays with the owner + the
+        five-gate lock.
+        """
+        closed = db.get_closed_trades(limit=5000, mode=cfg.mode)
+        per: Dict[str, Dict[str, Any]] = {}
+        for t in closed:
+            s = per.setdefault(t.setup_type, {"n": 0, "wins": 0, "sum_r": 0.0})
+            s["n"] += 1
+            s["sum_r"] += t.realized_pnl_pct or 0.0
+            if (t.realized_pnl or 0) > 0:
+                s["wins"] += 1
+        rows = []
+        for setup, s in sorted(per.items()):
+            avg_r = (s["sum_r"] / s["n"]) if s["n"] else None
+            rows.append({
+                "setup": setup, "n": s["n"],
+                "target_lo": 30, "target_hi": 50,
+                "progress_pct": round(min(100.0, s["n"] / 30 * 100.0), 1),
+                "avg_r": round(avg_r, 3) if avg_r is not None else None,
+                "win_pct": round(s["wins"] / s["n"] * 100.0, 1) if s["n"] else None,
+                "validated_r": VALIDATED_EXP_R.get(
+                    setup, VALIDATED_EXP_R.get(setup.split("@")[0])),
+            })
+        total_n = sum(r["n"] for r in rows)
+        return jsonify({
+            "note": "Evidence display only — live promotion additionally "
+                    "requires the owner decision + five-gate lock.",
+            "rows": rows,
+            "total_closed": total_n,
+            "window": [30, 50],
+        })
+
+    @app.route("/api/history")
+    def history():
+        """Daily PnL calendar + R-multiple list + per-strategy cumulative
+        curves, all from closed trades. Read-only aggregation."""
+        closed = sorted(db.get_closed_trades(limit=5000, mode=cfg.mode),
+                        key=lambda t: t.close_time or 0)
+        daily: Dict[str, float] = {}
+        rs: list = []
+        curves: Dict[str, list] = {}
+        cum: Dict[str, float] = {}
+        for t in closed:
+            if not t.close_time:
+                continue
+            import datetime as _dt
+            day = _dt.datetime.fromtimestamp(
+                t.close_time / 1000.0, _dt.timezone.utc).strftime("%Y-%m-%d")
+            daily[day] = round(daily.get(day, 0.0) + (t.realized_pnl or 0.0), 4)
+            if t.realized_pnl_pct is not None:
+                rs.append(round(t.realized_pnl_pct, 3))
+            c = cum.get(t.setup_type, 0.0) + (t.realized_pnl or 0.0)
+            cum[t.setup_type] = c
+            curves.setdefault(t.setup_type, []).append(
+                {"ts": t.close_time, "cum": round(c, 4)})
+        return jsonify({"daily": daily, "rs": rs[-500:], "curves": curves})
+
     @app.route("/api/telegram")
     def telegram_health():
         hb = db.get_heartbeat("telegram")
