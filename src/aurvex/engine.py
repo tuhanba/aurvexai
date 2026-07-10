@@ -823,7 +823,11 @@ class Engine:
             if not closed:
                 continue
             bar = closed[-1]
-            marks[trade.symbol] = bar.close
+            # Mark for DISPLAY (dashboard uPnL, Telegram digest, accounting):
+            # the live last price, falling back to the closed bar. Exit
+            # decisions below stay on the CLOSED bar exactly as before —
+            # parity untouched; only the marks meta becomes live.
+            marks[trade.symbol] = float(snap.last_price or bar.close)
             events = self.executor.simulate_fill(trade, bar.high, bar.low, bar.close,
                                                  bar_ts=bar.ts)
             if not events:
