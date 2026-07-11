@@ -36,7 +36,7 @@ from .funnel import FunnelLogger
 from .journal import TradeJournal
 from .market_data import build_provider
 from .models import (ALLOW, LONG, OPEN, REJECT, Decision, MarketSnapshot,
-                     interval_to_ms, now_ms)
+                     interval_to_ms, now_ms, profile_of)
 from .quality import grade as quality_grade
 from .scanner import UniverseScanner
 from .setups import SetupDetector, build_context
@@ -813,6 +813,50 @@ class Engine:
         except Exception as exc:
             log.debug("profit lock notification error: %s", exc)
 
+    def _repair_exit_state(self, trade, closed, manage_ltf: str) -> bool:
+        """One-time repair of streaming exit state for trades whose
+        event-less bar advances were never persisted (pre-fix rows).
+
+        Rebuilds, from the actual CLOSED bars up to (but excluding) the
+        current one, exactly what per-bar accumulation would have produced:
+        bars_held / last_processed_bar_ts (time-stop clock), donchian's
+        chan_hist window and ichimoku's ich_hl window. Close-based and
+        deterministic; the current bar is left for simulate_fill. Runs once
+        per trade (flag persisted with the trade).
+        """
+        if trade.metadata.get("exit_state_repaired"):
+            return False
+        trade.metadata["exit_state_repaired"] = True
+        try:
+            bar_ms = interval_to_ms(manage_ltf)
+        except Exception:
+            return True
+        cur_ts = int(closed[-1].ts)
+        prev_ts = cur_ts - bar_ms
+        entry_ts = int(trade.metadata.get("entry_bar_ts", 0) or 0)
+        if not entry_ts:
+            entry_ts = (int(trade.open_time or cur_ts) // bar_ms) * bar_ms
+            trade.metadata["entry_bar_ts"] = entry_ts
+        expected = max(0, (prev_ts - entry_ts) // bar_ms)
+        if expected > int(trade.metadata.get("bars_held", 0) or 0):
+            trade.metadata["bars_held"] = int(expected)
+            trade.metadata["last_processed_bar_ts"] = int(prev_ts)
+        prof = profile_of(trade.setup_type)
+        if prof == "donchian_trend":
+            x = int(trade.metadata.get("exit_channel_bars")
+                    or self.cfg.don_exit_bars or 0)
+            if x > 0:
+                past = [c for c in closed if entry_ts < c.ts <= prev_ts]
+                hist = [(c.low if trade.side == LONG else c.high)
+                        for c in past][-x:]
+                if len(hist) > len(trade.metadata.get("chan_hist") or []):
+                    trade.metadata["chan_hist"] = hist
+        elif prof == "ichimoku_trend":
+            past = [c for c in closed if c.ts <= prev_ts][-26:]
+            if past:
+                trade.metadata["ich_hl"] = [[c.high, c.low] for c in past]
+        return True
+
     async def _manage_open_trades(self, snapshots: Dict[str, MarketSnapshot]) -> None:
         opens = self.db.get_open_trades(mode=self.cfg.mode)
         marks: Dict[str, float] = {}
@@ -837,9 +881,23 @@ class Engine:
             # decisions below stay on the CLOSED bar exactly as before —
             # parity untouched; only the marks meta becomes live.
             marks[trade.symbol] = float(snap.last_price or bar.close)
+            # One-time repair for rows written before the exit-state
+            # persistence fix: rebuild the bar clock + streaming windows
+            # from actual closed bars (see _repair_exit_state).
+            dirty = self._repair_exit_state(trade, closed, manage_ltf)
+            before_ts = int(trade.metadata.get("last_processed_bar_ts", 0) or 0)
             events = self.executor.simulate_fill(trade, bar.high, bar.low, bar.close,
                                                  bar_ts=bar.ts)
             if not events:
+                # CRITICAL: simulate_fill advances streaming exit state
+                # (bars_held / chan_hist / ich_hl / last_processed_bar_ts)
+                # on EVERY new closed bar, not only on fill events. Each
+                # cycle re-reads open trades from the DB, so an event-less
+                # advance MUST be persisted or the time-stop/channel/TK
+                # clocks reset every cycle and those exits can never fire.
+                after_ts = int(trade.metadata.get("last_processed_bar_ts", 0) or 0)
+                if dirty or after_ts != before_ts:
+                    self.db.upsert_trade(trade)
                 continue
             self.journal.record_fills(trade, events)
             be_moved = any(e.kind == "BE_MOVE" for e in events)
