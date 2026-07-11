@@ -351,7 +351,7 @@ class TelegramCommander(BaseCommander):
             return
         from .engine import _utc_day_start_ms
         bal = e.db.get_balance()
-        day_pnl = e.db.daily_realized_pnl(_utc_day_start_ms())
+        day_pnl = e.db.daily_realized_pnl(_utc_day_start_ms(), mode=e.cfg.mode)
         self._send(
             f"<b>Balance</b>\n"
             f"current:  {bal:.2f} USDT\n"

@@ -65,7 +65,7 @@ def _risk_and_margin(db: Storage, cfg: Config) -> Dict[str, Any]:
          else t.position_size * t.remaining_fraction / (t.leverage or 1))
         for t in opens)
     open_risk = sum(t.max_loss * t.remaining_fraction for t in opens)
-    daily_pnl = db.daily_realized_pnl(_utc_day_start_ms())
+    daily_pnl = db.daily_realized_pnl(_utc_day_start_ms(), mode=cfg.mode)
     daily_budget = balance * (cfg.max_daily_loss_pct / 100.0)
     daily_used_pct = (round(max(0.0, -daily_pnl) / daily_budget * 100.0, 2)
                       if daily_budget > 0 else 0.0)
