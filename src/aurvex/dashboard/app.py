@@ -295,7 +295,7 @@ def create_app(cfg=None) -> Flask:
             .replace(hour=0, minute=0, second=0, microsecond=0)
             .timestamp() * 1000
         )
-        daily_pnl = db.daily_realized_pnl(_day_start)
+        daily_pnl = db.daily_realized_pnl(_day_start, mode=cfg.mode)
 
         # Task 4: the four independent status truths (never folded into one
         # boolean for the UI) + env-driven heartbeat staleness cut.
@@ -537,7 +537,7 @@ def create_app(cfg=None) -> Flask:
             .replace(hour=0, minute=0, second=0, microsecond=0)
             .timestamp() * 1000
         )
-        daily_pnl = db.daily_realized_pnl(_day_start)
+        daily_pnl = db.daily_realized_pnl(_day_start, mode=cfg.mode)
         daily_loss_budget = balance * (cfg.max_daily_loss_pct / 100.0)
         daily_loss_used_pct = (
             round(max(0.0, -daily_pnl) / daily_loss_budget * 100.0, 2)
@@ -819,7 +819,7 @@ def create_app(cfg=None) -> Flask:
             _dt.datetime.fromtimestamp(_ts, _dt.timezone.utc)
             .replace(hour=0, minute=0, second=0, microsecond=0)
             .timestamp() * 1000)
-        daily_pnl = db.daily_realized_pnl(_day_start)
+        daily_pnl = db.daily_realized_pnl(_day_start, mode=cfg.mode)
         daily_budget = balance * (cfg.max_daily_loss_pct / 100.0)
         daily_used_pct = (round(max(0.0, -daily_pnl) / daily_budget * 100.0, 2)
                           if daily_budget > 0 else 0.0)
@@ -937,7 +937,7 @@ def create_app(cfg=None) -> Flask:
             .replace(hour=0, minute=0, second=0, microsecond=0)
             .timestamp() * 1000)
         balance = db.get_balance()
-        daily_pnl = db.daily_realized_pnl(_day_start)
+        daily_pnl = db.daily_realized_pnl(_day_start, mode=cfg.mode)
         daily_budget = balance * (cfg.max_daily_loss_pct / 100.0)
         daily_used_pct = (round(max(0.0, -daily_pnl) / daily_budget * 100.0, 2)
                           if daily_budget > 0 else 0.0)

@@ -322,7 +322,7 @@ class Engine:
             open_notional=open_notional,
             open_margin=open_margin,
             last_trade_ms_by_symbol=self.db.last_trade_times(),
-            daily_realized_pnl=self.db.daily_realized_pnl(_utc_day_start_ms()),
+            daily_realized_pnl=self.db.daily_realized_pnl(_utc_day_start_ms(), mode=self.cfg.mode),
             now_ms=now_ms(),
         )
 
@@ -735,7 +735,7 @@ class Engine:
         # Kill-switch state (reuse the same expression as f_daily_loss so they
         # never disagree). Fire the Telegram notification once per UTC day.
         bal = self.db.get_balance()
-        daily_pnl = self.db.daily_realized_pnl(_utc_day_start_ms())
+        daily_pnl = self.db.daily_realized_pnl(_utc_day_start_ms(), mode=self.cfg.mode)
         kill_switch_active = daily_pnl <= -(bal * self.cfg.max_daily_loss_pct / 100.0)
         if kill_switch_active:
             today = dt.datetime.now(dt.timezone.utc).toordinal()
@@ -919,7 +919,7 @@ class Engine:
     def _daily_pnl_today(self) -> float:
         day_start = int(dt.datetime.now(dt.timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
-        return self.db.daily_realized_pnl(day_start)
+        return self.db.daily_realized_pnl(day_start, mode=self.cfg.mode)
 
     def _maybe_position_summary(self) -> None:
         """Periodic Telegram open-positions digest (TG_POS_SUMMARY_MIN).

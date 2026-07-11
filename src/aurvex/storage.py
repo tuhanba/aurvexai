@@ -617,10 +617,21 @@ class Storage:
             "SELECT symbol, MAX(open_time) AS t FROM trades GROUP BY symbol").fetchall()
         return {r["symbol"]: r["t"] for r in rows if r["t"] is not None}
 
-    def daily_realized_pnl(self, since_ms: int) -> float:
-        row = self.conn.execute(
-            "SELECT COALESCE(SUM(realized_pnl),0) AS p FROM trades "
-            "WHERE status=? AND close_time>=?", (CLOSED, since_ms)).fetchone()
+    def daily_realized_pnl(self, since_ms: int,
+                           mode: Optional[str] = None) -> float:
+        """Sum of today's realised PnL. When ``mode`` is given only that
+        mode's trades count — a live epoch's kill-switch budget can never be
+        consumed (or padded) by leftover paper rows, and vice versa."""
+        if mode:
+            row = self.conn.execute(
+                "SELECT COALESCE(SUM(realized_pnl),0) AS p FROM trades "
+                "WHERE status=? AND close_time>=? AND mode=?",
+                (CLOSED, since_ms, mode)).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT COALESCE(SUM(realized_pnl),0) AS p FROM trades "
+                "WHERE status=? AND close_time>=?",
+                (CLOSED, since_ms)).fetchone()
         return float(row["p"] or 0.0)
 
     # -- signal events -----------------------------------------------------

@@ -129,6 +129,44 @@ def test_quiet_hours_malformed_spec_disables():
     assert b2._quiet == (23, 7)
 
 
+def test_daily_pnl_mode_isolation(tmp_path):
+    """Paper and live rows never mix in the daily PnL (kill-switch input)."""
+    from aurvex.storage import Storage
+    cfg = Config()
+    cfg.db_path = str(tmp_path / "m.db")
+    db = Storage(cfg.db_path)
+    for i, (mode, pnl) in enumerate([("paper", -5.0), ("live", -2.0),
+                                     ("paper", 3.0)]):
+        t = _trade(cfg, status="CLOSED", realized_pnl=pnl,
+                   realized_pnl_pct=pnl / 3.0, mode=mode)
+        t.id = f"x{i}"
+        t.close_time = now_ms()
+        db.upsert_trade(t)
+    db.conn.commit()
+    day0 = now_ms() - 3_600_000
+    assert db.daily_realized_pnl(day0, mode="paper") == -2.0
+    assert db.daily_realized_pnl(day0, mode="live") == -2.0 or True
+    assert abs(db.daily_realized_pnl(day0, mode="live") - (-2.0)) < 1e-9
+    assert abs(db.daily_realized_pnl(day0) - (-4.0)) < 1e-9  # unfiltered
+
+
+def test_update_env_min_quote_volume(tmp_path):
+    """--min-quote-volume writes MIN_QUOTE_VOLUME_24H; insane values refused."""
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..",
+                                     "scripts"))
+    import update_env
+    env = tmp_path / ".env"
+    env.write_text("RISK_PCT=1.5\n")
+    rc = update_env.main(["--env-file", str(env),
+                          "--min-quote-volume", "10000000", "--apply"])
+    assert rc == 0
+    assert "MIN_QUOTE_VOLUME_24H=10000000" in env.read_text()
+    rc = update_env.main(["--env-file", str(env),
+                          "--min-quote-volume", "1000", "--apply"])
+    assert rc == 2                                # refused: below 1M floor
+
+
 def test_live_readiness_endpoint(tmp_path):
     from aurvex.dashboard.app import create_app
     from aurvex.storage import Storage

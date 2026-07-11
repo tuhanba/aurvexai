@@ -65,6 +65,7 @@ ALLOWED_KEYS = (
     "MAX_OPEN_TRADES",
     "MAX_PORTFOLIO_EXPOSURE_PCT",
     "EPOCH_LABEL",
+    "MIN_QUOTE_VOLUME_24H",
 )
 
 # Keys whose values are secrets — this script must never touch or print them.
@@ -110,6 +111,10 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                    help="EPOCH_LABEL for a clean forward-test epoch, e.g. aggr200_v1. "
                         "Apply, then run `python main.py reset` (shadow history is "
                         "preserved; open paper trades + ledger reset).")
+    p.add_argument("--min-quote-volume", type=float, default=None,
+                   help="MIN_QUOTE_VOLUME_24H liquidity floor in USDT, e.g. "
+                        "10000000 (10M). The f_liquidity safety filter rejects "
+                        "signals on coins below this 24h quote volume.")
     grp = p.add_mutually_exclusive_group()
     grp.add_argument("--apply", action="store_true",
                      help="actually write the file (default is dry-run)")
@@ -135,6 +140,8 @@ def collect_changes(args: argparse.Namespace) -> Dict[str, str]:
         changes["MAX_PORTFOLIO_EXPOSURE_PCT"] = _fmt_num(args.max_exposure_pct)
     if args.epoch_label is not None:
         changes["EPOCH_LABEL"] = args.epoch_label.strip()
+    if args.min_quote_volume is not None:
+        changes["MIN_QUOTE_VOLUME_24H"] = _fmt_num(args.min_quote_volume)
     return changes
 
 
@@ -170,6 +177,12 @@ def validate_changes(changes: Dict[str, str]) -> List[str]:
     if "MAX_PORTFOLIO_EXPOSURE_PCT" in changes:
         if float(changes["MAX_PORTFOLIO_EXPOSURE_PCT"]) <= 0:
             errors.append("MAX_PORTFOLIO_EXPOSURE_PCT must be > 0")
+    if "MIN_QUOTE_VOLUME_24H" in changes:
+        v = float(changes["MIN_QUOTE_VOLUME_24H"])
+        if not (1_000_000 <= v <= 1_000_000_000):
+            errors.append(f"MIN_QUOTE_VOLUME_24H={v:,.0f} outside sane range "
+                          "[1M, 1B] USDT — the liquidity floor exists for "
+                          "fill quality, refusing")
     return errors
 
 
