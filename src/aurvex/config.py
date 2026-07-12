@@ -237,6 +237,18 @@ class Config:
         default_factory=lambda: _bool("DAILY_PROFIT_LOCK_ENABLED", True))
     daily_profit_lock_pct: float = field(
         default_factory=lambda: _pfloat("DAILY_PROFIT_LOCK_PCT"))
+    # Daily profit TARGET with flatten. When true, the daily profit lock is
+    # measured on TOTAL intraday equity (realized today + current mark-to-
+    # market unrealized), tracked against a day-open equity baseline; the
+    # moment that gain reaches daily_profit_lock_pct %% the engine CLOSES all
+    # open positions at market (reason "PROFIT_TARGET") and blocks new entries
+    # until the day rollover — it does NOT wait for trades to close on their
+    # own. When false (default), the lock is realized-only and open trades are
+    # never touched (the original behaviour). Both paper and live route the
+    # close through the same executor primitive (parity); in armed live the
+    # exchange position is flattened reduce-only.
+    daily_profit_flatten: bool = field(
+        default_factory=lambda: _bool("DAILY_PROFIT_FLATTEN", False))
     # Day-boundary offset in hours from UTC for ALL daily counters (kill
     # switch, profit lock, daily PnL window, daily-summary/report dedup).
     # 0 = UTC midnight (default, unchanged). 3 = Türkiye saati (UTC+3): the

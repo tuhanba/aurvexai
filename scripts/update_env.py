@@ -67,6 +67,7 @@ ALLOWED_KEYS = (
     "EPOCH_LABEL",
     "MIN_QUOTE_VOLUME_24H",
     "DAILY_PROFIT_LOCK_PCT",
+    "DAILY_PROFIT_FLATTEN",
     "DAY_BOUNDARY_OFFSET_HOURS",
 )
 
@@ -118,9 +119,17 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                         "10000000 (10M). The f_liquidity safety filter rejects "
                         "signals on coins below this 24h quote volume.")
     p.add_argument("--profit-lock-pct", type=float, default=None,
-                   help="DAILY_PROFIT_LOCK_PCT — pause NEW entries once today's "
-                        "realized PnL reaches this %% of balance (e.g. 4). Open "
-                        "trades keep managing; resets at the day boundary.")
+                   help="DAILY_PROFIT_LOCK_PCT — daily profit target %% of "
+                        "balance (e.g. 4).")
+    p.add_argument("--profit-flatten", dest="profit_flatten",
+                   action="store_const", const=True, default=None,
+                   help="DAILY_PROFIT_FLATTEN=true — at the target, CLOSE all "
+                        "positions on a mark-to-market basis (don't wait for "
+                        "trades to close) and lock entries for the day.")
+    p.add_argument("--no-profit-flatten", dest="profit_flatten",
+                   action="store_const", const=False,
+                   help="DAILY_PROFIT_FLATTEN=false — realized-only lock that "
+                        "blocks new entries but never closes open trades.")
     p.add_argument("--day-offset-hours", type=float, default=None,
                    help="DAY_BOUNDARY_OFFSET_HOURS — shift ALL daily counters "
                         "off UTC. 3 = daily window resets at 00:00 Türkiye "
@@ -154,6 +163,8 @@ def collect_changes(args: argparse.Namespace) -> Dict[str, str]:
         changes["MIN_QUOTE_VOLUME_24H"] = _fmt_num(args.min_quote_volume)
     if args.profit_lock_pct is not None:
         changes["DAILY_PROFIT_LOCK_PCT"] = _fmt_num(args.profit_lock_pct)
+    if args.profit_flatten is not None:
+        changes["DAILY_PROFIT_FLATTEN"] = "true" if args.profit_flatten else "false"
     if args.day_offset_hours is not None:
         changes["DAY_BOUNDARY_OFFSET_HOURS"] = _fmt_num(args.day_offset_hours)
     return changes

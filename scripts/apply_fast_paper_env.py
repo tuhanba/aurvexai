@@ -71,10 +71,13 @@ BLOCK = {
     "UNIVERSE_SIZE": "17",
     "UNIVERSE_INCLUDE": U17,
     "MIN_QUOTE_VOLUME_24H": "10000000",     # 10M — pinned coins clear it in quiet markets
-    # Owner decision 2026-07-11: stop opening NEW trades once +4% banked today
-    # (10% was too hard to reach), and roll the daily window at 00:00 Türkiye
-    # saati (UTC+3) so the lock releases / trading resumes at local midnight.
+    # Owner decision 2026-07-11: take profit and stop for the day at +4% on a
+    # MARK-TO-MARKET basis — the moment intraday total (realized+unrealized)
+    # gain hits +4% of the day-open equity, CLOSE all positions and lock new
+    # entries (don't wait for trades to close). Daily window rolls at 00:00
+    # Türkiye saati (UTC+3), when the lock releases and trading resumes.
     "DAILY_PROFIT_LOCK_PCT": "4",
+    "DAILY_PROFIT_FLATTEN": "true",
     "DAY_BOUNDARY_OFFSET_HOURS": "3",
     "STALE_ENTRY_GUARD_BARS": "3",
     "KLINE_CACHE_ENABLED": "true",
