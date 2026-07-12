@@ -229,13 +229,21 @@ class Config:
     max_open_trades: int = field(default_factory=lambda: _pint("MAX_OPEN_TRADES"))
     max_daily_loss_pct: float = field(default_factory=lambda: _pfloat("MAX_DAILY_LOSS_PCT"))
     # Daily profit lock (mirror of the daily-loss kill switch, profit side):
-    # once today's UTC REALIZED PnL reaches balance * pct/100, new entries are
+    # once today's REALIZED PnL reaches balance * pct/100, new entries are
     # rejected (reason "daily_profit_lock"). Open trades keep their normal exit
-    # management; the lock resets automatically at UTC day rollover.
+    # management; the lock resets automatically at the day rollover (which day
+    # boundary — UTC or a local offset — is set by day_boundary_offset_hours).
     daily_profit_lock_enabled: bool = field(
         default_factory=lambda: _bool("DAILY_PROFIT_LOCK_ENABLED", True))
     daily_profit_lock_pct: float = field(
         default_factory=lambda: _pfloat("DAILY_PROFIT_LOCK_PCT"))
+    # Day-boundary offset in hours from UTC for ALL daily counters (kill
+    # switch, profit lock, daily PnL window, daily-summary/report dedup).
+    # 0 = UTC midnight (default, unchanged). 3 = Türkiye saati (UTC+3): the
+    # daily window resets at 00:00 Istanbul, so the profit lock releases and
+    # trading resumes at local midnight. Range [-12, 14].
+    day_boundary_offset_hours: float = field(
+        default_factory=lambda: _float("DAY_BOUNDARY_OFFSET_HOURS", 0.0))
     max_portfolio_exposure_pct: float = field(
         default_factory=lambda: _float("MAX_PORTFOLIO_EXPOSURE_PCT", 200.0)
     )
@@ -660,6 +668,9 @@ class Config:
             f"({self.risk_pct}) <= max_risk_pct ({self.max_risk_pct}) <= 5"
         )
         assert self.mode in {"paper", "live"}, "AX_MODE must be 'paper' or 'live'"
+        assert -12.0 <= self.day_boundary_offset_hours <= 14.0, (
+            "DAY_BOUNDARY_OFFSET_HOURS must be within [-12, 14]"
+        )
         assert self.strategy_profile in {"bugra_replica", "aurvex_enhanced",
                                          "reversion_v1", "squeeze_breakout",
                                          "donchian_trend"}, (

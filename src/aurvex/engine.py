@@ -48,11 +48,32 @@ from .telegram import build_notifier
 log = logging.getLogger("aurvex.engine")
 
 
-def _utc_day_start_ms(ts_ms: Optional[int] = None) -> int:
-    ts = (ts_ms or now_ms()) / 1000.0
-    d = dt.datetime.fromtimestamp(ts, dt.timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0)
-    return int(d.timestamp() * 1000)
+_DAY_MS = 86_400_000
+
+
+def _utc_day_start_ms(ts_ms: Optional[int] = None,
+                      offset_hours: float = 0.0) -> int:
+    """Start (in UTC ms) of the logical day containing ``ts_ms``.
+
+    ``offset_hours`` shifts the day boundary off UTC: 0 = UTC midnight
+    (default, byte-identical to before — the Unix epoch begins on a UTC
+    midnight, so day-length integer flooring lands exactly on UTC 00:00);
+    3 = the day resets at 00:00 Türkiye saati (UTC+3). Pure integer
+    arithmetic so it is DST-free and monotonic.
+    """
+    ms = int(ts_ms if ts_ms is not None else now_ms())
+    off = int(round(offset_hours * 3_600_000))
+    return ((ms + off) // _DAY_MS) * _DAY_MS - off
+
+
+def _day_ordinal(ts_ms: Optional[int] = None, offset_hours: float = 0.0) -> int:
+    """Monotonic integer day number in the offset-shifted frame — increments
+    exactly at the logical day boundary. Replaces UTC ``toordinal()`` for the
+    'fire once per day' dedup flags so they roll over with the same boundary
+    as the PnL window."""
+    ms = int(ts_ms if ts_ms is not None else now_ms())
+    off = int(round(offset_hours * 3_600_000))
+    return (ms + off) // _DAY_MS
 
 
 class Engine:
@@ -322,7 +343,9 @@ class Engine:
             open_notional=open_notional,
             open_margin=open_margin,
             last_trade_ms_by_symbol=self.db.last_trade_times(),
-            daily_realized_pnl=self.db.daily_realized_pnl(_utc_day_start_ms(), mode=self.cfg.mode),
+            daily_realized_pnl=self.db.daily_realized_pnl(
+                _utc_day_start_ms(offset_hours=self.cfg.day_boundary_offset_hours),
+                mode=self.cfg.mode),
             now_ms=now_ms(),
         )
 
@@ -735,10 +758,12 @@ class Engine:
         # Kill-switch state (reuse the same expression as f_daily_loss so they
         # never disagree). Fire the Telegram notification once per UTC day.
         bal = self.db.get_balance()
-        daily_pnl = self.db.daily_realized_pnl(_utc_day_start_ms(), mode=self.cfg.mode)
+        daily_pnl = self.db.daily_realized_pnl(
+                _utc_day_start_ms(offset_hours=self.cfg.day_boundary_offset_hours),
+                mode=self.cfg.mode)
         kill_switch_active = daily_pnl <= -(bal * self.cfg.max_daily_loss_pct / 100.0)
         if kill_switch_active:
-            today = dt.datetime.now(dt.timezone.utc).toordinal()
+            today = _day_ordinal(offset_hours=self.cfg.day_boundary_offset_hours)
             if today != self._kill_switch_fired_day:
                 self._kill_switch_fired_day = today
                 try:
@@ -804,7 +829,7 @@ class Engine:
         """
         if not active:
             return
-        today = dt.datetime.now(dt.timezone.utc).toordinal()
+        today = _day_ordinal(offset_hours=self.cfg.day_boundary_offset_hours)
         if today == self._profit_lock_fired_day:
             return
         self._profit_lock_fired_day = today
@@ -927,7 +952,7 @@ class Engine:
                 log.debug("marks persist error: %s", exc)
 
     def _maybe_daily_summary(self) -> None:
-        today = dt.datetime.now(dt.timezone.utc).toordinal()
+        today = _day_ordinal(offset_hours=self.cfg.day_boundary_offset_hours)
         if self._last_summary_day == -1:
             self._last_summary_day = today
             return
@@ -1038,7 +1063,7 @@ class Engine:
         if not levels:
             return
         try:
-            today = dt.datetime.now(dt.timezone.utc).toordinal()
+            today = _day_ordinal(offset_hours=self.cfg.day_boundary_offset_hours)
             if today != self._loss_alert_day:
                 self._loss_alert_day = today
                 self._loss_alerts_fired = set()

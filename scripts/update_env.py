@@ -66,6 +66,8 @@ ALLOWED_KEYS = (
     "MAX_PORTFOLIO_EXPOSURE_PCT",
     "EPOCH_LABEL",
     "MIN_QUOTE_VOLUME_24H",
+    "DAILY_PROFIT_LOCK_PCT",
+    "DAY_BOUNDARY_OFFSET_HOURS",
 )
 
 # Keys whose values are secrets — this script must never touch or print them.
@@ -115,6 +117,14 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                    help="MIN_QUOTE_VOLUME_24H liquidity floor in USDT, e.g. "
                         "10000000 (10M). The f_liquidity safety filter rejects "
                         "signals on coins below this 24h quote volume.")
+    p.add_argument("--profit-lock-pct", type=float, default=None,
+                   help="DAILY_PROFIT_LOCK_PCT — pause NEW entries once today's "
+                        "realized PnL reaches this %% of balance (e.g. 4). Open "
+                        "trades keep managing; resets at the day boundary.")
+    p.add_argument("--day-offset-hours", type=float, default=None,
+                   help="DAY_BOUNDARY_OFFSET_HOURS — shift ALL daily counters "
+                        "off UTC. 3 = daily window resets at 00:00 Türkiye "
+                        "saati (UTC+3). 0 = UTC midnight.")
     grp = p.add_mutually_exclusive_group()
     grp.add_argument("--apply", action="store_true",
                      help="actually write the file (default is dry-run)")
@@ -142,6 +152,10 @@ def collect_changes(args: argparse.Namespace) -> Dict[str, str]:
         changes["EPOCH_LABEL"] = args.epoch_label.strip()
     if args.min_quote_volume is not None:
         changes["MIN_QUOTE_VOLUME_24H"] = _fmt_num(args.min_quote_volume)
+    if args.profit_lock_pct is not None:
+        changes["DAILY_PROFIT_LOCK_PCT"] = _fmt_num(args.profit_lock_pct)
+    if args.day_offset_hours is not None:
+        changes["DAY_BOUNDARY_OFFSET_HOURS"] = _fmt_num(args.day_offset_hours)
     return changes
 
 
@@ -183,6 +197,14 @@ def validate_changes(changes: Dict[str, str]) -> List[str]:
             errors.append(f"MIN_QUOTE_VOLUME_24H={v:,.0f} outside sane range "
                           "[1M, 1B] USDT — the liquidity floor exists for "
                           "fill quality, refusing")
+    if "DAILY_PROFIT_LOCK_PCT" in changes:
+        v = float(changes["DAILY_PROFIT_LOCK_PCT"])
+        if not (0 < v <= 100):
+            errors.append(f"DAILY_PROFIT_LOCK_PCT={v} out of range (0, 100]")
+    if "DAY_BOUNDARY_OFFSET_HOURS" in changes:
+        v = float(changes["DAY_BOUNDARY_OFFSET_HOURS"])
+        if not (-12 <= v <= 14):
+            errors.append(f"DAY_BOUNDARY_OFFSET_HOURS={v} out of range [-12, 14]")
     return errors
 
 
