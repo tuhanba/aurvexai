@@ -32,11 +32,13 @@ from .shadow import ShadowLearner, missed_reason_bucket, shadow_mode_label
 from .storage import Storage
 
 
-def _utc_day_start_ms() -> int:
-    ts = now_ms() / 1000.0
-    return int(_dt.datetime.fromtimestamp(ts, _dt.timezone.utc)
-               .replace(hour=0, minute=0, second=0, microsecond=0)
-               .timestamp() * 1000)
+def _utc_day_start_ms(offset_hours: float = 0.0) -> int:
+    """Logical day start in UTC ms (see engine._utc_day_start_ms). Shared
+    day-boundary offset so the governor report matches the engine's daily
+    window exactly."""
+    ms = int(now_ms())
+    off = int(round(offset_hours * 3_600_000))
+    return ((ms + off) // 86_400_000) * 86_400_000 - off
 
 
 def _engine_health(db: Storage, cfg: Config) -> Dict[str, Any]:
@@ -65,7 +67,8 @@ def _risk_and_margin(db: Storage, cfg: Config) -> Dict[str, Any]:
          else t.position_size * t.remaining_fraction / (t.leverage or 1))
         for t in opens)
     open_risk = sum(t.max_loss * t.remaining_fraction for t in opens)
-    daily_pnl = db.daily_realized_pnl(_utc_day_start_ms(), mode=cfg.mode)
+    daily_pnl = db.daily_realized_pnl(
+        _utc_day_start_ms(cfg.day_boundary_offset_hours), mode=cfg.mode)
     daily_budget = balance * (cfg.max_daily_loss_pct / 100.0)
     daily_used_pct = (round(max(0.0, -daily_pnl) / daily_budget * 100.0, 2)
                       if daily_budget > 0 else 0.0)

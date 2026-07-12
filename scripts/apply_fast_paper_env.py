@@ -70,6 +70,12 @@ BLOCK = {
     "MAX_LEVERAGE": "10",
     "UNIVERSE_SIZE": "17",
     "UNIVERSE_INCLUDE": U17,
+    "MIN_QUOTE_VOLUME_24H": "10000000",     # 10M — pinned coins clear it in quiet markets
+    # Owner decision 2026-07-11: stop opening NEW trades once +4% banked today
+    # (10% was too hard to reach), and roll the daily window at 00:00 Türkiye
+    # saati (UTC+3) so the lock releases / trading resumes at local midnight.
+    "DAILY_PROFIT_LOCK_PCT": "4",
+    "DAY_BOUNDARY_OFFSET_HOURS": "3",
     "STALE_ENTRY_GUARD_BARS": "3",
     "KLINE_CACHE_ENABLED": "true",
     "UNIVERSE_REFRESH_SEC": "600",

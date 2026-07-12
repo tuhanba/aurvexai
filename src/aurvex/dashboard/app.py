@@ -41,6 +41,14 @@ from ..storage import Storage
 _missed_reason_bucket = missed_reason_bucket
 
 
+def _day_start_ms(cfg) -> int:
+    """Logical day start in UTC ms, honouring DAY_BOUNDARY_OFFSET_HOURS so the
+    dashboard's daily PnL / kill-switch / profit-lock displays reset on the
+    same boundary as the engine (e.g. 00:00 Türkiye saati)."""
+    off = int(round(getattr(cfg, "day_boundary_offset_hours", 0.0) * 3_600_000))
+    return ((now_ms() + off) // 86_400_000) * 86_400_000 - off
+
+
 def _trade_dict(t, balance: float = 0.0,
                 marks: Dict[str, float] | None = None) -> Dict[str, Any]:
     """Serialize a Trade to a dict, including the six distinct leverage-concept numbers.
@@ -290,11 +298,7 @@ def create_app(cfg=None) -> Flask:
         # Daily PnL for kill-switch display.
         _now = now_ms()
         _ts = _now / 1000.0
-        _day_start = int(
-            _dt.datetime.fromtimestamp(_ts, _dt.timezone.utc)
-            .replace(hour=0, minute=0, second=0, microsecond=0)
-            .timestamp() * 1000
-        )
+        _day_start = _day_start_ms(cfg)
         daily_pnl = db.daily_realized_pnl(_day_start, mode=cfg.mode)
 
         # Task 4: the four independent status truths (never folded into one
@@ -336,6 +340,7 @@ def create_app(cfg=None) -> Flask:
             # config supplies the static knobs when the heartbeat is missing).
             "daily_profit_lock_enabled": cfg.daily_profit_lock_enabled,
             "daily_profit_lock_pct": cfg.daily_profit_lock_pct,
+            "day_boundary_offset_hours": cfg.day_boundary_offset_hours,
             "daily_profit_lock_active": hb.get("daily_profit_lock_active", False),
             "daily_profit_target_usdt": hb.get(
                 "daily_profit_target_usdt",
@@ -532,11 +537,7 @@ def create_app(cfg=None) -> Flask:
         # 200 USDT / 10% aggressive epoch (budget = 20 USDT).
         import datetime as _dt
         _ts = now_ms() / 1000.0
-        _day_start = int(
-            _dt.datetime.fromtimestamp(_ts, _dt.timezone.utc)
-            .replace(hour=0, minute=0, second=0, microsecond=0)
-            .timestamp() * 1000
-        )
+        _day_start = _day_start_ms(cfg)
         daily_pnl = db.daily_realized_pnl(_day_start, mode=cfg.mode)
         daily_loss_budget = balance * (cfg.max_daily_loss_pct / 100.0)
         daily_loss_used_pct = (
@@ -815,10 +816,7 @@ def create_app(cfg=None) -> Flask:
         balance = db.get_balance()
         import datetime as _dt
         _ts = now_ms() / 1000.0
-        _day_start = int(
-            _dt.datetime.fromtimestamp(_ts, _dt.timezone.utc)
-            .replace(hour=0, minute=0, second=0, microsecond=0)
-            .timestamp() * 1000)
+        _day_start = _day_start_ms(cfg)
         daily_pnl = db.daily_realized_pnl(_day_start, mode=cfg.mode)
         daily_budget = balance * (cfg.max_daily_loss_pct / 100.0)
         daily_used_pct = (round(max(0.0, -daily_pnl) / daily_budget * 100.0, 2)
@@ -932,10 +930,7 @@ def create_app(cfg=None) -> Flask:
 
         import datetime as _dt
         _ts = now_ms() / 1000.0
-        _day_start = int(
-            _dt.datetime.fromtimestamp(_ts, _dt.timezone.utc)
-            .replace(hour=0, minute=0, second=0, microsecond=0)
-            .timestamp() * 1000)
+        _day_start = _day_start_ms(cfg)
         balance = db.get_balance()
         daily_pnl = db.daily_realized_pnl(_day_start, mode=cfg.mode)
         daily_budget = balance * (cfg.max_daily_loss_pct / 100.0)
