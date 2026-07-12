@@ -32,6 +32,10 @@ class PortfolioView:
     daily_realized_pnl: float
     now_ms: int
     open_margin: float = 0.0   # sum of initial margin committed to open trades
+    # Set by the engine when DAILY_PROFIT_FLATTEN is on and today's mark-to-
+    # market profit target has been hit (positions already flattened). Blocks
+    # new entries for the rest of the logical day. Ignored in realized-only mode.
+    daily_profit_locked: bool = False
 
 
 @dataclass
@@ -162,6 +166,17 @@ def f_daily_profit_lock(cfg, signal, snap, pf) -> FilterResult:
     start each cycle.
     """
     if not cfg.daily_profit_lock_enabled:
+        return FilterResult(True)
+    # Flatten mode: the engine already measured TOTAL (realized+unrealized)
+    # intraday equity against the day-open baseline and, on reaching the
+    # target, flattened + set this flag. The gate just honours it — so the
+    # basis here matches exactly what closed the positions (no drift from
+    # using realized-only after the balance grew).
+    if cfg.daily_profit_flatten:
+        if pf.daily_profit_locked:
+            return FilterResult(False, "daily_profit_lock",
+                                "daily profit target hit — flattened, "
+                                "new entries paused until day rollover")
         return FilterResult(True)
     target = pf.balance * (cfg.daily_profit_lock_pct / 100.0)
     if target > 0 and pf.daily_realized_pnl >= target:

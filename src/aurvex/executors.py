@@ -558,3 +558,20 @@ class EngineLiveExecutor(LiveExecutor):
         if trade is None:
             _log.warning("live open refused [%s]: %s", res.stage, res.reason)
         return trade
+
+    def flatten_live(self, trade) -> None:
+        """Reduce-only market-close the real exchange position for ``trade``
+        (daily profit target). No-op unless the order adapter is armed; does
+        NOT trip the breaker (that is emergency_stop's job). The engine has
+        already booked the close internally via force_close — this only makes
+        the exchange match. Best-effort: never raises into the cycle."""
+        adapter = self.order_adapter
+        if adapter is None:
+            return
+        try:
+            armed, _why = adapter.engaged()
+            if not armed:
+                return
+            adapter.emergency_flatten(trade.symbol)
+        except Exception as exc:            # pragma: no cover - defensive
+            _log.warning("live flatten failed %s: %s", trade.symbol, exc)

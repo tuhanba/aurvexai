@@ -340,6 +340,7 @@ def create_app(cfg=None) -> Flask:
             # config supplies the static knobs when the heartbeat is missing).
             "daily_profit_lock_enabled": cfg.daily_profit_lock_enabled,
             "daily_profit_lock_pct": cfg.daily_profit_lock_pct,
+            "daily_profit_flatten": cfg.daily_profit_flatten,
             "day_boundary_offset_hours": cfg.day_boundary_offset_hours,
             "daily_profit_lock_active": hb.get("daily_profit_lock_active", False),
             "daily_profit_target_usdt": hb.get(

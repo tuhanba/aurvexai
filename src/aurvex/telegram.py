@@ -291,6 +291,19 @@ class BaseNotifier:
                 f"–{r['target_hi']}")
         self.send("\n".join(lines))
 
+    def daily_profit_target_hit(self, gain: float, target: float,
+                                symbols, balance: float) -> None:
+        """Mark-to-market daily profit target reached — positions FLATTENED
+        and entries locked for the day (critical: pierces quiet hours)."""
+        syms = ", ".join(symbols) if symbols else "—"
+        self.send(
+            f"🎯 <b>Günlük kâr hedefi (+{target:.2f} USDT) doldu</b>"
+            f"\nanlık kâr +{gain:.2f} USDT · TÜM pozisyonlar kapatıldı"
+            f"\nkapatılanlar: {_esc(syms)} · bakiye {balance:.2f} USDT"
+            f"\nyeni giriş yok — gün sonuna (00:00 TR) kadar kilitli",
+            critical=True,
+        )
+
     def daily_profit_lock_activated(self, daily_pnl: float, target: float) -> None:
         """Task 5: fired once per activation (edge-triggered in the engine)."""
         self.send(

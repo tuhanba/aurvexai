@@ -347,7 +347,18 @@ class Engine:
                 _utc_day_start_ms(offset_hours=self.cfg.day_boundary_offset_hours),
                 mode=self.cfg.mode),
             now_ms=now_ms(),
+            daily_profit_locked=self._daily_profit_locked_today(),
         )
+
+    def _daily_profit_locked_today(self) -> bool:
+        """True only in flatten mode after today's profit target fired (the
+        engine set profit_target_hit_day). Blocks new entries until the day
+        rolls over; the flag naturally lapses when the ordinal changes."""
+        if not (self.cfg.daily_profit_lock_enabled
+                and self.cfg.daily_profit_flatten):
+            return False
+        day = _day_ordinal(offset_hours=self.cfg.day_boundary_offset_hours)
+        return self.db.get_meta("profit_target_hit_day") == day
 
     @staticmethod
     def _trade_margin(t) -> float:
@@ -775,13 +786,18 @@ class Engine:
         # Daily profit lock state (Task 1). Computation only — the actual gate
         # lives in filters.f_daily_profit_lock; this just surfaces it.
         profit_target = bal * (self.cfg.daily_profit_lock_pct / 100.0)
-        profit_lock_active = bool(
-            self.cfg.daily_profit_lock_enabled and profit_target > 0
-            and daily_pnl >= profit_target)
-        # Task 5: edge-triggered notification, once per activation (day-keyed,
-        # mirroring the kill-switch dedup above).
-        self._maybe_notify_daily_profit_lock(profit_lock_active, daily_pnl,
-                                             profit_target)
+        if self.cfg.daily_profit_flatten:
+            # Flatten mode: the mark-to-market guard owns activation + its own
+            # (once-per-day) notification; the heartbeat just mirrors the flag.
+            profit_lock_active = self._daily_profit_locked_today()
+        else:
+            profit_lock_active = bool(
+                self.cfg.daily_profit_lock_enabled and profit_target > 0
+                and daily_pnl >= profit_target)
+            # Task 5: edge-triggered notification, once per activation
+            # (day-keyed, mirroring the kill-switch dedup above).
+            self._maybe_notify_daily_profit_lock(profit_lock_active, daily_pnl,
+                                                 profit_target)
 
         # Heartbeat (enriched — Block F).
         self.db.set_heartbeat("engine", {
@@ -950,6 +966,87 @@ class Engine:
                 self.db.set_meta("marks", {"ts": now_ms(), "prices": marks})
             except Exception as exc:
                 log.debug("marks persist error: %s", exc)
+        # Daily profit TARGET with flatten (mark-to-market). Runs AFTER the
+        # normal exit management + fresh marks, so it sees this cycle's uPnL.
+        self._daily_profit_target_guard(snapshots, marks)
+
+    def _profit_day_baseline(self, equity_now: float, day: int) -> float:
+        """Day-open equity baseline for the mark-to-market profit target.
+
+        Persisted in DB meta (survives restarts). Reset to the current equity
+        whenever the logical day (offset-aware ordinal) changes, so 'today's
+        gain' excludes profit carried in from prior days' still-open trades."""
+        meta = self.db.get_meta("profit_day")
+        if not isinstance(meta, dict) or meta.get("day") != day:
+            self.db.set_meta("profit_day",
+                             {"day": day, "equity_open": round(equity_now, 6)})
+            return equity_now
+        return float(meta.get("equity_open", equity_now))
+
+    def _daily_profit_target_guard(self, snapshots, marks) -> None:
+        """When DAILY_PROFIT_FLATTEN is on: if today's TOTAL intraday equity
+        gain (realized today + current unrealized) reaches
+        daily_profit_lock_pct %% of the day-open equity, close every open
+        position at market NOW (reason PROFIT_TARGET) and lock new entries
+        for the rest of the logical day. Parity-safe: the close goes through
+        executor.force_close (paper + live); armed live also flattens the
+        exchange position reduce-only."""
+        cfg = self.cfg
+        if not (cfg.daily_profit_lock_enabled and cfg.daily_profit_flatten
+                and cfg.daily_profit_lock_pct > 0):
+            return
+        try:
+            day = _day_ordinal(offset_hours=cfg.day_boundary_offset_hours)
+            opens = self.db.get_open_trades(mode=cfg.mode)
+            cash = self.db.get_balance()
+            unreal = 0.0
+            for t in opens:
+                mark = marks.get(t.symbol)
+                if mark and t.entry:
+                    sign = 1 if t.side == LONG else -1
+                    qty = t.position_size * t.remaining_fraction / t.entry
+                    unreal += qty * (mark - t.entry) * sign
+            equity = cash + unreal
+            base = self._profit_day_baseline(equity, day)
+            target = base * (cfg.daily_profit_lock_pct / 100.0)
+            already = self.db.get_meta("profit_target_hit_day")
+            if already == day:
+                return                      # already flattened + locked today
+            if target <= 0 or (equity - base) < target:
+                return
+            # --- target hit: flatten everything now ---
+            closed_syms = []
+            for t in opens:
+                px = marks.get(t.symbol) or t.entry
+                try:
+                    ev = self.executor.force_close(t, float(px),
+                                                   reason="PROFIT_TARGET")
+                    self.journal.record_fills(t, [ev])
+                    # Armed live: flatten the real exchange position too.
+                    fl = getattr(self.executor, "flatten_live", None)
+                    if callable(fl):
+                        fl(t)
+                    self.notifier.trade_closed(t)
+                    self.coins.on_trade_closed(
+                        t.symbol, win=t.realized_pnl >= 0,
+                        r_multiple=(t.realized_pnl_pct / 100.0
+                                    if t.realized_pnl_pct else 0.0))
+                    closed_syms.append(t.symbol.split("/")[0])
+                except Exception as exc:
+                    log.warning("profit-target flatten failed %s: %s",
+                                t.symbol, exc)
+            self.db.set_meta("profit_target_hit_day", day)
+            try:
+                self.notifier.daily_profit_target_hit(
+                    round(equity - base, 2), round(target, 2), closed_syms,
+                    round(self.db.get_balance(), 2))
+            except Exception as exc:
+                log.debug("profit-target notify error: %s", exc)
+            log.warning("DAILY PROFIT TARGET hit (+%.2f >= +%.2f) — flattened "
+                        "%d position(s), entries locked for the day",
+                        equity - base, target, len(closed_syms))
+        except Exception as exc:
+            log.debug("daily profit target guard error: %s", exc)
 
     def _maybe_daily_summary(self) -> None:
         today = _day_ordinal(offset_hours=self.cfg.day_boundary_offset_hours)
