@@ -78,6 +78,11 @@ BLOCK = {
     # Türkiye saati (UTC+3), when the lock releases and trading resumes.
     "DAILY_PROFIT_LOCK_PCT": "4",
     "DAILY_PROFIT_FLATTEN": "true",
+    # Adaptive target by MEASURED trend regime (BTC 4h ADX): 4% floor in chop,
+    # up to 10% ceiling in a strong trend — let winners run on hype days, bank
+    # fast in chop. Never changes per-trade risk; only when we take the day.
+    "DAILY_PROFIT_ADAPTIVE": "true",
+    "DAILY_PROFIT_PCT_CEILING": "10",
     "DAY_BOUNDARY_OFFSET_HOURS": "3",
     "STALE_ENTRY_GUARD_BARS": "3",
     "KLINE_CACHE_ENABLED": "true",
