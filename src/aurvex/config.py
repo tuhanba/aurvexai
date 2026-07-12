@@ -249,6 +249,28 @@ class Config:
     # exchange position is flattened reduce-only.
     daily_profit_flatten: bool = field(
         default_factory=lambda: _bool("DAILY_PROFIT_FLATTEN", False))
+    # Adaptive daily profit target by MEASURED market-trend regime. When true,
+    # the flatten target scales between daily_profit_lock_pct (FLOOR, quiet /
+    # choppy market) and daily_profit_pct_ceiling (CEILING, strong trend) by a
+    # regime score in [0,1] read from the market leader's trend strength
+    # (regime_symbol ADX on regime_tf, mapped from [regime_adx_lo, regime_adx_hi]).
+    # This is a measure, not a prediction: high ADX = strong trend now, so let
+    # winners run further before banking the day; low ADX = chop, bank quickly.
+    # It only moves WHEN we take profit — it never changes per-trade risk. Off
+    # by default (target stays flat at daily_profit_lock_pct).
+    daily_profit_adaptive: bool = field(
+        default_factory=lambda: _bool("DAILY_PROFIT_ADAPTIVE", False))
+    daily_profit_pct_ceiling: float = field(
+        default_factory=lambda: _float("DAILY_PROFIT_PCT_CEILING", 10.0))
+    regime_symbol: str = field(
+        default_factory=lambda: _str("REGIME_SYMBOL", "BTC/USDT:USDT"))
+    regime_tf: str = field(default_factory=lambda: _str("REGIME_TF", "4h"))
+    regime_adx_lo: float = field(
+        default_factory=lambda: _float("REGIME_ADX_LO", 20.0))
+    regime_adx_hi: float = field(
+        default_factory=lambda: _float("REGIME_ADX_HI", 40.0))
+    regime_refresh_sec: float = field(
+        default_factory=lambda: _float("REGIME_REFRESH_SEC", 900.0))
     # Day-boundary offset in hours from UTC for ALL daily counters (kill
     # switch, profit lock, daily PnL window, daily-summary/report dedup).
     # 0 = UTC midnight (default, unchanged). 3 = Türkiye saati (UTC+3): the

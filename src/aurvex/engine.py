@@ -33,6 +33,7 @@ from .decision import DecisionEngine
 from .executors import PaperExecutor
 from .filters import PortfolioView
 from .funnel import FunnelLogger
+from .indicators import adx as _regime_adx
 from .journal import TradeJournal
 from .market_data import build_provider
 from .models import (ALLOW, LONG, OPEN, REJECT, Decision, MarketSnapshot,
@@ -127,6 +128,7 @@ class Engine:
         self._loss_alert_day: int = -1
         self._loss_alerts_fired: set = set()
         self._weekly_report_sent: tuple = ()
+        self._regime_cache: dict = {}
         self._kill_switch_fired_day: int = -1
         self._profit_lock_fired_day: int = -1
         self._last_error: str = ""
@@ -349,6 +351,48 @@ class Engine:
             now_ms=now_ms(),
             daily_profit_locked=self._daily_profit_locked_today(),
         )
+
+    def _market_regime(self) -> dict:
+        """MEASURED trend-strength regime of the market leader (default BTC 4h),
+        cached and refreshed at most every regime_refresh_sec. Returns
+        {ts, score, adx}: score in [0,1] maps ADX(14) from
+        [regime_adx_lo, regime_adx_hi] — 0 = chop, 1 = strong trend. Fail-soft:
+        any error keeps the last value (or score 0). Not a prediction."""
+        cfg = self.cfg
+        now = now_ms()
+        cache = self._regime_cache
+        if cache and (now - int(cache.get("ts", 0))) < cfg.regime_refresh_sec * 1000:
+            return cache
+        try:
+            snap = self.provider.get_snapshot(cfg.regime_symbol, [cfg.regime_tf])
+            bars = snap.closed_ltf(cfg.regime_tf) if snap else []
+            if len(bars) >= 30:
+                adx_val = _regime_adx([c.high for c in bars],
+                                      [c.low for c in bars],
+                                      [c.close for c in bars], 14)
+                if adx_val is not None:
+                    lo, hi = cfg.regime_adx_lo, cfg.regime_adx_hi
+                    score = max(0.0, min(1.0, (adx_val - lo) / max(hi - lo, 1e-9)))
+                    self._regime_cache = {"ts": now, "score": round(score, 3),
+                                          "adx": round(adx_val, 1)}
+                    return self._regime_cache
+        except Exception as exc:
+            log.debug("regime compute error: %s", exc)
+        # keep last good value; else a neutral (chop) reading
+        return cache or {"ts": now, "score": 0.0, "adx": None}
+
+    def _effective_profit_pct(self) -> float:
+        """Daily profit-target %%: flat daily_profit_lock_pct, or — when
+        DAILY_PROFIT_ADAPTIVE is on — scaled by the trend regime between that
+        FLOOR and daily_profit_pct_ceiling. Higher trend → higher target (let
+        winners run before the daily flatten)."""
+        cfg = self.cfg
+        floor = cfg.daily_profit_lock_pct
+        if not cfg.daily_profit_adaptive:
+            return floor
+        ceiling = max(floor, cfg.daily_profit_pct_ceiling)
+        score = float(self._market_regime().get("score", 0.0) or 0.0)
+        return floor + score * (ceiling - floor)
 
     def _daily_profit_locked_today(self) -> bool:
         """True only in flatten mode after today's profit target fired (the
@@ -784,8 +828,11 @@ class Engine:
                     log.debug("kill_switch notification error: %s", exc)
 
         # Daily profit lock state (Task 1). Computation only — the actual gate
-        # lives in filters.f_daily_profit_lock; this just surfaces it.
-        profit_target = bal * (self.cfg.daily_profit_lock_pct / 100.0)
+        # lives in filters.f_daily_profit_lock; this just surfaces it. In
+        # adaptive mode the target %% follows the measured trend regime.
+        effective_pct = self._effective_profit_pct()
+        regime = self._market_regime() if self.cfg.daily_profit_adaptive else {}
+        profit_target = bal * (effective_pct / 100.0)
         if self.cfg.daily_profit_flatten:
             # Flatten mode: the mark-to-market guard owns activation + its own
             # (once-per-day) notification; the heartbeat just mirrors the flag.
@@ -813,6 +860,9 @@ class Engine:
             "daily_profit_lock_active": profit_lock_active,
             "daily_profit_target_usdt": round(profit_target, 4),
             "daily_profit_room_usdt": round(max(0.0, profit_target - daily_pnl), 4),
+            "daily_profit_pct_effective": round(effective_pct, 3),
+            "regime_score": regime.get("score"),
+            "regime_adx": regime.get("adx"),
             "last_error": self._last_error,
         })
 
@@ -1008,7 +1058,7 @@ class Engine:
                     unreal += qty * (mark - t.entry) * sign
             equity = cash + unreal
             base = self._profit_day_baseline(equity, day)
-            target = base * (cfg.daily_profit_lock_pct / 100.0)
+            target = base * (self._effective_profit_pct() / 100.0)
             already = self.db.get_meta("profit_target_hit_day")
             if already == day:
                 return                      # already flattened + locked today

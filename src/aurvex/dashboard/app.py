@@ -341,6 +341,11 @@ def create_app(cfg=None) -> Flask:
             "daily_profit_lock_enabled": cfg.daily_profit_lock_enabled,
             "daily_profit_lock_pct": cfg.daily_profit_lock_pct,
             "daily_profit_flatten": cfg.daily_profit_flatten,
+            "daily_profit_adaptive": cfg.daily_profit_adaptive,
+            "daily_profit_pct_ceiling": cfg.daily_profit_pct_ceiling,
+            "daily_profit_pct_effective": hb.get("daily_profit_pct_effective"),
+            "regime_score": hb.get("regime_score"),
+            "regime_adx": hb.get("regime_adx"),
             "day_boundary_offset_hours": cfg.day_boundary_offset_hours,
             "daily_profit_lock_active": hb.get("daily_profit_lock_active", False),
             "daily_profit_target_usdt": hb.get(
