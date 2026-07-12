@@ -296,8 +296,6 @@ def create_app(cfg=None) -> Flask:
                        if isinstance(epoch_meta, dict) else "unknown")
 
         # Daily PnL for kill-switch display.
-        _now = now_ms()
-        _ts = _now / 1000.0
         _day_start = _day_start_ms(cfg)
         daily_pnl = db.daily_realized_pnl(_day_start, mode=cfg.mode)
 
@@ -542,7 +540,6 @@ def create_app(cfg=None) -> Flask:
         # switch budget is fully spent. This is the headroom display for the
         # 200 USDT / 10% aggressive epoch (budget = 20 USDT).
         import datetime as _dt
-        _ts = now_ms() / 1000.0
         _day_start = _day_start_ms(cfg)
         daily_pnl = db.daily_realized_pnl(_day_start, mode=cfg.mode)
         daily_loss_budget = balance * (cfg.max_daily_loss_pct / 100.0)
@@ -821,7 +818,6 @@ def create_app(cfg=None) -> Flask:
         opens = db.get_open_trades(mode=cfg.mode)
         balance = db.get_balance()
         import datetime as _dt
-        _ts = now_ms() / 1000.0
         _day_start = _day_start_ms(cfg)
         daily_pnl = db.daily_realized_pnl(_day_start, mode=cfg.mode)
         daily_budget = balance * (cfg.max_daily_loss_pct / 100.0)
@@ -935,7 +931,6 @@ def create_app(cfg=None) -> Flask:
         metrics = compute_metrics(db.get_closed_trades(limit=5000, mode=cfg.mode))
 
         import datetime as _dt
-        _ts = now_ms() / 1000.0
         _day_start = _day_start_ms(cfg)
         balance = db.get_balance()
         daily_pnl = db.daily_realized_pnl(_day_start, mode=cfg.mode)

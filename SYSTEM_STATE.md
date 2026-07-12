@@ -129,6 +129,33 @@ added as a fifth leg on its validated majors universe. Five legs, one
 shared account; the slot pool + global ranking + exposure caps are the
 correlation containment.
 
+**2026-07-11/12 (owner decisions — daily profit protection + liquidity):**
+- `MIN_QUOTE_VOLUME_24H=10000000` — the 50M default was rejecting pinned
+  coins (e.g. DOT at 36M) in quiet markets; 10M still fills cleanly.
+- **Daily profit TAKE (mark-to-market flatten):** the moment today's TOTAL
+  intraday equity gain (realized + unrealized, vs a day-open baseline that
+  resets at the local boundary) hits the target, the engine CLOSES all
+  positions at market (reason `PROFIT_TARGET`) and locks new entries for the
+  day — it does NOT wait for trades to close. `DAILY_PROFIT_FLATTEN=true`.
+- **Adaptive target by MEASURED trend regime:** the target scales from
+  `DAILY_PROFIT_LOCK_PCT` (4%, floor/chop) up to `DAILY_PROFIT_PCT_CEILING`
+  (10%, strong trend) by BTC-4h ADX(14) mapped [20,40]→[0,1].
+  `DAILY_PROFIT_ADAPTIVE=true`. A measure, not a prediction; it only moves
+  WHEN we bank the day and never changes per-trade risk.
+- **Day boundary = 00:00 Türkiye saati:** `DAY_BOUNDARY_OFFSET_HOURS=3`
+  shifts EVERY daily counter (kill switch, profit lock/target, daily-PnL
+  window, once-per-day dedups) off UTC; the lock releases and trading
+  resumes at local midnight (no restart needed).
+- Parity note: the flatten routes through the shared `executor.force_close`
+  (identical in paper/live); armed live also flattens the exchange position
+  reduce-only. `decide()` and the risk model are untouched.
+- Also this session: live per-trade PnL + equity curve + live-readiness /
+  risk-budget / PnL-calendar / R-histogram / strategy-curve panels on the
+  dashboard; Telegram hourly open-position digest, stop-approach + daily
+  loss-budget alerts, weekly report, quiet hours, `/pnl`; and a CRITICAL
+  engine fix (streaming TIME/CHANNEL/TKCROSS exits now persist across
+  cycles — they previously could never fire in the running engine).
+
 ```
 RISK_PROFILE=aggressive_paper
 INITIAL_PAPER_BALANCE=200
@@ -143,6 +170,12 @@ MAX_PORTFOLIO_EXPOSURE_PCT=200
 MAX_LEVERAGE=10
 UNIVERSE_SIZE=17
 UNIVERSE_INCLUDE=BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT,ADA/USDT:USDT,AVAX/USDT:USDT,LINK/USDT:USDT,TON/USDT:USDT,TRX/USDT:USDT,DOT/USDT:USDT,NEAR/USDT:USDT,ARB/USDT:USDT,SUI/USDT:USDT,ICP/USDT:USDT,ATOM/USDT:USDT
+MIN_QUOTE_VOLUME_24H=10000000
+DAILY_PROFIT_LOCK_PCT=4
+DAILY_PROFIT_FLATTEN=true
+DAILY_PROFIT_ADAPTIVE=true
+DAILY_PROFIT_PCT_CEILING=10
+DAY_BOUNDARY_OFFSET_HOURS=3
 STALE_ENTRY_GUARD_BARS=3
 KLINE_CACHE_ENABLED=true
 UNIVERSE_REFRESH_SEC=600
@@ -150,6 +183,10 @@ AX_MODE=paper
 LIVE_ENABLED=false
 LIVE_SEND_ORDERS=false
 ```
+
+The exact block above is written by `scripts/apply_fast_paper_env.py --apply`
+(dry-run default, timestamped backup, never touches secrets, can only ever
+write the live flags disarmed).
 
 Three legs on ONE account (2026-07-08 wave): donchian 4h on all 17;
 squeeze 1h pinned to its validated 12 via `u=` (it measured NEGATIVE on the
