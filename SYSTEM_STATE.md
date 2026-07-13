@@ -98,6 +98,11 @@ infra, which this system does not have. **Scalp is closed.**
   Exists, tested, **disarmed** behind the five-gate lock:
   `LIVE_ENABLED=true` + `LIVE_HUMAN_CONFIRM` token + Telegram
   `/livemode confirm <token>` + restart + `LIVE_SEND_ORDERS=true` + API keys.
+  Command-driven arming (owner-only, no hand-editing): `scripts/arm_live.py`
+  flips the `.env` gates + captures secrets via `getpass` (dry-run default,
+  typed-phrase confirm, gitignored backup). It deliberately NEVER writes
+  `AX_MODE=live` — gate 3 stays the independent Telegram `/livemode confirm`.
+  Rollback: `python3 scripts/arm_live.py --disarm --apply`.
 - **Not built:** carry executor (research-validated, engine port pending —
   the only meaningful "new strategy" work left).
 
