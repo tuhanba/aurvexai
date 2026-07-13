@@ -66,7 +66,12 @@ BLOCK = {
     "LTF_LIMIT": "525",
     "RISK_PCT": "1.5",
     "MAX_OPEN_TRADES": "6",
-    "MAX_PORTFOLIO_EXPOSURE_PCT": "200",
+    # Owner decision 2026-07-12: 300% (was 200%) so the notional cap stops
+    # binding at ~4-5 positions and all 6 slots can fill -> more coins open at
+    # once. TRADE-OFF: higher total notional exposure = larger correlated
+    # drawdown if every long moves together; ~6 positions all-stopping is
+    # ~9% (near the 10% daily kill switch). Per-trade risk is unchanged.
+    "MAX_PORTFOLIO_EXPOSURE_PCT": "300",
     "MAX_LEVERAGE": "10",
     "UNIVERSE_SIZE": "17",
     "UNIVERSE_INCLUDE": U17,
