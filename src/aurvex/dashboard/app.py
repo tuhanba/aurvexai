@@ -109,6 +109,7 @@ def _trade_dict(t, balance: float = 0.0,
         "risk_multiplier": round(t.metadata.get("risk_multiplier", 1.0), 3),
         "m_shadow": round(t.metadata.get("m_shadow", 1.0), 3),
         "m_score": round(t.metadata.get("m_score", 1.0), 3),
+        "m_regime": round(t.metadata.get("m_regime", 1.0), 3),
         # LABEL-ONLY quality grade (blocks nothing; shown for correlation).
         "quality_grade": t.metadata.get("quality_grade", ""),
         "quality_score": round(t.metadata.get("quality_score", 0.0) or 0.0, 2),

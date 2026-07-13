@@ -88,6 +88,11 @@ BLOCK = {
     # fast in chop. Never changes per-trade risk; only when we take the day.
     "DAILY_PROFIT_ADAPTIVE": "true",
     "DAILY_PROFIT_PCT_CEILING": "10",
+    # Regime + edge weighted risk sizing (holdout-validated: H2 book Sharpe
+    # 1.35 -> 1.83). Tilts per-entry risk UP in a strong BTC-4h trend and on
+    # the higher-Sharpe legs (ichimoku, squeeze@4h), DOWN in chop and on the
+    # weak leg (squeeze@1h), within the risk band. Sizing only, never a gate.
+    "REGIME_EDGE_WEIGHT_ENABLED": "true",
     "DAY_BOUNDARY_OFFSET_HOURS": "3",
     "STALE_ENTRY_GUARD_BARS": "3",
     "KLINE_CACHE_ENABLED": "true",

@@ -157,6 +157,20 @@ correlation containment.
   ~6 positions all-stopping ≈ 9% (near the 10% daily kill switch). Per-trade
   risk unchanged. Safer alternative to widen diversity WITHOUT more exposure:
   `RISK_PCT=1.0` (smaller each position, more fit under a 200% cap).
+- **Regime + edge weighted risk sizing (2026-07-13, holdout-validated):**
+  `PORTFOLIO_FRONTIER_REPORT.md` measured the book at portfolio level — legs
+  genuinely diversified (avg corr +0.05), 1.5% ≈ half-Kelly (correctly sized,
+  do NOT raise), and a real regime lever (trend days +4.11 R/day @Sharpe 1.70
+  vs chop +3.16 @1.07). Out-of-sample check (`regime_tilt_validate.py`,
+  H1/H2): flat H2 Sharpe 1.35 → regime+edge 1.83 (+35%), regime lift
+  strongest in H2 (not overfit). Deployed `REGIME_EDGE_WEIGHT_ENABLED=true`:
+  a per-entry risk MULTIPLIER = (BTC-4h trend regime factor) × (per-leg edge
+  weight from validated Sharpe), composed with any shadow/score modulation,
+  clamped [0.5,1.5] then to the risk band. Sizing only — never gates a trade;
+  MEASURED-direction only; off by default in code. Not raising per-trade risk
+  (Kelly says 1.5% is right); it REALLOCATES within the band toward the best
+  regime/legs. Carry remains the un-built uncorrelated edge (frontier proxy
+  unreliable; needs its real harness).
 - Also this session: live per-trade PnL + equity curve + live-readiness /
   risk-budget / PnL-calendar / R-histogram / strategy-curve panels on the
   dashboard; Telegram hourly open-position digest, stop-approach + daily
@@ -183,6 +197,7 @@ DAILY_PROFIT_LOCK_PCT=4
 DAILY_PROFIT_FLATTEN=true
 DAILY_PROFIT_ADAPTIVE=true
 DAILY_PROFIT_PCT_CEILING=10
+REGIME_EDGE_WEIGHT_ENABLED=true
 DAY_BOUNDARY_OFFSET_HOURS=3
 STALE_ENTRY_GUARD_BARS=3
 KLINE_CACHE_ENABLED=true

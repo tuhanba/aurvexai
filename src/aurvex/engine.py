@@ -51,6 +51,17 @@ log = logging.getLogger("aurvex.engine")
 
 _DAY_MS = 86_400_000
 
+# Per-leg validated daily-Sharpe (PORTFOLIO_FRONTIER_REPORT.md, 6y, 12 coins)
+# — the edge-weight prior for regime+edge risk sizing. Keyed by the deployed
+# setup_type (the disambiguated leg key). Unknown setups weight 1.0.
+_LEG_EDGE_SHARPE = {
+    "ichimoku_trend": 2.17,
+    "squeeze_breakout@4h": 1.95,
+    "donchian_trend": 1.06,
+    "band_walk": 0.94,
+    "squeeze_breakout": 0.62,      # the 1h leg
+}
+
 
 def _utc_day_start_ms(ts_ms: Optional[int] = None,
                       offset_hours: float = 0.0) -> int:
@@ -438,21 +449,48 @@ class Engine:
         except Exception as exc:
             log.debug("preflight notify error: %s", exc)
 
+    def _edge_weight(self, setup_type: str) -> float:
+        """Per-leg risk weight from the validated 6y daily-Sharpe
+        (PORTFOLIO_FRONTIER_REPORT.md). Linear in [1-strength, 1+strength]
+        between the weakest and strongest leg. 1.0 for unknown setups."""
+        s = _LEG_EDGE_SHARPE.get(setup_type)
+        if s is None:
+            return 1.0
+        vals = _LEG_EDGE_SHARPE.values()
+        lo, hi = min(vals), max(vals)
+        z = (s - lo) / (hi - lo) if hi > lo else 0.5
+        return 1.0 + self.cfg.edge_weight_strength * (2 * z - 1)
+
+    def _regime_edge_multiplier(self, setup_type: str) -> float:
+        """(trend regime factor) × (per-leg edge weight). Off → 1.0.
+        Trend (high BTC-ADX) and high-Sharpe legs tilt risk up; chop and the
+        weak leg tilt down. Holdout-validated; sizing only, never a gate."""
+        if not self.cfg.regime_edge_weight_enabled:
+            return 1.0
+        ew = self._edge_weight(setup_type)
+        score = self._market_regime().get("score")
+        score = 0.5 if score is None else float(score)   # 0.0 is a valid chop
+        regime_factor = 1.0 + self.cfg.regime_tilt * (2 * score - 1)
+        return ew * regime_factor
+
     def _risk_modulation(self, signal, buckets):
         """Support-side risk multiplier for a candidate (Buğra primary gate).
 
-        Returns (risk_multiplier, m_shadow, m_score). Neutral (1.0, 1.0, 1.0)
-        unless risk_modulation_enabled is True. Direction follows MEASURED edge:
-        shadow avg_r (per-setup, N≥100 gated) × score-bucket avg_r (N≥100 gated).
-        Combined multiplier is clamped to [0.5, 1.5]; RiskManager re-clamps too.
+        Returns (risk_multiplier, m_shadow, m_score, m_regime). Each factor is
+        1.0 unless its own flag is on:
+          * shadow×score modulation — risk_modulation_enabled (MEASURED edge)
+          * regime+edge weighting    — regime_edge_weight_enabled (holdout-valid)
+        Combined multiplier is clamped to [0.5, 1.5]; RiskManager re-clamps to
+        the risk band. It only SIZES — never gates a trade.
         """
-        if not self.cfg.risk_modulation_enabled:
-            return 1.0, 1.0, 1.0
-        from .risk import score_risk_multiplier
-        m_shadow = self.shadow.risk_multiplier(signal.setup_type)
-        m_score = score_risk_multiplier(self.cfg, signal, buckets)
-        rm = max(0.5, min(1.5, m_shadow * m_score))
-        return rm, m_shadow, m_score
+        m_shadow = m_score = 1.0
+        if self.cfg.risk_modulation_enabled:
+            from .risk import score_risk_multiplier
+            m_shadow = self.shadow.risk_multiplier(signal.setup_type)
+            m_score = score_risk_multiplier(self.cfg, signal, buckets)
+        m_regime = self._regime_edge_multiplier(signal.setup_type)
+        rm = max(0.5, min(1.5, m_shadow * m_score * m_regime))
+        return rm, m_shadow, m_score, m_regime
 
     def _attach_quality(self, d: Decision, signal, snap) -> None:
         """Attach the LABEL-ONLY quality grade to a formed Decision's metadata.
@@ -589,7 +627,8 @@ class Engine:
                 pf.open_symbols = list(live_open_symbols)
                 pf.open_notional = open_notional
                 pf.open_margin = open_margin
-                rm, m_shadow, m_score = self._risk_modulation(cand.signal, cycle_buckets)
+                rm, m_shadow, m_score, m_regime = self._risk_modulation(
+                    cand.signal, cycle_buckets)
                 d = self._decide(cand.signal, cand.snap, pf, risk_multiplier=rm)
                 # Slot-selection support layer: record why this candidate won
                 # (or lost) its slot race. Set before persistence so signal_events
@@ -598,6 +637,7 @@ class Engine:
                 d.rank_basis = cycle_rank_basis
                 d.metadata["m_shadow"] = m_shadow
                 d.metadata["m_score"] = m_score
+                d.metadata["m_regime"] = round(m_regime, 3)
                 # LABEL ONLY: attach quality grade (blocks nothing).
                 self._attach_quality(d, cand.signal, cand.snap)
                 self.db.insert_signal_event(d)
@@ -728,10 +768,12 @@ class Engine:
                 pf.open_symbols = list(live_open_symbols)
                 pf.open_notional = open_notional
                 pf.open_margin = open_margin
-                rm, m_shadow, m_score = self._risk_modulation(signal, fc_buckets)
+                rm, m_shadow, m_score, m_regime = self._risk_modulation(
+                    signal, fc_buckets)
                 d = self._decide(signal, snap, pf, risk_multiplier=rm)
                 d.metadata["m_shadow"] = m_shadow
                 d.metadata["m_score"] = m_score
+                d.metadata["m_regime"] = round(m_regime, 3)
                 # LABEL ONLY: attach quality grade (blocks nothing).
                 self._attach_quality(d, signal, snap)
                 self.db.insert_signal_event(d)
