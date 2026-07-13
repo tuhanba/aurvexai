@@ -271,6 +271,20 @@ class Config:
         default_factory=lambda: _float("REGIME_ADX_HI", 40.0))
     regime_refresh_sec: float = field(
         default_factory=lambda: _float("REGIME_REFRESH_SEC", 900.0))
+    # Regime + edge weighted risk sizing (PORTFOLIO_FRONTIER_REPORT.md, holdout
+    # -validated: H2 book Sharpe 1.35 -> 1.83). A per-entry risk MULTIPLIER =
+    # (trend regime factor) × (per-leg edge weight from validated Sharpe),
+    # composed with any shadow/score modulation and clamped to [0.5, 1.5] then
+    # re-clamped to the risk band. In a strong trend, and on the higher-Sharpe
+    # legs (ichimoku, squeeze@4h), risk tilts UP; in chop and on the weaker leg
+    # (squeeze@1h), DOWN. It only sizes — never gates a trade — and follows the
+    # MEASURED edge direction only. Off by default.
+    regime_edge_weight_enabled: bool = field(
+        default_factory=lambda: _bool("REGIME_EDGE_WEIGHT_ENABLED", False))
+    regime_tilt: float = field(
+        default_factory=lambda: _float("REGIME_TILT", 0.35))
+    edge_weight_strength: float = field(
+        default_factory=lambda: _float("EDGE_WEIGHT_STRENGTH", 0.35))
     # Day-boundary offset in hours from UTC for ALL daily counters (kill
     # switch, profit lock, daily PnL window, daily-summary/report dedup).
     # 0 = UTC midnight (default, unchanged). 3 = Türkiye saati (UTC+3): the

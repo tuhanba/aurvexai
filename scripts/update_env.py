@@ -70,6 +70,7 @@ ALLOWED_KEYS = (
     "DAILY_PROFIT_FLATTEN",
     "DAILY_PROFIT_ADAPTIVE",
     "DAILY_PROFIT_PCT_CEILING",
+    "REGIME_EDGE_WEIGHT_ENABLED",
     "DAY_BOUNDARY_OFFSET_HOURS",
 )
 
@@ -143,6 +144,14 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--profit-ceiling-pct", type=float, default=None,
                    help="DAILY_PROFIT_PCT_CEILING — the target %% used in a "
                         "strong trend when adaptive is on (e.g. 10).")
+    p.add_argument("--regime-edge-weight", dest="regime_edge",
+                   action="store_const", const=True, default=None,
+                   help="REGIME_EDGE_WEIGHT_ENABLED=true — tilt per-entry risk "
+                        "by BTC-4h trend regime and per-leg validated Sharpe "
+                        "(holdout-validated; sizing only, within the band).")
+    p.add_argument("--no-regime-edge-weight", dest="regime_edge",
+                   action="store_const", const=False,
+                   help="REGIME_EDGE_WEIGHT_ENABLED=false — flat risk sizing.")
     p.add_argument("--day-offset-hours", type=float, default=None,
                    help="DAY_BOUNDARY_OFFSET_HOURS — shift ALL daily counters "
                         "off UTC. 3 = daily window resets at 00:00 Türkiye "
@@ -182,6 +191,9 @@ def collect_changes(args: argparse.Namespace) -> Dict[str, str]:
         changes["DAILY_PROFIT_ADAPTIVE"] = "true" if args.profit_adaptive else "false"
     if args.profit_ceiling_pct is not None:
         changes["DAILY_PROFIT_PCT_CEILING"] = _fmt_num(args.profit_ceiling_pct)
+    if args.regime_edge is not None:
+        changes["REGIME_EDGE_WEIGHT_ENABLED"] = ("true" if args.regime_edge
+                                                 else "false")
     if args.day_offset_hours is not None:
         changes["DAY_BOUNDARY_OFFSET_HOURS"] = _fmt_num(args.day_offset_hours)
     return changes
