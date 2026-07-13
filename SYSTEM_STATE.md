@@ -149,6 +149,14 @@ correlation containment.
 - Parity note: the flatten routes through the shared `executor.force_close`
   (identical in paper/live); armed live also flattens the exchange position
   reduce-only. `decide()` and the risk model are untouched.
+- **Exposure cap 200%→300% (2026-07-12, owner decision):** the notional cap
+  was binding at ~4-5 positions with donchian's wide 2×ATR stops, so only a
+  handful of coins held slots at once (the rest rejected `exposure_cap`).
+  300% lets all 6 slots fill → more coins open concurrently. TRADE-OFF:
+  higher total notional = larger correlated drawdown if longs move together;
+  ~6 positions all-stopping ≈ 9% (near the 10% daily kill switch). Per-trade
+  risk unchanged. Safer alternative to widen diversity WITHOUT more exposure:
+  `RISK_PCT=1.0` (smaller each position, more fit under a 200% cap).
 - Also this session: live per-trade PnL + equity curve + live-readiness /
   risk-budget / PnL-calendar / R-histogram / strategy-curve panels on the
   dashboard; Telegram hourly open-position digest, stop-approach + daily
@@ -166,7 +174,7 @@ RANK_KEY=edge
 LTF_LIMIT=525
 RISK_PCT=1.5
 MAX_OPEN_TRADES=6
-MAX_PORTFOLIO_EXPOSURE_PCT=200
+MAX_PORTFOLIO_EXPOSURE_PCT=300
 MAX_LEVERAGE=10
 UNIVERSE_SIZE=17
 UNIVERSE_INCLUDE=BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT,ADA/USDT:USDT,AVAX/USDT:USDT,LINK/USDT:USDT,TON/USDT:USDT,TRX/USDT:USDT,DOT/USDT:USDT,NEAR/USDT:USDT,ARB/USDT:USDT,SUI/USDT:USDT,ICP/USDT:USDT,ATOM/USDT:USDT
