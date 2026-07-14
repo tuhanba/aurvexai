@@ -106,6 +106,16 @@ infra, which this system does not have. **Scalp is closed.**
   the Telegram `/livemode` path only re-tags the running process, it does not
   rebuild the executor. Apply then `docker compose up -d --force-recreate engine`.
   Rollback: `python3 scripts/arm_live.py --disarm --apply`.
+- **LIVE trend execution (2026-07-14):** two gaps closed so real trend orders
+  work. (1) The "no profit target" strategies place a 1000R sentinel TP purely
+  to fill the 3-slot contract; it is NEVER sent to the exchange now
+  (`order_payload.SENTINEL_TP_DISTANCE`) — a trigger ~50x from mark would trip
+  Binance's PERCENT_PRICE filter and fail the whole protection group. The
+  exchange carries **entry + SL only**. (2) The streaming exits (channel /
+  TK-cross / time-stop) and the simulated stop are computed by the ENGINE, not
+  the exchange, so every live ledger close now mirrors onto Binance via
+  `flatten_live` → `emergency_flatten` (reduce-only market close + cancel the
+  resting SL). Telegram renders the sentinel TP as "— (trend exit)".
 - **LIVE real-balance sync (2026-07-14):** in `mode=live` the engine anchors its
   ledger balance to the REAL Binance USDT-M wallet balance every cycle (blocking
   read at startup, cheap heartbeat read thereafter) via `Storage.set_balance`, so

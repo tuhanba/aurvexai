@@ -81,6 +81,20 @@ def test_tp_dash_when_targets_missing():
     assert n.last.count("—") == 2
 
 
+def test_sentinel_tp_shows_trend_exit_not_absurd_price():
+    """A trend strategy's 1000R sentinel TP (r=134.7 -> ~137_700 for a $3000
+    entry) must render as '— (trend exit)', never the confusing raw number."""
+    n = Cap()
+    sentinel = 3000.0 + (3000.0 - 2865.3) * 1000  # entry + r*1000
+    t = _trade(setup_type="donchian_trend",
+               tp_targets=[TPTarget(sentinel, 1.0),
+                           TPTarget(sentinel, 0.0),
+                           TPTarget(sentinel, 0.0)])
+    n.trade_opened(t, balance=200.0)
+    assert "trend exit" in n.last
+    assert f"{sentinel:.6g}" not in n.last     # the absurd number is hidden
+
+
 def test_rank_line_shown_when_ranking_on():
     n = Cap()
     n.trade_opened(_trade(), balance=200.0, rank_pos=2, rank_total=7)

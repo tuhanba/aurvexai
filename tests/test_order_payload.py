@@ -186,6 +186,27 @@ def test_tp_fraction_quantities_rounded_down():
     assert tps[2].qty == 0.002                    # 20%
 
 
+def test_unreachable_sentinel_tp_not_sent_to_exchange():
+    # Trend/squeeze strategies place a 1000R sentinel TP. Here r = 500, so the
+    # sentinel sits at entry + 500*1000 = 550_000 (10x entry away). It must be
+    # dropped: the exchange carries entry + SL only (a trigger that far would
+    # trip Binance's PERCENT_PRICE filter and fail the whole protection group).
+    d = _decision(side=LONG, tps=(550_000.0, 550_000.0, 550_000.0))
+    prots = build_protection_payloads(d, FILTERS)
+    assert [p.intent for p in prots] == ["stop_loss"]
+    # SHORT mirror: sentinel far BELOW entry is likewise dropped.
+    d2 = _decision(side=SHORT, entry=50_000.0, stop=50_500.0,
+                   tps=(-450_000.0, -450_000.0, -450_000.0))
+    assert [p.intent for p in build_protection_payloads(d2, FILTERS)] == ["stop_loss"]
+
+
+def test_real_take_profits_still_sent():
+    # A normal, reachable TP (a few % from entry) is unaffected — all three rest.
+    d = _decision(side=LONG, tps=(50_750.0, 51_250.0, 52_000.0))
+    prots = build_protection_payloads(d, FILTERS)
+    assert [p.intent for p in prots].count("take_profit") == 3
+
+
 # ---------------------------------------------------------------------------
 # Leverage brackets
 # ---------------------------------------------------------------------------

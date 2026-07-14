@@ -102,11 +102,19 @@ def _trade_weight_label(risk_mult: float) -> str:
 
 
 def _tp_price(t, idx: int) -> str:
-    """Safely get TP price at index, returning '—' if not present."""
+    """TP price at index, or '—' when absent or an unreachable 'no profit
+    target' sentinel. Trend/squeeze/ichimoku/band_walk place a 1000R placeholder
+    TP (never rested on the exchange — see order_payload.SENTINEL_TP_DISTANCE);
+    showing 103.874 for a $2 coin only confuses. Those exit on the streaming
+    channel/time-stop, so we render '— (trend exit)'."""
     try:
-        return f"{t.tp_targets[idx].price:.6g}"
+        price = t.tp_targets[idx].price
     except (IndexError, AttributeError):
         return "—"
+    entry = getattr(t, "entry", 0.0) or 0.0
+    if entry > 0 and abs(price - entry) / entry > 5.0:   # matches SENTINEL_TP_DISTANCE
+        return "— (trend exit)"
+    return f"{price:.6g}"
 
 
 # Direction / lifecycle badges — one glance tells you what happened.

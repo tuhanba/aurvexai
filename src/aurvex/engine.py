@@ -1136,6 +1136,15 @@ class Engine:
                 self.notifier.trade_event(trade, ev.kind, ev.price, ev.pnl,
                                           stop_to=stop_hint)
             if trade.status != OPEN:
+                # LIVE: the streaming exits (channel / TK-cross / time-stop) and
+                # the simulated stop are computed by the ENGINE, not the
+                # exchange, so mirror the ledger close onto Binance — market-close
+                # any real position + cancel the resting SL. No-op in paper or
+                # when the adapter is disarmed. Without this a trend position
+                # would linger on the exchange after the engine booked it closed.
+                fl = getattr(self.executor, "flatten_live", None)
+                if callable(fl):
+                    fl(trade)
                 self.notifier.trade_closed(trade)
                 self.coins.on_trade_closed(
                     trade.symbol,

@@ -560,11 +560,14 @@ class EngineLiveExecutor(LiveExecutor):
         return trade
 
     def flatten_live(self, trade) -> None:
-        """Reduce-only market-close the real exchange position for ``trade``
-        (daily profit target). No-op unless the order adapter is armed; does
-        NOT trip the breaker (that is emergency_stop's job). The engine has
-        already booked the close internally via force_close — this only makes
-        the exchange match. Best-effort: never raises into the cycle."""
+        """Reduce-only market-close the real exchange position for ``trade`` and
+        cancel its resting orders. Called whenever the engine books a live close
+        the exchange did not place itself — the daily profit-target flatten AND
+        every engine-computed streaming exit (channel / TK-cross / time-stop /
+        simulated stop). No-op unless the order adapter is armed; does NOT trip
+        the breaker (that is emergency_stop's job). The engine has already booked
+        the close in the ledger — this only makes the exchange match. Best-effort:
+        never raises into the cycle."""
         adapter = self.order_adapter
         if adapter is None:
             return

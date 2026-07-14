@@ -38,6 +38,14 @@ FILLED = "FILLED"
 CANCELED = "CANCELED"
 
 
+# A take-profit trigger more than this fraction away from entry is treated as
+# an unreachable "no profit target" sentinel (the 1000R placeholder trend/
+# squeeze strategies use) and is NEVER sent to the exchange — see
+# build_protection_payloads. 500% cleanly separates real TPs (a few %) from the
+# ~20-100x sentinel, and stays well outside any plausible real target.
+SENTINEL_TP_DISTANCE = 5.0
+
+
 # ---------------------------------------------------------------------------
 # Filters (input contract — populated from the Task-2 symbol_filters cache)
 # ---------------------------------------------------------------------------
@@ -219,6 +227,15 @@ def build_protection_payloads(decision, filters: SymbolFilters) -> List[OrderPay
     for tp_price, frac in zip((decision.tp1, decision.tp2, decision.tp3),
                               fractions):
         if not tp_price or frac <= 0:
+            continue
+        # Unreachable "no profit target" sentinels are NEVER sent to the
+        # exchange. Trend/squeeze/ichimoku/band_walk place a 1000R placeholder
+        # TP (~20-100x the entry price away) purely to keep the 3-slot contract
+        # intact — the real exit is the engine's streaming channel/time-stop.
+        # A trigger that far violates Binance's PERCENT_PRICE filter and would
+        # fail the whole protection group, forcing an entry flatten+trip. Skip
+        # it: the exchange then carries entry + SL only (SL is the backstop).
+        if entry > 0 and abs(tp_price - entry) / entry > SENTINEL_TP_DISTANCE:
             continue
         payloads.append(OrderPayload(
             symbol=decision.symbol, side=closing_side,
