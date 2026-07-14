@@ -221,9 +221,14 @@ def test_happy_path_places_entry_and_protections(cfg):
     sl = next(c for c in ex.calls
               if c[0] == "create_order" and c[2] == "stop_market")
     assert sl[6].get("closePosition") is True
+    # ...and MUST NOT also carry reduceOnly — Binance rejects the pair with
+    # code -1106 ("Parameter 'reduceonly' sent when not required"), which failed
+    # protection placement and tripped the adapter on the first real order.
+    assert sl[6].get("reduceOnly") is None
     tps = [c for c in ex.calls
            if c[0] == "create_order" and c[2] == "take_profit_market"]
     assert all(t[6].get("reduceOnly") is True for t in tps)
+    assert all(t[6].get("closePosition") is None for t in tps)
     # Margin mode + leverage intents preceded the entry.
     assert ("set_margin_mode", "isolated", "BTC/USDT:USDT") in ex.calls
     assert ("set_leverage", 5, "BTC/USDT:USDT") in ex.calls

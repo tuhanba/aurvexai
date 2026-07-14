@@ -126,10 +126,14 @@ class LiveOrderAdapter:
     @staticmethod
     def _order_args(p: OrderPayload) -> Dict[str, Any]:
         params: Dict[str, Any] = {}
-        if p.reduce_only:
-            params["reduceOnly"] = True
+        # Binance USDT-M rejects reduceOnly + closePosition together (code
+        # -1106: "Parameter 'reduceonly' sent when not required") — closePosition
+        # already implies reduce-only. So closePosition wins; reduceOnly is only
+        # sent for partial reduce orders (TPs) that do NOT close the whole position.
         if p.close_position:
             params["closePosition"] = True
+        elif p.reduce_only:
+            params["reduceOnly"] = True
         if p.stop_price is not None:
             params["stopPrice"] = p.stop_price
         if p.time_in_force:
