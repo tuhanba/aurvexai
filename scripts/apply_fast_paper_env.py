@@ -64,7 +64,11 @@ BLOCK = {
     "GLOBAL_RANKING": "true",
     "RANK_KEY": "edge",
     "LTF_LIMIT": "525",
-    "RISK_PCT": "1.5",
+    # Owner decision 2026-07-14: 2.4 = full-Kelly (pooled per-trade R mean/var),
+    # chosen to maximise the chance of a +4% day. ~2x the variance of the 1.5
+    # half-Kelly, so deeper typical drawdowns — the owner's explicit call. Still
+    # band-clamped [min,max] and modulated by regime/edge within that band.
+    "RISK_PCT": "2.4",
     "MAX_OPEN_TRADES": "6",
     # Owner decision 2026-07-12: 300% (was 200%) so the notional cap stops
     # binding at ~4-5 positions and all 6 slots can fill -> more coins open at
