@@ -82,7 +82,7 @@ BLOCK = {
     # drawdown if every long moves together; ~6 positions all-stopping is
     # ~9% (near the 10% daily kill switch). Per-trade risk is unchanged.
     "MAX_PORTFOLIO_EXPOSURE_PCT": "300",
-    "MAX_LEVERAGE": "10",
+    "MAX_LEVERAGE": "12",   # owner 2026-07-14 (margin efficiency; not a P&L lever)
     "UNIVERSE_SIZE": "17",
     "UNIVERSE_INCLUDE": U17,
     "MIN_QUOTE_VOLUME_24H": "10000000",     # 10M — pinned coins clear it in quiet markets
