@@ -117,9 +117,18 @@ def extract_symbol_filters(symbol: str, market: Dict[str, Any],
 def _default_exchange_factory(exchange_id: str, api_key: str, api_secret: str):
     import ccxt  # lazy: only needed when keys are present
     klass = getattr(ccxt, exchange_id)
+    # Reliability hardening for real-order use:
+    #   * enableRateLimit    — ccxt paces calls under Binance's weight limits.
+    #   * adjustForTimeDifference — auto-sync the request timestamp to Binance
+    #     server time; without it a drifting host clock gets orders rejected
+    #     ("recvWindow"/timestamp errors). The single most common live failure.
+    #   * recvWindow 10s     — tolerate slow mobile/VPS networks (default 5s).
+    #   * timeout 20s        — fail a stalled call instead of hanging the cycle.
     return klass({"apiKey": api_key, "secret": api_secret,
                   "enableRateLimit": True,
-                  "options": {"adjustForTimeDifference": False}})
+                  "timeout": 20000,
+                  "options": {"adjustForTimeDifference": True,
+                              "recvWindow": 10000}})
 
 
 class BinanceAccountAdapter:

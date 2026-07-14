@@ -283,3 +283,15 @@ def test_engine_wiring_slow_timer_outside_cycle(cfg, tmp_path):
     eng._maybe_refresh_binance()
     assert eng.db.get_heartbeat("binance") is None  # skipped — not due yet
     eng.db.close()
+
+
+def test_default_factory_reliability_options():
+    """The real ccxt factory must set the live-reliability options: server-time
+    auto-sync (prevents timestamp/recvWindow rejections on clock drift), a wide
+    recvWindow for slow networks, an explicit timeout, and rate limiting."""
+    from aurvex.binance_account import _default_exchange_factory
+    ex = _default_exchange_factory("binanceusdm", API_KEY, API_SECRET)
+    assert ex.enableRateLimit is True
+    assert ex.timeout == 20000
+    assert ex.options.get("adjustForTimeDifference") is True
+    assert ex.options.get("recvWindow") == 10000
