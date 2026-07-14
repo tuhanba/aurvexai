@@ -221,6 +221,7 @@ class TelegramCommander(BaseCommander):
             "/livecheck":  self._cmd_livecheck,
             "/livemode":   self._cmd_livemode,
             "/papermode":  self._cmd_papermode,
+            "/resumeday":  self._cmd_resumeday,
             "/stop":       self._cmd_stop,
         }
         handler = handlers.get(cmd)
@@ -470,6 +471,23 @@ class TelegramCommander(BaseCommander):
             "data/mode_request.json written.\n"
             "Restart the engine to apply."
         )
+
+    def _cmd_resumeday(self, _args: List[str]) -> None:
+        e = self._engine
+        if e is None:
+            self._send("Engine not attached.")
+            return
+        resume = getattr(e, "resume_day", None)
+        if not callable(resume):
+            self._send("This engine build has no resume_day.")
+            return
+        res = resume()
+        eq = res.get("equity_open", 0.0)
+        log.warning("commander: /resumeday — profit lock released, baseline %.2f", eq)
+        self._send(
+            "✅ <b>Gün kilidi açıldı.</b>\n"
+            f"Baseline yeni equity'de: <b>{eq:.2f} USDT</b>.\n"
+            "Trading hemen devam ediyor (00:00 beklenmiyor).")
 
     def _cmd_stop(self, _args: List[str]) -> None:
         e = self._engine

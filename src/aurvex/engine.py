@@ -409,6 +409,45 @@ class Engine:
         least once. Paper mode is never blocked."""
         return self.cfg.mode == "live" and not self._live_equity_synced
 
+    def _real_unrealized(self) -> Optional[float]:
+        """LIVE only: sum of REAL unrealized PnL across the open exchange
+        positions, from the account heartbeat. Returns None in paper or when no
+        reading exists — the caller then falls back to the modeled estimate.
+        This is what makes the daily profit target fire at a REAL +N%, not a
+        modeled one (real futures 'total' excludes uPnL; equity = total + uPnL)."""
+        if self.cfg.mode != "live":
+            return None
+        hb = self.db.get_heartbeat("binance")
+        payload = hb.get("status") if isinstance(hb, dict) else None
+        if not isinstance(payload, dict):
+            return None
+        positions = payload.get("open_positions")
+        if not isinstance(positions, list):
+            return None
+        total = 0.0
+        for p in positions:
+            try:
+                total += float(p.get("unrealized_pnl") or 0.0)
+            except (TypeError, ValueError):
+                continue
+        return total
+
+    def resume_day(self) -> dict:
+        """Release today's profit lock NOW and rebase the day's accounting
+        baseline at the current equity, so trading resumes without waiting for
+        the 00:00 (local) rollover. Backs the /resumeday command."""
+        day = _day_ordinal(offset_hours=self.cfg.day_boundary_offset_hours)
+        cash = self.db.get_balance()
+        ru = self._real_unrealized()
+        equity = cash + (ru if ru is not None else 0.0)
+        self.db.set_meta("profit_day", {"day": day,
+                                        "equity_open": round(equity, 6)})
+        self.db.set_meta("profit_target_hit_day", None)   # clears the lock
+        self._profit_lock_fired_day = -1
+        log.warning("resume_day: profit lock released, baseline rebased at %.2f",
+                    equity)
+        return {"equity_open": round(equity, 6)}
+
     def _persist_telegram_health(self) -> None:
         """Write the notifier's (secret-free) health to storage for the dashboard."""
         try:
@@ -1189,13 +1228,20 @@ class Engine:
             day = _day_ordinal(offset_hours=cfg.day_boundary_offset_hours)
             opens = self.db.get_open_trades(mode=cfg.mode)
             cash = self.db.get_balance()
-            unreal = 0.0
-            for t in opens:
-                mark = marks.get(t.symbol)
-                if mark and t.entry:
-                    sign = 1 if t.side == LONG else -1
-                    qty = t.position_size * t.remaining_fraction / t.entry
-                    unreal += qty * (mark - t.entry) * sign
+            # LIVE: use the REAL unrealized from the exchange so the target fires
+            # at a REAL +N% (cash is already synced to the real wallet). Fall back
+            # to the modeled estimate in paper or when no account reading exists.
+            real_unreal = self._real_unrealized()
+            if real_unreal is not None:
+                unreal = real_unreal
+            else:
+                unreal = 0.0
+                for t in opens:
+                    mark = marks.get(t.symbol)
+                    if mark and t.entry:
+                        sign = 1 if t.side == LONG else -1
+                        qty = t.position_size * t.remaining_fraction / t.entry
+                        unreal += qty * (mark - t.entry) * sign
             equity = cash + unreal
             base = self._profit_day_baseline(equity, day)
             target = base * (self._effective_profit_pct() / 100.0)
