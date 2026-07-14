@@ -523,9 +523,15 @@ class LiveExecutor(BaseExecutor):
         if not safety.ok:
             return None, safety
 
-        # Canary mode: shrink risk on live entries.
-        risk_mult = max(0.0, self.cfg.live_canary_risk_pct / max(decision.risk_pct, 1e-9))
-        risk_mult = min(1.0, risk_mult)
+        # Canary mode: optionally shrink live entries to LIVE_CANARY_RISK_PCT.
+        # A value <= 0 means canary OFF — live sizes EXACTLY like paper (the
+        # full decision risk, preserving paper/live parity on size too). A
+        # positive value below the decision risk shrinks the live entry.
+        canary = self.cfg.live_canary_risk_pct
+        if canary <= 0.0:
+            risk_mult = 1.0
+        else:
+            risk_mult = min(1.0, max(0.0, canary / max(decision.risk_pct, 1e-9)))
         ack = self._send_order(decision, risk_mult)
 
         status = ack.get("status", "SIMULATED")

@@ -105,6 +105,10 @@ BLOCK = {
     "AX_MODE": "paper",
     "LIVE_ENABLED": "false",
     "LIVE_SEND_ORDERS": "false",
+    # Owner decision 2026-07-14: NO canary. Live sizes EXACTLY like paper (full
+    # RISK_PCT) — 0 turns the canary shrink OFF. This is the +4%-objective
+    # sizing; live == paper on size, not just on the decision.
+    "LIVE_CANARY_RISK_PCT": "0",
 }
 
 # Hard safety: values this script is FORBIDDEN to produce, ever.

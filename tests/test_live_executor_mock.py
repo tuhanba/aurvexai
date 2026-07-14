@@ -102,6 +102,32 @@ def test_live_send_orders_true_refuses_simulated_phantom(cfg):
     assert safety.stage == "adapter_disarmed"
 
 
+def test_canary_off_sizes_like_paper(cfg):
+    # LIVE_CANARY_RISK_PCT <= 0 -> canary OFF -> live sizes exactly like paper
+    # (full decision risk, risk_mult 1.0). This is the +4%-objective setting.
+    cfg.live_enabled = True
+    cfg.live_human_confirm = "OK"
+    cfg.live_canary_risk_pct = 0.0
+    live = LiveExecutor(cfg)
+    d = _decision(cfg)
+    full_size = d.position_size
+    trade, safety = live.open(d, snap_spread_pct=0.0, est_slippage_pct=0.0)
+    assert safety.ok and trade is not None
+    assert trade.metadata["canary_risk_mult"] == 1.0
+    assert trade.position_size == full_size          # no shrink
+
+
+def test_canary_positive_still_shrinks(cfg):
+    # A positive canary below the decision risk still shrinks (safety opt-in).
+    cfg.live_enabled = True
+    cfg.live_human_confirm = "OK"
+    cfg.live_canary_risk_pct = 0.1
+    live = LiveExecutor(cfg)
+    d = _decision(cfg)
+    trade, _ = live.open(d, snap_spread_pct=0.0, est_slippage_pct=0.0)
+    assert trade.metadata["canary_risk_mult"] < 1.0
+
+
 def test_live_send_orders_false_still_dry_runs(cfg):
     # Dry-run (LIVE_SEND_ORDERS=false) keeps opening simulated trades on purpose.
     cfg.live_enabled = True

@@ -122,6 +122,12 @@ infra, which this system does not have. **Scalp is closed.**
   the exchange, so every live ledger close now mirrors onto Binance via
   `flatten_live` → `emergency_flatten` (reduce-only market close + cancel the
   resting SL). Telegram renders the sentinel TP as "— (trend exit)".
+- **No canary — live sizes like paper (2026-07-14):** owner objective is the
+  best sizing for the +4% goal, NOT a shrunk canary. `LIVE_CANARY_RISK_PCT=0`
+  in the deployment block turns the canary OFF: `LiveExecutor` treats `<= 0` as
+  "off" and uses the full decision risk, so a live entry is the SAME size as
+  the paper entry (parity on size, not just on the decision). A positive value
+  still shrinks (opt-in only).
 - **LIVE real-balance sync (2026-07-14):** in `mode=live` the engine anchors its
   ledger balance to the REAL Binance USDT-M wallet balance every cycle (blocking
   read at startup, cheap heartbeat read thereafter) via `Storage.set_balance`, so
