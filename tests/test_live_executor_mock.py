@@ -85,3 +85,30 @@ def test_send_order_never_real(cfg):
     live = LiveExecutor(cfg)
     ack = live._send_order(_decision(cfg), risk_mult=1.0)
     assert ack["status"] == "SIMULATED"
+
+
+def test_live_send_orders_true_refuses_simulated_phantom(cfg):
+    # Operator intends REAL orders but the adapter is disarmed -> SIMULATED.
+    # The open MUST be refused so no phantom trade desyncs the ledger from the
+    # exchange (the root cause of "open in the system, absent on Binance").
+    cfg.live_enabled = True
+    cfg.live_human_confirm = "OK"
+    cfg.live_send_orders = True          # real orders intended
+    live = LiveExecutor(cfg)             # no armed adapter -> _send_order SIMULATED
+    trade, safety = live.open(_decision(cfg), snap_spread_pct=0.0,
+                              est_slippage_pct=0.0)
+    assert trade is None
+    assert safety.ok is False
+    assert safety.stage == "adapter_disarmed"
+
+
+def test_live_send_orders_false_still_dry_runs(cfg):
+    # Dry-run (LIVE_SEND_ORDERS=false) keeps opening simulated trades on purpose.
+    cfg.live_enabled = True
+    cfg.live_human_confirm = "OK"
+    cfg.live_send_orders = False
+    live = LiveExecutor(cfg)
+    trade, safety = live.open(_decision(cfg), snap_spread_pct=0.0,
+                              est_slippage_pct=0.0)
+    assert safety.ok and trade is not None
+    assert trade.metadata["simulated"] is True

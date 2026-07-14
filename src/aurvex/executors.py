@@ -535,6 +535,18 @@ class LiveExecutor(BaseExecutor):
             return None, LiveSafetyResult(False, "order_send",
                                           f"{status}: {ack.get('reason', '')}")
 
+        if status == "SIMULATED" and getattr(self.cfg, "live_send_orders", False):
+            # The operator intends REAL orders (LIVE_SEND_ORDERS=true) but the
+            # adapter returned SIMULATED — it is disarmed or tripped. Do NOT open
+            # a phantom trade: it would show as "open" in the ledger/dashboard
+            # while nothing exists on the exchange (a ledger↔exchange desync).
+            # Refuse and surface it. (Dry-run — LIVE_SEND_ORDERS=false — still
+            # opens simulated trades on purpose.)
+            return None, LiveSafetyResult(
+                False, "adapter_disarmed",
+                "LIVE_SEND_ORDERS=true but send returned SIMULATED "
+                "(adapter disarmed/tripped) — refusing phantom open")
+
         trade = self.build_trade(decision, LIVE)
         trade.position_size *= risk_mult
         trade.margin_used *= risk_mult   # canary shrinks notional => shrinks margin too
