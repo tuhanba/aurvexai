@@ -294,4 +294,4 @@ def test_default_factory_reliability_options():
     assert ex.enableRateLimit is True
     assert ex.timeout == 20000
     assert ex.options.get("adjustForTimeDifference") is True
-    assert ex.options.get("recvWindow") == 10000
+    assert ex.options.get("recvWindow") == 15000

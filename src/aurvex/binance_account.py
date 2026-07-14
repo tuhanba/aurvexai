@@ -122,13 +122,14 @@ def _default_exchange_factory(exchange_id: str, api_key: str, api_secret: str):
     #   * adjustForTimeDifference — auto-sync the request timestamp to Binance
     #     server time; without it a drifting host clock gets orders rejected
     #     ("recvWindow"/timestamp errors). The single most common live failure.
-    #   * recvWindow 10s     — tolerate slow mobile/VPS networks (default 5s).
+    #   * recvWindow 15s     — tolerate slow mobile/VPS networks (default 5s) so
+    #     a good order is NOT rejected over a network hiccup (don't miss trades).
     #   * timeout 20s        — fail a stalled call instead of hanging the cycle.
     return klass({"apiKey": api_key, "secret": api_secret,
                   "enableRateLimit": True,
                   "timeout": 20000,
                   "options": {"adjustForTimeDifference": True,
-                              "recvWindow": 10000}})
+                              "recvWindow": 15000}})
 
 
 class BinanceAccountAdapter:

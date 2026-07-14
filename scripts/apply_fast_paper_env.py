@@ -112,6 +112,8 @@ BLOCK = {
     "STALE_ENTRY_GUARD_BARS": "3",
     "KLINE_CACHE_ENABLED": "true",
     "UNIVERSE_REFRESH_SEC": "600",
+    # Owner decision 2026-07-14: Telegram open-position digest every 30 min.
+    "TG_POS_SUMMARY_MIN": "30",
     "AX_MODE": "paper",
     "LIVE_ENABLED": "false",
     "LIVE_SEND_ORDERS": "false",
