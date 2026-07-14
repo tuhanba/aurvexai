@@ -106,6 +106,12 @@ infra, which this system does not have. **Scalp is closed.**
   the Telegram `/livemode` path only re-tags the running process, it does not
   rebuild the executor. Apply then `docker compose up -d --force-recreate engine`.
   Rollback: `python3 scripts/arm_live.py --disarm --apply`.
+- **One-command switch (2026-07-14):** `bash scripts/go_live.sh` and
+  `bash scripts/go_paper.sh` wrap the whole flow — apply the validated config
+  block, arm/disarm, rebuild + recreate BOTH engine and dashboard, then verify
+  (`mode=live` · real futures balance synced · `real sends ARMED`, or
+  `mode=paper` · disarmed). `go_live` keeps the single deliberate confirmation
+  phrase (real money); `go_paper` is non-interactive. Secrets untouched.
 - **LIVE trend execution (2026-07-14):** two gaps closed so real trend orders
   work. (1) The "no profit target" strategies place a 1000R sentinel TP purely
   to fill the 3-slot contract; it is NEVER sent to the exchange now
