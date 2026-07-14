@@ -558,6 +558,20 @@ class Storage:
                            reason=reason, trade_id=trade_id)
         return bal
 
+    def set_balance(self, balance: float, mode: str, reason: str) -> float:
+        """Set the ledger balance to an ABSOLUTE value (audited in the ledger).
+
+        Used by the LIVE real-balance sync to anchor the engine's equity to the
+        exchange wallet balance. Idempotent by nature; the change delta recorded
+        is (new - old) so the ledger stays a faithful running record.
+        """
+        old = self.get_balance()
+        new = float(balance)
+        self.set_meta("balance", new)
+        self.append_ledger(mode=mode, balance=new, change=new - old,
+                           reason=reason, trade_id=None)
+        return new
+
     def append_ledger(self, mode: str, balance: float, change: float,
                       reason: str, trade_id: Optional[str]) -> None:
         self.conn.execute(

@@ -70,15 +70,16 @@ def test_apply_arms_gates_and_sets_token(tmp_path, monkeypatch):
     assert "BINANCE_API_KEY=KEYVAL" in text
 
 
-def test_never_writes_ax_mode_live(tmp_path, monkeypatch):
+def test_arm_sets_ax_mode_live(tmp_path, monkeypatch):
+    # The live executor is built from AX_MODE at startup, so arming MUST set it.
     env = _write_env(tmp_path, BASE_ENV)
     monkeypatch.setattr("builtins.input", lambda *_: arm_live.CONFIRM_PHRASE)
     answers = iter(["tok", "K", "S"])
     monkeypatch.setattr(arm_live.getpass, "getpass", lambda *_: next(answers))
     arm_live.main(["--env-file", env, "--apply", "--no-backup"])
     text = (tmp_path / ".env").read_text()
-    assert "AX_MODE=live" not in text
-    assert "AX_MODE=paper" in text  # left exactly as it was
+    assert "AX_MODE=live" in text
+    assert "AX_MODE=paper" not in text
 
 
 def test_secret_values_never_printed(tmp_path, monkeypatch, capsys):
@@ -106,8 +107,9 @@ def test_refuses_arm_without_token(tmp_path, monkeypatch, capsys):
 
 
 def test_disarm_sets_gates_false_no_prompt(tmp_path, monkeypatch):
-    armed = BASE_ENV.replace("LIVE_ENABLED=false", "LIVE_ENABLED=true").replace(
-        "LIVE_SEND_ORDERS=false", "LIVE_SEND_ORDERS=true")
+    armed = (BASE_ENV.replace("AX_MODE=paper", "AX_MODE=live")
+             .replace("LIVE_ENABLED=false", "LIVE_ENABLED=true")
+             .replace("LIVE_SEND_ORDERS=false", "LIVE_SEND_ORDERS=true"))
     env = _write_env(tmp_path, armed)
 
     def _boom(*_a, **_k):
@@ -118,6 +120,8 @@ def test_disarm_sets_gates_false_no_prompt(tmp_path, monkeypatch):
     rc = arm_live.main(["--env-file", env, "--disarm", "--apply", "--no-backup"])
     assert rc == 0
     text = (tmp_path / ".env").read_text()
+    assert "AX_MODE=paper" in text          # mode rolled back
+    assert "AX_MODE=live" not in text
     assert "LIVE_ENABLED=false" in text
     assert "LIVE_SEND_ORDERS=false" in text
 

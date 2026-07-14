@@ -4,31 +4,30 @@
 Turns the .env-side live gates ON without hand-editing .env, and captures the
 live secrets securely (getpass — never touches shell history, never printed).
 
-It DELIBERATELY does NOT cross every gate for you. Engine ``mode == live``
-(gate 3) STILL requires the independent Telegram ``/livemode confirm <token>``
-step + engine restart. That human-in-the-loop gate is the whole point of the
-five-gate lock and this script never removes it — it never writes AX_MODE.
+It writes the .env-side gates and captures the secrets; the ONLY remaining
+step is a container restart so the engine rebuilds its executor from the new
+config (the live executor + order adapter are constructed at startup from
+AX_MODE — see engine.py _build_executor).
 
 What it sets in .env (a timestamped, gitignored backup is made first):
   * LIVE_ENABLED=true            (gate 1 — config master switch)
+  * AX_MODE=live                 (gate 3 — engine mode; the live executor is
+                                  built from this at startup)
   * LIVE_SEND_ORDERS=true        (gate 4 — the real-order arming switch)
-  * LIVE_HUMAN_CONFIRM=<token>   (gate 2 — captured via getpass; gate 3 uses it)
+  * LIVE_HUMAN_CONFIRM=<token>   (gate 2 — captured via getpass)
   * BINANCE_API_KEY / _SECRET    (gate 5 — only prompted when currently blank)
 
 What it NEVER does:
-  * never writes AX_MODE=live  — mode=live belongs to Telegram /livemode confirm
   * never prints, logs or echoes any secret value
   * never runs the write without an explicit typed confirmation phrase
   * never a default — nothing happens unless invoked with --apply
 
 After this script (still all command-driven):
-  1. Telegram:  /livecheck                 (see the 4 gate checks)
-  2. Telegram:  /livemode confirm <token>  (crosses gate 3 -> mode_request.json)
-  3. Shell:     docker compose up -d --build engine
-  4. Verify:    docker compose logs --tail=30 engine | grep -i "LIVE mode"
-                -> must read "real sends ARMED"
+  1. Shell:  docker compose up -d --force-recreate engine   (reload new .env)
+  2. Verify: docker compose logs --tail=40 engine | grep -iE "starting mode|real sends"
+             -> must read  engine starting mode=live  +  real sends ARMED
 
-Rollback (instant disarm):
+Rollback (instant disarm, back to paper):
   python3 scripts/arm_live.py --disarm --apply
 
 Usage (Termius: one command per line, no && chaining):
@@ -53,13 +52,14 @@ from update_env import _LINE_RE, _read_lines, _value_and_comment  # noqa: E402
 # defence against an accidental or automated run flipping real-order gates on.
 CONFIRM_PHRASE = "ARM LIVE REAL MONEY"
 
-# Non-secret gate flags this script is allowed to write, and ONLY these.
-GATE_KEYS = ("LIVE_ENABLED", "LIVE_SEND_ORDERS")
+# Non-secret gate flags this script writes, and ONLY these. AX_MODE is here
+# because the live executor + order adapter are built from it at engine startup
+# (engine.py _build_executor); without AX_MODE=live the engine stays paper no
+# matter what the other gates say.
+GATE_KEYS = ("AX_MODE", "LIVE_ENABLED", "LIVE_SEND_ORDERS")
 # Secret keys it may set (values captured via getpass, never printed).
 SECRET_KEYS_SETTABLE = ("LIVE_HUMAN_CONFIRM", "BINANCE_API_KEY",
                         "BINANCE_API_SECRET")
-# Hard invariant: this script must NEVER write AX_MODE (that gate is Telegram's).
-FORBIDDEN_KEYS = frozenset({"AX_MODE"})
 
 
 def _current_values(lines: List[str], keys) -> Dict[str, str]:
@@ -155,26 +155,27 @@ def _prompt_secrets(current: Dict[str, str]) -> Dict[str, str]:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(
-        description="Command-driven live arming (dry-run by default). Flips the "
-                    ".env live gates and captures secrets via getpass. NEVER "
-                    "writes AX_MODE=live — mode=live stays a Telegram gate.")
+        description="Command-driven live arming (dry-run by default). Sets the "
+                    ".env live gates (incl. AX_MODE=live) and captures secrets "
+                    "via getpass. Restart the engine afterwards to apply.")
     p.add_argument("--env-file", default=".env")
     p.add_argument("--apply", action="store_true",
                    help="actually write (default: dry-run)")
     p.add_argument("--disarm", action="store_true",
-                   help="set LIVE_ENABLED=false + LIVE_SEND_ORDERS=false "
-                        "(instant rollback; no secrets touched, no prompt)")
+                   help="set AX_MODE=paper + LIVE_ENABLED=false + "
+                        "LIVE_SEND_ORDERS=false (instant rollback; no secrets "
+                        "touched, no prompt)")
     p.add_argument("--no-backup", action="store_true",
                    help="skip the .env.backup.<ts> copy on --apply")
     args = p.parse_args(argv)
 
-    gate_val = "false" if args.disarm else "true"
-    gate_changes = {k: gate_val for k in GATE_KEYS}
-
-    # Hard invariant check (belt-and-braces; the script literally cannot name it).
-    for k in (*gate_changes, *FORBIDDEN_KEYS):
-        if k in FORBIDDEN_KEYS:
-            assert k not in gate_changes, f"REFUSING: {k} is forbidden"
+    # Gate values: arm -> live/true/true, disarm -> paper/false/false.
+    if args.disarm:
+        gate_changes = {"AX_MODE": "paper", "LIVE_ENABLED": "false",
+                        "LIVE_SEND_ORDERS": "false"}
+    else:
+        gate_changes = {"AX_MODE": "live", "LIVE_ENABLED": "true",
+                        "LIVE_SEND_ORDERS": "true"}
 
     env_path = args.env_file
     base_lines = _read_lines(env_path) if os.path.exists(env_path) else []
@@ -234,21 +235,20 @@ def main(argv=None) -> int:
         print(c)
 
     if args.disarm:
-        print("\nDisarmed. Also send  /papermode  on Telegram and restart:")
-        print("  docker compose up -d --build engine")
+        print("\nDisarmed (AX_MODE=paper). Restart to apply:")
+        print("  docker compose up -d --force-recreate engine")
         return 0
 
     keys_present = bool(current.get("BINANCE_API_KEY")
                         or secret_changes.get("BINANCE_API_KEY"))
-    print("\nNext (all command-driven):")
-    print("  1. Telegram:  /livecheck")
-    print("  2. Telegram:  /livemode confirm <your_token>")
-    print("  3. Shell:     docker compose up -d --build engine")
-    print("  4. Verify:    docker compose logs --tail=30 engine | "
-          "grep -i 'LIVE mode'   ->  'real sends ARMED'")
+    print("\nNext (restart rebuilds the executor from the new AX_MODE):")
+    print("  1. Shell:  docker compose up -d --force-recreate engine")
+    print("  2. Verify: docker compose logs --tail=40 engine | "
+          "grep -iE 'starting mode|real sends'")
+    print("            ->  engine starting mode=live   +   real sends ARMED")
     if not keys_present:
-        print("\n⚠️  Binance keys blank -> gate 5 open, adapter DISARMED, live "
-              "orders stay SIMULATED. Re-run this script to add keys when ready.")
+        print("\n⚠️  Binance keys blank -> gate 5 not met, adapter DISARMED, "
+              "live orders stay SIMULATED. Re-run this script to add keys.")
     return 0
 
 

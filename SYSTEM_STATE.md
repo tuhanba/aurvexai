@@ -99,10 +99,21 @@ infra, which this system does not have. **Scalp is closed.**
   `LIVE_ENABLED=true` + `LIVE_HUMAN_CONFIRM` token + Telegram
   `/livemode confirm <token>` + restart + `LIVE_SEND_ORDERS=true` + API keys.
   Command-driven arming (owner-only, no hand-editing): `scripts/arm_live.py`
-  flips the `.env` gates + captures secrets via `getpass` (dry-run default,
-  typed-phrase confirm, gitignored backup). It deliberately NEVER writes
-  `AX_MODE=live` — gate 3 stays the independent Telegram `/livemode confirm`.
+  sets the `.env` gates — `AX_MODE=live`, `LIVE_ENABLED`, `LIVE_SEND_ORDERS` —
+  and captures secrets via `getpass` (dry-run default, typed-phrase confirm,
+  gitignored backup). It sets `AX_MODE=live` because the live executor + order
+  adapter are BUILT from `AX_MODE` at engine startup (`engine.py _build_executor`);
+  the Telegram `/livemode` path only re-tags the running process, it does not
+  rebuild the executor. Apply then `docker compose up -d --force-recreate engine`.
   Rollback: `python3 scripts/arm_live.py --disarm --apply`.
+- **LIVE real-balance sync (2026-07-14):** in `mode=live` the engine anchors its
+  ledger balance to the REAL Binance USDT-M wallet balance every cycle (blocking
+  read at startup, cheap heartbeat read thereafter) via `Storage.set_balance`, so
+  sizing / exposure cap / kill switch / profit lock all run off real capital, not
+  the seeded paper ledger. Fail-safe: until a real balance is read at least once,
+  new live entries are BLOCKED (`_live_entries_blocked`) and the owner is alerted;
+  a later good read lifts the block. Paper mode is untouched (parity preserved —
+  `decide()` still consumes the balance number identically).
 - **Not built:** carry executor (research-validated, engine port pending —
   the only meaningful "new strategy" work left).
 

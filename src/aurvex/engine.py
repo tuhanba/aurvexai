@@ -143,6 +143,12 @@ class Engine:
         self._kill_switch_fired_day: int = -1
         self._profit_lock_fired_day: int = -1
         self._last_error: str = ""
+        # LIVE real-balance sync: sizing/kill/profit-lock must run off the REAL
+        # Binance USDT-M wallet balance, never the seeded paper ledger. Flag stays
+        # False until a real read lands; while False, live entries are blocked
+        # (fail-safe — never size a real order off an unsynced ledger).
+        self._live_equity_synced: bool = False
+        self._live_equity_alerted: bool = False
         self._start_ms = now_ms()
         self.db.ensure_balance(cfg.initial_paper_balance)
         # Stamp the epoch (configurable via EPOCH_LABEL, default "wave3").
@@ -269,6 +275,23 @@ class Engine:
             self.scanner.scan()  # warm the universe once
         except Exception as exc:
             log.warning("initial scan failed: %s", exc)
+        # LIVE: anchor the ledger to the REAL wallet balance BEFORE the first
+        # cycle (also warms the symbol-filter cache the live adapter needs). If
+        # this first read fails, entries stay blocked (fail-safe) and we alert;
+        # the per-cycle sync will lift the block as soon as a good read lands.
+        if self.cfg.mode == "live":
+            if self._sync_live_equity(blocking=True):
+                log.warning("LIVE equity synced to real wallet balance: %.2f USDT",
+                            self.db.get_balance())
+            else:
+                self._live_equity_alerted = True
+                log.error("LIVE: real wallet balance read FAILED at startup — "
+                          "new entries BLOCKED until it succeeds")
+                self.notifier.send(
+                    "⚠️ <b>LIVE: real balance read failed.</b> New entries are "
+                    "BLOCKED until the Binance account read succeeds (check API "
+                    "keys / connectivity). Open-trade management continues.",
+                    critical=True)
         # Start the Telegram command poll loop as a background task.
         poll_task = asyncio.ensure_future(self.commander.poll_forever())
         try:
@@ -336,6 +359,55 @@ class Engine:
             return
         self._binance_task = loop.create_task(
             asyncio.to_thread(self.binance.refresh, symbols))
+
+    def _sync_live_equity(self, blocking: bool = False) -> bool:
+        """LIVE only: anchor the ledger balance to the REAL Binance USDT-M wallet
+        balance so sizing, exposure cap, kill switch and profit lock all run off
+        real capital — never the seeded paper ledger.
+
+        ``blocking`` does one synchronous account refresh (used once at startup,
+        before the first cycle, so the very first entry is sized correctly and
+        the symbol-filter cache the live adapter needs is warm). Otherwise it
+        reads the last good balance from the persisted 'binance' heartbeat kept
+        fresh by the slow-timer refresh. Fail-soft: on any miss the last good
+        value stands and the sync flag is left as-is (a first-ever miss keeps
+        entries blocked via ``_live_entries_blocked``).
+        """
+        if self.cfg.mode != "live":
+            return False
+        # Two shapes: binance.refresh() returns the RAW payload (futures_balance
+        # at top level); the persisted heartbeat wraps it under 'status'.
+        payload = None
+        if blocking:
+            try:
+                payload = self.binance.refresh(list(self.scanner.last_universe or []))
+            except Exception as exc:                      # never raises by contract
+                log.warning("live equity blocking refresh failed: %s", exc)
+            if not isinstance(payload, dict):
+                payload = None
+        if payload is None:
+            hb = self.db.get_heartbeat("binance")
+            payload = hb.get("status") if isinstance(hb, dict) else None
+        if not isinstance(payload, dict):
+            return False
+        fb = payload.get("futures_balance") or {}
+        total = fb.get("total")
+        try:
+            real = float(total)
+        except (TypeError, ValueError):
+            return False
+        if real <= 0.0:
+            return False
+        if abs(real - self.db.get_balance()) > 1e-9:
+            self.db.set_balance(real, mode="live", reason="live_balance_sync")
+        self._live_equity_synced = True
+        return True
+
+    def _live_entries_blocked(self) -> bool:
+        """LIVE fail-safe: never open a real position sized off an unsynced
+        ledger. Blocks new entries until the real wallet balance is read at
+        least once. Paper mode is never blocked."""
+        return self.cfg.mode == "live" and not self._live_equity_synced
 
     def _persist_telegram_health(self) -> None:
         """Write the notifier's (secret-free) health to storage for the dashboard."""
@@ -522,6 +594,15 @@ class Engine:
         if callable(adv):
             adv()
 
+        # LIVE: keep the ledger tracking the real wallet balance every cycle
+        # (cheap heartbeat read; the slow-timer refresh keeps it fresh). If a
+        # good read recovers after a prior failure, lift the entry block + notify.
+        if self.cfg.mode == "live":
+            if self._sync_live_equity() and self._live_equity_alerted:
+                self._live_equity_alerted = False
+                self.notifier.send(
+                    "✅ <b>LIVE: real balance read recovered</b> — entries "
+                    "re-enabled.", critical=True)
         funnel = FunnelLogger()
         symbols = self.scanner.scan()
         snapshots: Dict[str, MarketSnapshot] = {}
@@ -686,6 +767,11 @@ class Engine:
                             self.db.set_shadow_reject_reason(cand_sid, "ranked_out:same_side_cap")
                         continue
 
+                if self._live_entries_blocked():
+                    # LIVE fail-safe: real balance not yet read — never size a
+                    # real order off the unsynced ledger. Manage-only this cycle.
+                    funnel.mark_live_send_refused()
+                    continue
                 trade = self.executor.open(d)
                 if trade is None:
                     # Live-mode send refused (gate/validation/exchange); the
@@ -812,6 +898,9 @@ class Engine:
                         # paper shadow for the missed-opportunity outcome breakdown.
                         if fc_sid:
                             self.db.set_shadow_reject_reason(fc_sid, "max_open_trades")
+                        continue
+                    if self._live_entries_blocked():
+                        funnel.mark_live_send_refused()
                         continue
                     trade = self.executor.open(d)
                     if trade is None:
