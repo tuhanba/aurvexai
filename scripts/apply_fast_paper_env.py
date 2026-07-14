@@ -69,6 +69,12 @@ BLOCK = {
     # half-Kelly, so deeper typical drawdowns — the owner's explicit call. Still
     # band-clamped [min,max] and modulated by regime/edge within that band.
     "RISK_PCT": "2.4",
+    # The risk band MUST contain RISK_PCT (config.validate: min<=risk<=max<=5).
+    # Set explicitly so RISK_PCT=2.4 is valid regardless of any prior .env band;
+    # regime/edge modulation rides UP toward 3.0 on strong-trend days, DOWN to
+    # 1.0 in chop.
+    "MIN_RISK_PCT": "1.0",
+    "MAX_RISK_PCT": "3.0",
     "MAX_OPEN_TRADES": "6",
     # Owner decision 2026-07-12: 300% (was 200%) so the notional cap stops
     # binding at ~4-5 positions and all 6 slots can fill -> more coins open at

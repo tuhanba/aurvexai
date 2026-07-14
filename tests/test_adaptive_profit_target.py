@@ -155,6 +155,19 @@ def test_config_defaults_and_block():
     assert a.BLOCK["DAILY_PROFIT_PCT_CEILING"] == "10"
 
 
+def test_block_risk_pct_within_its_band():
+    # Guards the crash where RISK_PCT sat outside the .env risk band and the
+    # engine died on config.validate() (min<=risk<=max<=5). The deployment
+    # block must be internally consistent so go_live never boot-loops.
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+    import apply_fast_paper_env as a
+    lo = float(a.BLOCK["MIN_RISK_PCT"])
+    r = float(a.BLOCK["RISK_PCT"])
+    hi = float(a.BLOCK["MAX_RISK_PCT"])
+    assert lo <= r <= hi <= 5, \
+        f"block risk band [{lo}, {hi}] must contain RISK_PCT {r}"
+
+
 def test_update_env_adaptive_flags(tmp_path):
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
     import update_env
