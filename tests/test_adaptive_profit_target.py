@@ -148,7 +148,10 @@ def test_config_defaults_and_block():
     assert c.daily_profit_pct_ceiling == 10.0
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
     import apply_fast_paper_env as a
-    assert a.BLOCK["DAILY_PROFIT_ADAPTIVE"] == "true"
+    # Owner objective 2026-07-14: fixed +4% lock (adaptive OFF) to maximise the
+    # probability of a *realised* +4% day. Ceiling retained (inert) for easy
+    # re-enable.
+    assert a.BLOCK["DAILY_PROFIT_ADAPTIVE"] == "false"
     assert a.BLOCK["DAILY_PROFIT_PCT_CEILING"] == "10"
 
 

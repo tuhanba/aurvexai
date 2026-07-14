@@ -83,10 +83,15 @@ BLOCK = {
     # Türkiye saati (UTC+3), when the lock releases and trading resumes.
     "DAILY_PROFIT_LOCK_PCT": "4",
     "DAILY_PROFIT_FLATTEN": "true",
-    # Adaptive target by MEASURED trend regime (BTC 4h ADX): 4% floor in chop,
-    # up to 10% ceiling in a strong trend — let winners run on hype days, bank
-    # fast in chop. Never changes per-trade risk; only when we take the day.
-    "DAILY_PROFIT_ADAPTIVE": "true",
+    # Owner objective 2026-07-14: MAXIMISE the probability of a *realised* +4%
+    # day. Adaptive is therefore OFF — a FIXED +4% mark-to-market lock banks
+    # and flattens the instant intraday total touches +4%, every day, instead
+    # of holding out (adaptive would raise the bar toward the 10% ceiling on a
+    # trend day and risk touching +4% then giving it back). Trade-off: you cap
+    # the rare >4% trend day at +4%. This also LOWERS variance (flat sooner),
+    # so it is a pure objective-alignment change, not extra risk. Ceiling is
+    # inert while adaptive is off but kept so re-enabling is a one-flag change.
+    "DAILY_PROFIT_ADAPTIVE": "false",
     "DAILY_PROFIT_PCT_CEILING": "10",
     # Regime + edge weighted risk sizing (holdout-validated: H2 book Sharpe
     # 1.35 -> 1.83). Tilts per-entry risk UP in a strong BTC-4h trend and on

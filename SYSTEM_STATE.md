@@ -142,11 +142,15 @@ correlation containment.
   resets at the local boundary) hits the target, the engine CLOSES all
   positions at market (reason `PROFIT_TARGET`) and locks new entries for the
   day — it does NOT wait for trades to close. `DAILY_PROFIT_FLATTEN=true`.
-- **Adaptive target by MEASURED trend regime:** the target scales from
-  `DAILY_PROFIT_LOCK_PCT` (4%, floor/chop) up to `DAILY_PROFIT_PCT_CEILING`
-  (10%, strong trend) by BTC-4h ADX(14) mapped [20,40]→[0,1].
-  `DAILY_PROFIT_ADAPTIVE=true`. A measure, not a prediction; it only moves
-  WHEN we bank the day and never changes per-trade risk.
+- **Fixed +4% lock (adaptive OFF) — owner objective 2026-07-14:** the goal is
+  to MAXIMISE the probability of a *realised* +4% day, so the target is a fixed
+  +4% MTM lock (`DAILY_PROFIT_ADAPTIVE=false`): bank + flatten the instant
+  intraday total touches +4%, every day. Rationale: adaptive would raise the
+  bar toward the 10% ceiling on a trend day and risk touching +4% then giving
+  it back — LOWERING P(realised +4%). Fixed banking also cuts variance (flat
+  sooner), so it is objective-alignment, not extra risk; the only cost is
+  capping the rare >4% trend day at +4%. The adaptive machinery + ceiling are
+  retained (inert) so re-enabling is one flag: `DAILY_PROFIT_ADAPTIVE=true`.
 - **Day boundary = 00:00 Türkiye saati:** `DAY_BOUNDARY_OFFSET_HOURS=3`
   shifts EVERY daily counter (kill switch, profit lock/target, daily-PnL
   window, once-per-day dedups) off UTC; the lock releases and trading
@@ -200,7 +204,7 @@ UNIVERSE_INCLUDE=BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USD
 MIN_QUOTE_VOLUME_24H=10000000
 DAILY_PROFIT_LOCK_PCT=4
 DAILY_PROFIT_FLATTEN=true
-DAILY_PROFIT_ADAPTIVE=true
+DAILY_PROFIT_ADAPTIVE=false
 DAILY_PROFIT_PCT_CEILING=10
 REGIME_EDGE_WEIGHT_ENABLED=true
 DAY_BOUNDARY_OFFSET_HOURS=3
