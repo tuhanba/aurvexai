@@ -32,10 +32,15 @@ echo "════════ 3/4  rebuild + restart engine + dashboard ══�
 docker compose up -d --build --force-recreate
 
 echo
-echo "════════ 4/4  verify (waiting ~10s for startup + real balance read) ════════"
-sleep 10
+echo "════════ 4/4  verify (polling up to ~75s for startup + real balance read) ════════"
+for _i in $(seq 1 25); do
+  if docker compose logs --tail=150 engine 2>/dev/null | grep -qiE "starting mode=|real balance read"; then
+    break
+  fi
+  sleep 3
+done
 echo "---- engine state ----"
-docker compose logs --tail=100 engine 2>/dev/null \
+docker compose logs --tail=150 engine 2>/dev/null \
   | grep -iE "starting mode|equity synced|real sends|real balance read" \
   || echo "(no state lines yet — re-run: docker compose logs --tail=60 engine)"
 echo

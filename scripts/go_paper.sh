@@ -26,9 +26,14 @@ echo "════════ 2/3  rebuild + restart engine + dashboard ══�
 docker compose up -d --build --force-recreate
 
 echo
-echo "════════ 3/3  verify ════════"
-sleep 8
-docker compose logs --tail=60 engine 2>/dev/null \
+echo "════════ 3/3  verify (polling up to ~45s for startup) ════════"
+for _i in $(seq 1 15); do
+  if docker compose logs --tail=120 engine 2>/dev/null | grep -qiE "starting mode="; then
+    break
+  fi
+  sleep 3
+done
+docker compose logs --tail=120 engine 2>/dev/null \
   | grep -iE "starting mode|real sends" \
   || echo "(re-check: docker compose logs --tail=40 engine)"
 echo
