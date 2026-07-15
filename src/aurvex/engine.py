@@ -62,6 +62,50 @@ _LEG_EDGE_SHARPE = {
     "squeeze_breakout": 0.62,      # the 1h leg
 }
 
+# Per-leg validated net Exp-R baseline (6y real-data walk-forward — the
+# pre-live verification). Keyed by setup_type. The edge-decay monitor compares
+# each leg's LIVE Exp-R against this and flags a leg that has stopped working.
+_LEG_VALIDATED_EXP_R = {
+    "donchian_trend": 0.606,
+    "ichimoku_trend": 0.354,
+    "squeeze_breakout": 0.15,      # blended @1h/@4h (both positive)
+    "band_walk": 0.082,
+}
+
+
+def compute_leg_stats(trades, min_n: int = 1) -> list:
+    """Per-leg realized stats vs the validated Exp-R baseline, worst-first by
+    delta. Pure function over a list of closed Trades (shared by the engine and
+    the dashboard). Each row: setup_type, n, winrate, exp_r, pf, validated,
+    delta. Legs with < ``min_n`` trades are dropped."""
+    agg: dict = {}
+    for t in trades:
+        d = agg.setdefault(t.setup_type, {"n": 0, "wins": 0, "sum_r": 0.0,
+                                          "gw": 0.0, "gl": 0.0})
+        d["n"] += 1
+        d["sum_r"] += t.r_net
+        if t.realized_pnl >= 0:
+            d["wins"] += 1
+            d["gw"] += t.realized_pnl
+        else:
+            d["gl"] += -t.realized_pnl
+    rows = []
+    for st, d in agg.items():
+        if d["n"] < min_n:
+            continue
+        exp_r = d["sum_r"] / d["n"]
+        val = _LEG_VALIDATED_EXP_R.get(st)
+        rows.append({
+            "setup_type": st, "n": d["n"],
+            "winrate": round(100.0 * d["wins"] / d["n"], 1),
+            "exp_r": round(exp_r, 4),
+            "pf": (round(d["gw"] / d["gl"], 3) if d["gl"] > 0 else None),
+            "validated": val,
+            "delta": round(exp_r - val, 4) if val is not None else None,
+        })
+    rows.sort(key=lambda r: (r["delta"] if r["delta"] is not None else 0.0))
+    return rows
+
 
 def _utc_day_start_ms(ts_ms: Optional[int] = None,
                       offset_hours: float = 0.0) -> int:
@@ -150,6 +194,7 @@ class Engine:
         self._live_equity_synced: bool = False
         self._live_equity_alerted: bool = False
         self._adapter_tripped_alerted: bool = False
+        self._decay_alerted: dict = {}      # setup_type -> ISO week key (once/week)
         self._start_ms = now_ms()
         self.db.ensure_balance(cfg.initial_paper_balance)
         # Stamp the epoch (configurable via EPOCH_LABEL, default "wave3").
@@ -1121,6 +1166,7 @@ class Engine:
         self._maybe_stop_approach_alerts()
         self._maybe_loss_budget_alerts()
         self._maybe_weekly_report()
+        self._maybe_edge_decay_alert()
 
         # Surface Telegram health to the dashboard (secret-free).
         self._persist_telegram_health()
@@ -1357,6 +1403,41 @@ class Engine:
                         equity - base, target, len(closed_syms))
         except Exception as exc:
             log.debug("daily profit target guard error: %s", exc)
+
+    def leg_live_stats(self, min_n: int = 1) -> list:
+        """Per-leg LIVE realized stats vs the validated baseline (edge-decay
+        view), worst-first. Thin wrapper over the pure module function so the
+        dashboard can reuse it."""
+        return compute_leg_stats(
+            self.db.get_closed_trades(limit=5000, mode=self.cfg.mode), min_n)
+
+    def _maybe_edge_decay_alert(self) -> None:
+        """Once per ISO week per leg: if a leg has a real live sample and its
+        live Exp-R has gone NEGATIVE (it is losing money over enough trades),
+        alert — the edge may have decayed. Conservative on sample size so normal
+        variance never false-alarms. Observability only; never touches trading."""
+        MIN_SAMPLE = 30
+        try:
+            week = dt.datetime.now(dt.timezone.utc).strftime("%G-W%V")
+        except Exception:
+            return
+        for row in self.leg_live_stats(min_n=MIN_SAMPLE):
+            st, exp_r = row["setup_type"], row["exp_r"]
+            val = row["validated"]
+            if val is None or val <= 0:
+                continue
+            if exp_r < 0.0 and self._decay_alerted.get(st) != week:
+                self._decay_alerted[st] = week
+                log.warning("EDGE DECAY: %s live Exp-R %.3f (validated +%.3f, "
+                            "n=%d)", st, exp_r, val, row["n"])
+                try:
+                    self.notifier.send(
+                        f"📉 <b>Edge decay?</b> {st}\n"
+                        f"live Exp-R <b>{exp_r:+.3f}</b> over {row['n']} trades "
+                        f"(validated +{val:.3f}). This leg is net-negative live "
+                        f"— review whether to pause it.", critical=True)
+                except Exception as exc:
+                    log.debug("edge decay notify error: %s", exc)
 
     def _maybe_daily_summary(self) -> None:
         today = _day_ordinal(offset_hours=self.cfg.day_boundary_offset_hours)

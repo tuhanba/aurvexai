@@ -425,6 +425,15 @@ def create_app(cfg=None) -> Flask:
     def metrics():
         return jsonify(compute_metrics(db.get_closed_trades(limit=2000, mode=cfg.mode)))
 
+    @app.route("/api/legs")
+    def legs():
+        """Per-leg live performance vs the validated Exp-R baseline (edge-decay
+        panel). Worst-first; a leg with n>=30 and negative live Exp-R has
+        potentially decayed."""
+        from ..engine import compute_leg_stats
+        rows = compute_leg_stats(db.get_closed_trades(limit=5000, mode=cfg.mode))
+        return jsonify({"legs": rows})
+
     @app.route("/api/shadow")
     def shadow_stats():
         """Shadow panel (Task 4): report-only label HARDCODED, resolved count,

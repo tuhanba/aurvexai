@@ -242,3 +242,20 @@ def test_binance_command_shows_real_account(tmp_path):
     assert "204.29" in body and "BTC/USDT:USDT" in body
     assert "funding today" in body and "+1.23" in body
     eng.db.close()
+
+
+def test_legs_command_lists_per_leg(tmp_path):
+    from aurvex.models import LONG, Trade, TPTarget, now_ms
+    eng, c, sent = _engine_commander(tmp_path, mode="live")
+    for pnl in (2.0, -2.0, 2.0):
+        eng.db.upsert_trade(Trade(
+            symbol="BTC/USDT:USDT", side=LONG, setup_type="donchian_trend",
+            entry=100.0, stop_loss=95.0, tp_targets=[TPTarget(9e9, 1.0)],
+            position_size=100.0, risk_pct=1.5, leverage=5, margin_used=20.0,
+            max_loss=2.0, score=70, threshold=60, status="CLOSED", mode="live",
+            realized_pnl=pnl, close_reason="T", open_time=now_ms() - 7_200_000,
+            close_time=now_ms(), metadata={"risk_amount": 2.0}))
+    c._cmd_legs([])
+    assert sent and "leg performance" in sent[0].lower()
+    assert "donchian_trend" in sent[0] and "ExpR" in sent[0]
+    eng.db.close()

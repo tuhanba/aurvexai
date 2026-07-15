@@ -214,6 +214,7 @@ class TelegramCommander(BaseCommander):
             "/summary":    self._cmd_summary,
             "/balance":    self._cmd_balance,
             "/binance":    self._cmd_binance,
+            "/legs":       self._cmd_legs,
             "/config":     self._cmd_config,
             "/health":     self._cmd_health,
             "/pause":      self._cmd_pause,
@@ -246,6 +247,7 @@ class TelegramCommander(BaseCommander):
             "/summary   — today's PnL &amp; stats\n"
             "/balance   — balance · today · funding\n"
             "/binance   — real Binance account (cross-check)\n"
+            "/legs      — per-leg live perf vs validated\n"
             "/config    — deployed config snapshot\n"
             "/health    — system health\n\n"
             "<b>Control</b>\n"
@@ -366,6 +368,28 @@ class TelegramCommander(BaseCommander):
             f"mode:      {e.cfg.mode.upper()}\n"
             f"entries:   {'PAUSED' if self._paused else 'active'}"
         )
+
+    def _cmd_legs(self, _args: List[str]) -> None:
+        """Per-leg live performance vs the validated Exp-R baseline."""
+        e = self._engine
+        if e is None:
+            self._send("Engine not attached.")
+            return
+        rows = e.leg_live_stats(min_n=1) if hasattr(e, "leg_live_stats") else []
+        if not rows:
+            self._send("No closed trades yet — no leg stats.")
+            return
+        lines = ["<b>Live leg performance</b> (vs validated Exp-R)"]
+        for r in rows:
+            val = f"+{r['validated']:.3f}" if r["validated"] is not None else "—"
+            pf = f"{r['pf']:.2f}" if r["pf"] is not None else "—"
+            flag = " 📉" if (r["validated"] and r["validated"] > 0
+                            and r["exp_r"] < 0 and r["n"] >= 30) else ""
+            lines.append(
+                f"<b>{r['setup_type']}</b>{flag}\n"
+                f"  n {r['n']} · win {r['winrate']:.0f}% · "
+                f"ExpR {r['exp_r']:+.3f} (val {val}) · PF {pf}")
+        self._send("\n".join(lines))
 
     def _cmd_config(self, _args: List[str]) -> None:
         e = self._engine
