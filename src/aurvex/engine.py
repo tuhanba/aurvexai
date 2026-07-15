@@ -149,6 +149,7 @@ class Engine:
         # (fail-safe — never size a real order off an unsynced ledger).
         self._live_equity_synced: bool = False
         self._live_equity_alerted: bool = False
+        self._adapter_tripped_alerted: bool = False
         self._start_ms = now_ms()
         self.db.ensure_balance(cfg.initial_paper_balance)
         # Stamp the epoch (configurable via EPOCH_LABEL, default "wave3").
@@ -305,6 +306,7 @@ class Engine:
                     self._last_error = str(exc)[:200]
                     self.notifier.health_warning(f"cycle error: {exc}")
                 self._cycles += 1
+                self._check_adapter_health()
                 # Task 2: slow-timer Binance read-only refresh, spawned as a
                 # background thread task OUTSIDE the trade cycle's critical path.
                 self._maybe_refresh_binance()
@@ -431,6 +433,48 @@ class Engine:
             except (TypeError, ValueError):
                 continue
         return total
+
+    def _check_adapter_health(self) -> None:
+        """LIVE health alert: if the order adapter has TRIPPED (its sticky kill
+        switch — no more real orders until restart), fire ONE loud Telegram
+        alert so the owner knows live execution has halted. Recovery (a restart)
+        clears the flag. Never raises into the loop."""
+        adapter = getattr(self.executor, "order_adapter", None)
+        tripped = bool(getattr(adapter, "tripped", False)) if adapter else False
+        try:
+            if tripped and not self._adapter_tripped_alerted:
+                self._adapter_tripped_alerted = True
+                log.error("LIVE ADAPTER TRIPPED — real orders halted until restart")
+                self.notifier.send(
+                    "🛑 <b>LIVE adapter TRIPPED</b> — real order sending is "
+                    "HALTED until an engine restart. Open positions + their "
+                    "stop-losses are untouched on the exchange. Investigate, "
+                    "then restart to re-arm.", critical=True)
+            elif not tripped:
+                self._adapter_tripped_alerted = False   # reset after restart
+        except Exception as exc:                        # never break the loop
+            log.debug("adapter health check error: %s", exc)
+
+    def _real_upnl_by_symbol(self) -> dict:
+        """LIVE only: {symbol: real unrealized_pnl} from the account heartbeat,
+        so the digest / dashboard / /pnl can show Binance's EXACT uPnL instead
+        of a modeled estimate. Empty in paper or when no reading exists."""
+        if self.cfg.mode != "live":
+            return {}
+        hb = self.db.get_heartbeat("binance")
+        payload = hb.get("status") if isinstance(hb, dict) else None
+        if not isinstance(payload, dict):
+            return {}
+        out = {}
+        for p in payload.get("open_positions") or []:
+            sym = p.get("symbol")
+            if not sym:
+                continue
+            try:
+                out[sym] = float(p.get("unrealized_pnl") or 0.0)
+            except (TypeError, ValueError):
+                continue
+        return out
 
     def resume_day(self) -> dict:
         """Release today's profit lock NOW and rebase the day's accounting
@@ -1307,18 +1351,28 @@ class Engine:
         marks_meta = self.db.get_meta("marks") or {}
         marks = (marks_meta.get("prices", {})
                  if isinstance(marks_meta, dict) else {})
+        real_upnl = self._real_upnl_by_symbol()   # LIVE: exact Binance uPnL
         rows = []
         unreal_total = 0.0
         for t in opens:
             mark = marks.get(t.symbol)
             upnl = upnl_r = move = room = None
-            if mark and t.entry:
+            # uPnL: prefer the exchange's REAL unrealized (matches Binance
+            # exactly); fall back to the modeled mark-based estimate.
+            if t.symbol in real_upnl:
+                upnl = real_upnl[t.symbol]
+            elif mark and t.entry:
                 sign = 1 if t.side == LONG else -1
                 qty = t.position_size * t.remaining_fraction / t.entry
                 upnl = qty * (mark - t.entry) * sign
+            if upnl is not None:
                 unreal_total += upnl
                 risk = t.metadata.get("actual_risk_amount", t.max_loss) or 0
                 upnl_r = (upnl / risk) if risk > 0 else None
+            # Price metrics (move / stop room) stay mark-based — they describe
+            # price position, not P&L.
+            if mark and t.entry:
+                sign = 1 if t.side == LONG else -1
                 move = (mark - t.entry) / t.entry * 100.0 * sign
                 stop_ref = t.current_stop or t.stop_loss
                 sd = (t.entry - stop_ref) * sign

@@ -45,6 +45,45 @@ def test_real_unrealized_sums_live(tmp_path):
     eng.db.close()
 
 
+def test_position_rows_prefers_real_upnl(tmp_path):
+    from aurvex.models import LONG, Trade, TPTarget, now_ms
+    eng, cfg = _engine(tmp_path, mode="live")
+    t = Trade(symbol="ETH/USDT:USDT", side=LONG, setup_type="donchian_trend",
+              entry=3000.0, stop_loss=2850.0, tp_targets=[TPTarget(9e9, 1.0)],
+              position_size=1500.0, risk_pct=1.5, leverage=5, margin_used=300.0,
+              max_loss=7.5, score=70, threshold=60, status="OPEN", mode="live",
+              open_time=now_ms() - 3_600_000, metadata={"actual_risk_amount": 7.5})
+    eng.db.upsert_trade(t)
+    # Modeled mark (3060) would give qty 0.5 * 60 = +30.0; the exchange says +12.5.
+    eng.db.set_meta("marks", {"ts": now_ms(),
+                              "prices": {"ETH/USDT:USDT": 3060.0}})
+    eng.db.set_heartbeat("binance", {"open_positions": [
+        {"symbol": "ETH/USDT:USDT", "unrealized_pnl": 12.5}]})
+    rows, unreal_total, _ = eng.position_rows()
+    assert abs(rows[0]["upnl"] - 12.5) < 1e-9      # REAL, not modeled 30.0
+    assert abs(unreal_total - 12.5) < 1e-9
+    assert rows[0]["move_pct"] is not None         # price metric still mark-based
+    eng.db.close()
+
+
+def test_adapter_trip_alerts_once(tmp_path):
+    eng, cfg = _engine(tmp_path, mode="live")
+    sent = []
+    eng.notifier.send = lambda text, critical=False: (sent.append((text, critical)) or True)
+    adapter = getattr(eng.executor, "order_adapter", None)
+    assert adapter is not None
+    adapter.tripped = True
+    eng._check_adapter_health()
+    eng._check_adapter_health()                       # no duplicate alert
+    trips = [s for s in sent if "TRIPPED" in s[0]]
+    assert len(trips) == 1 and trips[0][1] is True    # exactly one, critical
+    # A restart clears the sticky trip -> the alert flag resets.
+    adapter.tripped = False
+    eng._check_adapter_health()
+    assert eng._adapter_tripped_alerted is False
+    eng.db.close()
+
+
 def test_resume_day_unlocks_and_rebases(tmp_path):
     from aurvex.engine import _day_ordinal
     eng, cfg = _engine(tmp_path, mode="live")

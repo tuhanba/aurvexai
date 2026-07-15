@@ -49,8 +49,29 @@ def _day_start_ms(cfg) -> int:
     return ((now_ms() + off) // 86_400_000) * 86_400_000 - off
 
 
+def _real_upnl_map(db) -> Dict[str, float]:
+    """{symbol: real unrealized_pnl} from the Binance account heartbeat, so the
+    dashboard can show the EXCHANGE's exact uPnL (LIVE) instead of a modeled
+    estimate. Empty when there is no reading (paper / keys absent)."""
+    hb = db.get_heartbeat("binance")
+    payload = hb.get("status") if isinstance(hb, dict) else None
+    out: Dict[str, float] = {}
+    if not isinstance(payload, dict):
+        return out
+    for p in payload.get("open_positions") or []:
+        sym = p.get("symbol")
+        if not sym:
+            continue
+        try:
+            out[sym] = float(p.get("unrealized_pnl") or 0.0)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def _trade_dict(t, balance: float = 0.0,
-                marks: Dict[str, float] | None = None) -> Dict[str, Any]:
+                marks: Dict[str, float] | None = None,
+                real_upnl: Dict[str, float] | None = None) -> Dict[str, Any]:
     """Serialize a Trade to a dict, including the six distinct leverage-concept numbers.
 
     T1b: price_move_to_stop_pct, account_risk_pct, margin_roe_at_stop_pct,
@@ -127,23 +148,31 @@ def _trade_dict(t, balance: float = 0.0,
         "exit_ltf": t.metadata.get("exit_ltf", ""),
         "age_min": round(max(0, now_ms() - (t.open_time or now_ms())) / 60_000.0, 1),
     }
-    # Live mark-to-market block (open trades only, when a mark exists).
+    # Live mark-to-market block (open trades only).
     mark = (marks or {}).get(t.symbol)
-    if t.status == "OPEN" and mark and entry:
+    rupnl = (real_upnl or {}).get(t.symbol)
+    if t.status == "OPEN" and (rupnl is not None or (mark and entry)):
         sign = 1 if t.side == "LONG" else -1
-        rem_notional = t.position_size * t.remaining_fraction
-        qty = rem_notional / entry
-        upnl = qty * (mark - entry) * sign
+        # uPnL: prefer the exchange's REAL unrealized (matches Binance exactly);
+        # fall back to the modeled mark-based estimate.
+        if rupnl is not None:
+            upnl = rupnl
+        else:
+            qty = (t.position_size * t.remaining_fraction) / entry
+            upnl = qty * (mark - entry) * sign
         risk_base = actual_risk or 0.0
         stop_ref = t.current_stop or t.stop_loss
         stop_dist = (entry - stop_ref) * sign
+        # Price metrics stay mark-based (they describe price, not P&L).
+        move = round((mark - entry) / entry * 100.0 * sign, 4) if (mark and entry) else None
+        room = (round((mark - stop_ref) * sign / stop_dist * 100.0, 1)
+                if (mark and stop_dist > 0) else None)
         d.update({
             "mark": mark,
             "unrealized_pnl": round(upnl, 4),
             "unrealized_r": round(upnl / risk_base, 3) if risk_base > 0 else None,
-            "price_move_pct": round((mark - entry) / entry * 100.0 * sign, 4),
-            "stop_room_pct": round((mark - stop_ref) * sign / stop_dist * 100.0,
-                                   1) if stop_dist > 0 else None,
+            "price_move_pct": move,
+            "stop_room_pct": room,
             "total_pnl": round(t.realized_pnl + upnl, 4),
         })
     else:
@@ -372,7 +401,8 @@ def create_app(cfg=None) -> Flask:
         balance = db.get_balance()
         marks_meta = db.get_meta("marks") or {}
         marks = marks_meta.get("prices", {}) if isinstance(marks_meta, dict) else {}
-        rows = [_trade_dict(t, balance=balance, marks=marks)
+        real_upnl = _real_upnl_map(db)   # LIVE: exact Binance uPnL per symbol
+        rows = [_trade_dict(t, balance=balance, marks=marks, real_upnl=real_upnl)
                 for t in db.get_open_trades(mode=cfg.mode)]
         upnls = [r["unrealized_pnl"] for r in rows
                  if r["unrealized_pnl"] is not None]
@@ -381,6 +411,7 @@ def create_app(cfg=None) -> Flask:
             "marks_ts": marks_meta.get("ts") if isinstance(marks_meta, dict) else None,
             "unrealized_total": round(sum(upnls), 4) if upnls else 0.0,
             "unrealized_marked": len(upnls),
+            "pnl_source": "exchange" if real_upnl else "marks",
             "equity": round(balance + (sum(upnls) if upnls else 0.0), 4),
         })
 
