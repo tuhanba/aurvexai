@@ -112,6 +112,14 @@ BLOCK = {
     "STALE_ENTRY_GUARD_BARS": "3",
     "KLINE_CACHE_ENABLED": "true",
     "UNIVERSE_REFRESH_SEC": "600",
+    # Owner decision 2026-07-14: cut execution + equity deviation WITHOUT
+    # rejecting trades. Faster loop = the MARKET entry fires closer to the bar
+    # close (less price drift) and marks/dashboard refresh ~4x more often.
+    "CYCLE_INTERVAL_SEC": "5",
+    # Real wallet balance + real unrealized (the +4% target basis) refresh every
+    # 60s instead of 300s, so equity tracks reality far more tightly and the
+    # +4% flatten fires close to a true +4%. Still light on Binance weight.
+    "BINANCE_ACCOUNT_REFRESH_SEC": "60",
     # Owner decision 2026-07-14: Telegram open-position digest every 30 min.
     "TG_POS_SUMMARY_MIN": "30",
     "AX_MODE": "paper",
