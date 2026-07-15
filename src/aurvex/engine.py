@@ -435,28 +435,32 @@ class Engine:
                 continue
         return total
 
+    def config_lines(self) -> list:
+        """Deployed-config summary lines (shared by the boot snapshot and the
+        /config command)."""
+        c = self.cfg
+        legs = " + ".join(s.name for s in self.specs)
+        lock = ("flatten" if c.daily_profit_flatten else "realized")
+        if c.daily_profit_adaptive:
+            lock += "/adaptive"
+        return [
+            f"legs: {legs}",
+            f"risk {c.risk_pct}% (band {c.min_risk_pct}-{c.max_risk_pct}) "
+            f"· lev {c.max_leverage}x",
+            f"max open {c.max_open_trades} · exposure "
+            f"{c.max_portfolio_exposure_pct:.0f}%",
+            f"daily lock +{c.daily_profit_lock_pct}% ({lock}) · kill "
+            f"{c.max_daily_loss_pct}%",
+            f"regime+edge {'on' if c.regime_edge_weight_enabled else 'off'} "
+            f"· cycle {c.cycle_interval_sec:.0f}s · acct refresh "
+            f"{c.binance_account_refresh_sec:.0f}s",
+        ]
+
     def _send_boot_config(self) -> None:
         """One-time deployed-config snapshot to Telegram on start. Never raises
         (a display feature must never block startup)."""
         try:
-            c = self.cfg
-            legs = " + ".join(s.name for s in self.specs)
-            lock = ("flatten" if c.daily_profit_flatten else "realized")
-            if c.daily_profit_adaptive:
-                lock += "/adaptive"
-            lines = [
-                f"legs: {legs}",
-                f"risk {c.risk_pct}% (band {c.min_risk_pct}-{c.max_risk_pct}) "
-                f"· lev {c.max_leverage}x",
-                f"max open {c.max_open_trades} · exposure "
-                f"{c.max_portfolio_exposure_pct:.0f}%",
-                f"daily lock +{c.daily_profit_lock_pct}% ({lock}) · kill "
-                f"{c.max_daily_loss_pct}%",
-                f"regime+edge {'on' if c.regime_edge_weight_enabled else 'off'} "
-                f"· cycle {c.cycle_interval_sec:.0f}s · acct refresh "
-                f"{c.binance_account_refresh_sec:.0f}s",
-            ]
-            self.notifier.boot_config(lines)
+            self.notifier.boot_config(self.config_lines())
         except Exception as exc:
             log.debug("boot config send error: %s", exc)
 

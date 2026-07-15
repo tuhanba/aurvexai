@@ -193,3 +193,52 @@ def test_unknown_command_no_crash():
     }
     asyncio.get_event_loop().run_until_complete(c._dispatch(upd))
     assert any("Unknown" in s or "unknown" in s.lower() for s in sent)
+
+
+# ---------------------------------------------------------------------------
+# 11. Cleaned-up command set: /config, /binance, /balance funding
+# ---------------------------------------------------------------------------
+
+def _engine_commander(tmp_path, mode="paper"):
+    from aurvex.engine import Engine
+    cfg = _cfg()
+    cfg.db_path = str(tmp_path / "cmd.db")
+    cfg.data_provider = "synthetic"
+    cfg.mode = mode
+    eng = Engine(cfg)
+    c = TelegramCommander(cfg.telegram_bot_token, cfg.telegram_chat_id, cfg)
+    c.set_engine(eng)
+    sent = []
+    c._send = lambda text: sent.append(text)
+    return eng, c, sent
+
+
+def test_config_command_lists_deployed_config(tmp_path):
+    eng, c, sent = _engine_commander(tmp_path)
+    c._cmd_config([])
+    assert sent and "Config" in sent[0]
+    assert "legs" in sent[0] and "risk" in sent[0]
+    eng.db.close()
+
+
+def test_binance_command_without_reading(tmp_path):
+    eng, c, sent = _engine_commander(tmp_path)
+    c._cmd_binance([])
+    assert sent and "No Binance account reading" in sent[0]
+    eng.db.close()
+
+
+def test_binance_command_shows_real_account(tmp_path):
+    eng, c, sent = _engine_commander(tmp_path)
+    eng.db.set_heartbeat("binance", {
+        "status": "connected",
+        "futures_balance": {"total": 204.29, "free": 190.0},
+        "funding_today": -0.09,
+        "open_positions": [
+            {"symbol": "BTC/USDT:USDT", "side": "long", "unrealized_pnl": 1.23}],
+    })
+    c._cmd_binance([])
+    body = sent[0]
+    assert "204.29" in body and "BTC/USDT:USDT" in body
+    assert "funding today" in body and "+1.23" in body
+    eng.db.close()

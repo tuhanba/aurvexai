@@ -209,19 +209,19 @@ class TelegramCommander(BaseCommander):
         handlers: Dict[str, Callable] = {
             "/start":      self._cmd_start,
             "/status":     self._cmd_status,
-            "/trades":     self._cmd_trades,
             "/pnl":        self._cmd_pnl,
             "/closed":     self._cmd_closed,
             "/summary":    self._cmd_summary,
             "/balance":    self._cmd_balance,
+            "/binance":    self._cmd_binance,
+            "/config":     self._cmd_config,
             "/health":     self._cmd_health,
-            "/profile":    self._cmd_profile,
             "/pause":      self._cmd_pause,
             "/resume":     self._cmd_resume,
+            "/resumeday":  self._cmd_resumeday,
             "/livecheck":  self._cmd_livecheck,
             "/livemode":   self._cmd_livemode,
             "/papermode":  self._cmd_papermode,
-            "/resumeday":  self._cmd_resumeday,
             "/stop":       self._cmd_stop,
         }
         handler = handlers.get(cmd)
@@ -239,19 +239,21 @@ class TelegramCommander(BaseCommander):
     def _cmd_start(self, _args: List[str]) -> None:
         self._send(
             "<b>AurvexAI Bot</b>\n\n"
+            "<b>View</b>\n"
             "/status    — engine status\n"
-            "/trades    — open positions\n"
-            "/pnl       — live PnL digest on demand\n"
+            "/pnl       — open positions + live PnL (real)\n"
             "/closed    — last 5 closed trades\n"
             "/summary   — today's PnL &amp; stats\n"
-            "/balance   — account balance\n"
-            "/health    — system health\n"
-            "/profile   — strategy profile\n"
-            "/pause     — pause new entries\n"
-            "/resume    — resume entries\n"
+            "/balance   — balance · today · funding\n"
+            "/binance   — real Binance account (cross-check)\n"
+            "/config    — deployed config snapshot\n"
+            "/health    — system health\n\n"
+            "<b>Control</b>\n"
+            "/pause · /resume — new entries\n"
+            "/resumeday — release today's profit lock\n"
             "/livecheck — live readiness\n"
-            "/livemode confirm &lt;token&gt; — queue live mode\n"
-            "/papermode — queue paper mode\n"
+            "/livemode confirm &lt;token&gt; — queue live\n"
+            "/papermode — queue paper\n"
             "/stop      — shutdown engine"
         )
 
@@ -276,26 +278,6 @@ class TelegramCommander(BaseCommander):
             f"uptime:   {h}h {m}m\n"
             f"profile:  {e.cfg.strategy_profile}"
         )
-
-    def _cmd_trades(self, _args: List[str]) -> None:
-        e = self._engine
-        if e is None:
-            self._send("Engine not attached.")
-            return
-        opens = e.db.get_open_trades(mode=e.cfg.mode)
-        if not opens:
-            self._send("No open trades.")
-            return
-        marks = (e.db.get_meta("marks") or {}).get("prices", {})
-        lines = ["<b>Open trades</b>"]
-        for t in opens:
-            mark = marks.get(t.symbol, t.entry or 0)
-            upnl = (mark - t.entry) * (t.position_size / t.entry) * (
-                1 if t.side == "LONG" else -1) if t.entry else 0
-            lines.append(
-                f"{t.side} {t.symbol}  lev:{t.leverage}x\n"
-                f"  entry:{t.entry:.5g}  mark:{mark:.5g}  uPnL:{upnl:+.2f}")
-        self._send("\n".join(lines))
 
     def _cmd_pnl(self, _args: List[str]) -> None:
         """On-demand version of the periodic open-positions digest."""
@@ -355,11 +337,15 @@ class TelegramCommander(BaseCommander):
         day_pnl = e.db.daily_realized_pnl(
             _utc_day_start_ms(offset_hours=e.cfg.day_boundary_offset_hours),
             mode=e.cfg.mode)
-        self._send(
-            f"<b>Balance</b>\n"
-            f"current:  {bal:.2f} USDT\n"
-            f"today:    {day_pnl:+.2f} USDT"
-        )
+        msg = (f"<b>Balance</b>\n"
+               f"current:  {bal:.2f} USDT\n"
+               f"today:    {day_pnl:+.2f} USDT")
+        hb = e.db.get_heartbeat("binance")
+        payload = hb.get("status") if isinstance(hb, dict) else None
+        funding = payload.get("funding_today") if isinstance(payload, dict) else None
+        if funding is not None:
+            msg += f"\nfunding:  {funding:+.4f} USDT"
+        self._send(msg)
 
     def _cmd_health(self, _args: List[str]) -> None:
         e = self._engine
@@ -381,17 +367,43 @@ class TelegramCommander(BaseCommander):
             f"entries:   {'PAUSED' if self._paused else 'active'}"
         )
 
-    def _cmd_profile(self, _args: List[str]) -> None:
+    def _cmd_config(self, _args: List[str]) -> None:
         e = self._engine
         if e is None:
             self._send("Engine not attached.")
             return
-        self._send(
-            f"<b>Strategy profile</b>\n"
-            f"active:   {e.cfg.strategy_profile}\n"
-            f"mode:     {e.cfg.mode}\n"
-            f"lev pol:  {e.cfg.leverage_policy}"
-        )
+        lines = e.config_lines() if hasattr(e, "config_lines") else []
+        body = "\n".join(f"· {x}" for x in lines) or "(unavailable)"
+        self._send(f"⚙️ <b>Config</b> · {e.cfg.mode.upper()}\n{body}")
+
+    def _cmd_binance(self, _args: List[str]) -> None:
+        """Real Binance account snapshot (cross-check the engine vs reality)."""
+        e = self._engine
+        if e is None:
+            self._send("Engine not attached.")
+            return
+        hb = e.db.get_heartbeat("binance")
+        payload = hb.get("status") if isinstance(hb, dict) else None
+        if not isinstance(payload, dict):
+            self._send("No Binance account reading yet "
+                       "(paper / keys absent / first refresh pending).")
+            return
+        fb = payload.get("futures_balance") or {}
+        lines = [f"<b>Binance account</b> · {payload.get('status', '?')}",
+                 f"wallet: {fb.get('total', '?')} USDT (free {fb.get('free', '?')})"]
+        funding = payload.get("funding_today")
+        if funding is not None:
+            lines.append(f"funding today: {funding:+.4f} USDT")
+        positions = payload.get("open_positions") or []
+        if positions:
+            lines.append(f"positions ({len(positions)}):")
+            for p in positions:
+                up = p.get("unrealized_pnl") or 0.0
+                lines.append(f"  {p.get('side', '?')} {p.get('symbol', '?')} "
+                             f"· uPnL {up:+.2f}")
+        else:
+            lines.append("positions: none")
+        self._send("\n".join(str(x) for x in lines))
 
     def _cmd_pause(self, _args: List[str]) -> None:
         self._paused = True
