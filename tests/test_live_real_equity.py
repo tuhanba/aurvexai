@@ -66,6 +66,18 @@ def test_position_rows_prefers_real_upnl(tmp_path):
     eng.db.close()
 
 
+def test_boot_config_sends_summary(tmp_path):
+    eng, cfg = _engine(tmp_path, mode="live")
+    captured = []
+    eng.notifier.boot_config = lambda lines: captured.append(list(lines))
+    eng._send_boot_config()
+    assert len(captured) == 1
+    body = " ".join(captured[0])
+    for token in ("legs:", "risk", "lev", "daily lock", "cycle"):
+        assert token in body
+    eng.db.close()
+
+
 def test_adapter_trip_alerts_once(tmp_path):
     eng, cfg = _engine(tmp_path, mode="live")
     sent = []

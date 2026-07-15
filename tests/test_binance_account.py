@@ -63,6 +63,13 @@ class FakeExchange:
         self._record("fetch_trading_fees")
         return {"BTC/USDT:USDT": {"maker": 0.0002, "taker": 0.0005}}
 
+    def fetch_funding_history(self, symbol=None, since=None, limit=None, params=None):
+        self._record("fetch_funding_history")
+        return [
+            {"symbol": "BTC/USDT:USDT", "amount": -0.12, "timestamp": _now_ms()},
+            {"symbol": "ETH/USDT:USDT", "amount": 0.03, "timestamp": _now_ms()},
+        ]
+
     def load_markets(self):
         self._record("load_markets")
         return {
@@ -127,6 +134,7 @@ def test_happy_path_fills_heartbeat_and_symbol_filters(cfg, tmp_path):
     assert len(payload["open_positions"]) == 1     # zero-contract position dropped
     assert payload["open_orders"][0]["symbol"] == "BTC/USDT:USDT"
     assert payload["fees"] == {"maker": 0.0002, "taker": 0.0005}
+    assert payload["funding_today"] == -0.09        # -0.12 paid + 0.03 received
     assert payload["permissions"]["withdraw_enabled"] is False
     assert payload["symbol_filters_cached"] == 1
     assert payload["last_ok_ts"] is not None

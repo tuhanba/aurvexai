@@ -213,6 +213,12 @@ class BaseNotifier:
             f"\n{_esc(mode.upper())}{epoch_part} · balance {balance:.2f} USDT"
         )
 
+    def boot_config(self, lines) -> None:
+        """One-time deployed-config snapshot on start — owner sees the full live
+        state (legs, risk, leverage, daily lock, cadence) at a glance."""
+        body = "\n".join(f"· {_esc(str(x))}" for x in lines)
+        self.send(f"⚙️ <b>Config</b>\n{body}")
+
     def system_stopped(self, reason: str = "") -> None:
         tail = f"\n{reason}" if reason else ""
         self.send(f"🔴 <b>AurvexAI stopped</b>{tail}")

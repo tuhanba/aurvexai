@@ -284,6 +284,21 @@ class BinanceAccountAdapter:
         # Fee tier / commission rates (best-effort).
         payload["fees"] = self._fetch_fees(fut)
 
+        # Net funding paid/received so far this LOGICAL day (offset-aware),
+        # best-effort. Funding already moves the real wallet balance we sync;
+        # this is for VISIBILITY (a real holding cost on a swing book). Signed:
+        # negative = paid, positive = received.
+        try:
+            _DAY = 86_400_000
+            _off = int(getattr(self.cfg, "day_boundary_offset_hours", 0) * 3_600_000)
+            day_start = ((ts + _off) // _DAY) * _DAY - _off
+            hist = fut.fetch_funding_history(None, day_start, 200)
+            payload["funding_today"] = round(
+                sum(_f(h.get("amount")) for h in (hist or [])), 6)
+        except Exception as exc:
+            log.debug("funding history fetch failed: %s", exc)
+            payload["funding_today"] = None
+
         # exchangeInfo symbol filters + leverage brackets → symbol_filters cache.
         payload["symbol_filters_cached"] = self._cache_symbol_filters(fut, symbols, ts)
 

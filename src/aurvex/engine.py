@@ -258,6 +258,7 @@ class Engine:
             log.debug("telegram verify error: %s", exc)
         self._persist_telegram_health()
         self.notifier.system_started(self.cfg.mode, bal, epoch=self.cfg.epoch_label)
+        self._send_boot_config()
         self._persist_telegram_health()
         self._risk_modulation_preflight()
         # Check for a queued mode-request from the commander (written by /livemode
@@ -433,6 +434,31 @@ class Engine:
             except (TypeError, ValueError):
                 continue
         return total
+
+    def _send_boot_config(self) -> None:
+        """One-time deployed-config snapshot to Telegram on start. Never raises
+        (a display feature must never block startup)."""
+        try:
+            c = self.cfg
+            legs = " + ".join(s.name for s in self.specs)
+            lock = ("flatten" if c.daily_profit_flatten else "realized")
+            if c.daily_profit_adaptive:
+                lock += "/adaptive"
+            lines = [
+                f"legs: {legs}",
+                f"risk {c.risk_pct}% (band {c.min_risk_pct}-{c.max_risk_pct}) "
+                f"· lev {c.max_leverage}x",
+                f"max open {c.max_open_trades} · exposure "
+                f"{c.max_portfolio_exposure_pct:.0f}%",
+                f"daily lock +{c.daily_profit_lock_pct}% ({lock}) · kill "
+                f"{c.max_daily_loss_pct}%",
+                f"regime+edge {'on' if c.regime_edge_weight_enabled else 'off'} "
+                f"· cycle {c.cycle_interval_sec:.0f}s · acct refresh "
+                f"{c.binance_account_refresh_sec:.0f}s",
+            ]
+            self.notifier.boot_config(lines)
+        except Exception as exc:
+            log.debug("boot config send error: %s", exc)
 
     def _check_adapter_health(self) -> None:
         """LIVE health alert: if the order adapter has TRIPPED (its sticky kill
