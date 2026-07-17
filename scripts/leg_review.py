@@ -70,7 +70,7 @@ V17 = V12 + EXTRA5
 MAJORS5 = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
 MONTHS = [f"{y}-{m:02d}" for y in range(2020, 2027)
           for m in range(1, 13)][6:78]                  # 2020-07 .. 2026-06
-N_TRIALS = 205                                          # 197 prior + 8 cells
+N_TRIALS = 207                       # 197 prior + 8 review cells + 2 q20 cells
 RECENCY_MS = 1_735_689_600_000                          # 2025-01-01T00:00Z
 LONG_FIRST_MS = 1_604_188_800_000                       # listed by 2020-10-31
 
@@ -93,6 +93,13 @@ LEGS = {
     "ichimoku_17c3y":      ("ichimoku_trend", "4h", "1d", V17, "common", {}),
     "bandwalk_ts12_5c6y":  ("band_walk", "4h", "1d", MAJORS5, "long6y",
                             {"time_stop_bars": 12}),
+    # Follow-up Phase-2 cells (leg review §2): revert the FAST q=30 loosening
+    # to the validated q=20 — the prime suspect for squeeze@4h measuring at
+    # half its reference.
+    "sqz4h_q20_11c6y":     ("squeeze_breakout", "4h", "1d", V12, "long6y",
+                            {"time_stop_bars": 24, "sqz_pctile": 20}),
+    "sqz4h_q20_17c3y":     ("squeeze_breakout", "4h", "1d", V17, "common",
+                            {"time_stop_bars": 24, "sqz_pctile": 20}),
 }
 
 # Validated references for context in the report (SYSTEM_STATE §2; the FAST
