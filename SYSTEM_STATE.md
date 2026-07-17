@@ -269,6 +269,15 @@ slow), not faster direction-calling.
   re-replicated), but the paper window and the Phase-1 leg review must
   treat donchian recency as the primary open question. Squeeze@4h was
   strong in BOTH halves including 2025+ (as of its validation).
+- **Phase-1 leg review (2026-07-17, `docs/review/LEG_REVIEW_2026-07-17.md`):**
+  all five deployed legs re-measured as deployed (real exits, DSR
+  n_trials=205). Recency (2025+) verdicts: **ichimoku is the only leg
+  measurably alive** (+0.142R, t 1.75; 6y +0.234, DSR +4.24); band_walk
+  weak-positive (+0.078); donchian ≈0 (−0.031/494); squeeze@4h ≈0;
+  **squeeze@1h re-measures +0.018R/4031 trades (P(≤0)=0.25, MaxDD 50%) —
+  RETIRE candidate.** The 17-coin universe dilutes the 4h legs heavily
+  (donchian +0.257→+0.061, ichimoku +0.234→+0.103 on the deployment frame).
+  Owner decisions pending; recommendations in the report §4.
 - **BBW contraction gate on donchian (campaign-7 F7): NO-GO (2026-07-17).**
   The simplified-exit promise (+0.118→+0.169R) did NOT survive the real
   channel-exit engine: per-trade Exp-R unchanged (+0.28 vs +0.27), total R
