@@ -78,6 +78,15 @@ class ReconcileEnforcer:
             self._client = self._factory("binanceusdm",
                                          self.cfg.binance_api_key,
                                          self.cfg.binance_api_secret)
+            # ccxt raises (not warns) on symbol-less fetch_open_orders unless
+            # this acknowledgement option is set — it broke every reconcile
+            # pass on the live server (2026-07-17). Reconcile NEEDS the global
+            # view: unknown resting orders are exactly what it looks for.
+            try:
+                self._client.options[
+                    "warnOnFetchOpenOrdersWithoutSymbol"] = False
+            except Exception:      # fake/test clients without .options
+                pass
         return self._client
 
     def _safe(self, msg: object) -> str:
@@ -119,7 +128,6 @@ class ReconcileEnforcer:
     def _run_inner(self, report: Dict[str, Any]) -> None:
         ex = self._ex()
         positions = ex.fetch_positions() or []
-        open_orders = ex.fetch_open_orders() or []
 
         exch_qty: Dict[str, float] = {}
         for pos in positions:
@@ -128,11 +136,31 @@ class ReconcileEnforcer:
                 sym = pos.get("symbol", "")
                 exch_qty[sym] = exch_qty.get(sym, 0.0) + amt
 
+        open_trades = self.db.get_open_trades(mode=self.cfg.mode)
+
+        # Global open-orders view; if the symbol-less call fails (older ccxt /
+        # strict rate-limit guard), fall back to per-symbol fetches over every
+        # symbol reconcile actually needs (exchange positions ∪ DB opens) so a
+        # transport quirk can never take the whole pass down again.
+        try:
+            open_orders = ex.fetch_open_orders() or []
+        except Exception as exc:
+            log.warning("global fetch_open_orders failed (%s) — falling back "
+                        "to per-symbol", self._safe(exc))
+            open_orders = []
+            for sym in sorted(set(exch_qty)
+                              | {t.symbol for t in open_trades}):
+                try:
+                    open_orders.extend(ex.fetch_open_orders(sym) or [])
+                except Exception as exc2:
+                    report["errors"].append(
+                        f"fetch_open_orders {sym}: {self._safe(exc2)}")
+                    log.error("fetch_open_orders %s failed: %s",
+                              sym, self._safe(exc2))
+
         orders_by_symbol: Dict[str, List[Dict[str, Any]]] = {}
         for o in open_orders:
             orders_by_symbol.setdefault(o.get("symbol", ""), []).append(o)
-
-        open_trades = self.db.get_open_trades(mode=self.cfg.mode)
 
         # 1) DB says OPEN, exchange says flat → close the ghost row + alert.
         for t in open_trades:

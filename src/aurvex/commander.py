@@ -68,14 +68,35 @@ def write_mode_request(mode: str, reason: str = "") -> None:
         json.dump(payload, f)
 
 
-def read_mode_request() -> Optional[Dict[str, Any]]:
-    """Read and consume (delete) the pending mode-request file."""
+MODE_REQUEST_MAX_AGE_SEC = 3600
+
+
+def read_mode_request(max_age_sec: float = MODE_REQUEST_MAX_AGE_SEC
+                      ) -> Optional[Dict[str, Any]]:
+    """Read and consume (delete) the pending mode-request file.
+
+    2026-07-17 incident hygiene: a /livemode request written while the engine
+    was STOPPED sat in the shared volume for a day and flipped the next clean
+    start into LIVE mode. A mode change is a human decision made NOW — a
+    request older than ``max_age_sec`` (or missing its timestamp) is stale:
+    it is consumed and REFUSED loudly, never applied.
+    """
     if not os.path.exists(_MODE_REQUEST_FILE):
         return None
     try:
         with open(_MODE_REQUEST_FILE) as f:
             data = json.load(f)
         os.remove(_MODE_REQUEST_FILE)
+        requested_at = data.get("requested_at")
+        age = (time.time() - float(requested_at)) if requested_at else None
+        if age is None or age > max_age_sec or age < 0:
+            log.warning("STALE mode request REFUSED (mode=%s, age=%s) — a "
+                        "queued mode change older than %ds is never applied; "
+                        "re-issue /livemode or /papermode if intended.",
+                        data.get("mode"),
+                        f"{age:.0f}s" if age is not None else "unknown",
+                        int(max_age_sec))
+            return None
         return data
     except Exception as exc:
         log.warning("mode_request read error: %s", exc)
