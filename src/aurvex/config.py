@@ -476,6 +476,15 @@ class Config:
     don_tp_r: float = field(default_factory=lambda: _float("DON_TP_R", 1000.0))
     max_stop_dist_pct_don: float = field(
         default_factory=lambda: _float("MAX_STOP_DIST_PCT_DON", 12.0))
+    # BBW contraction gate on the donchian entry (campaign-7 F7 candidate,
+    # CONDITIONAL_TA_WAVE_REPORT.md): the breakout is taken ONLY when the
+    # signal bar's Bollinger Band Width percentile (BB(20,2) vs the trailing
+    # 500 bars) is BELOW this value — breakout-from-contraction. 0 = OFF
+    # (default; entry byte-identical to the validated unconditional donchian).
+    # PHASE-2 RESEARCH KNOB: enabling it in production requires the promotion
+    # pipeline (walk-forward + DSR + bootstrap + shadow A/B + owner decision).
+    don_bbw_gate_pctile: float = field(
+        default_factory=lambda: _float("DON_BBW_GATE_PCTILE", 0.0))
 
     # -- Ichimoku trend (ichimoku_trend profile) ----------------------------
     # I1 TK-cross "strong": Tenkan(9) x Kijun(26) cross while price is on the

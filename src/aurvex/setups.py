@@ -529,6 +529,18 @@ def detect_donchian_trend(ctx: Context) -> Optional[Signal]:
         side = SHORT
     else:
         return None
+    # Optional BBW contraction gate (campaign-7 F7; default OFF → identical
+    # to the validated unconditional entry). Checked only after the trigger
+    # fired, so the O(look·n) percentile stays off the per-bar hot path.
+    # Faithful to the research cell: the percentile is read on the bar BEFORE
+    # the breakout (`pct[i-1]` in f7_cond_donchian) — the market must be in
+    # contraction going INTO the break; the breakout bar itself inflates BBW.
+    # Insufficient history returns None from bbw_percentile → no entry: the
+    # gate must never pass on unmeasured contraction.
+    if cfg.don_bbw_gate_pctile > 0:
+        pct = ind.bbw_percentile(closes[:sig_i])
+        if pct is None or pct >= cfg.don_bbw_gate_pctile:
+            return None
     stop_dist = cfg.don_atr_mult * ctx.ltf_atr
     stop = close - stop_dist if side == LONG else close + stop_dist
     excess = (close - hh) if side == LONG else (ll - close)
@@ -779,6 +791,10 @@ def _parse_one_spec(base: Config, spec: str) -> Optional[StrategySpec]:
         elif o.startswith("q="):
             # squeeze percentile (validated more-action option Q30 @4h)
             overrides["sqz_pctile"] = int(o[2:])
+        elif o.startswith("bbw="):
+            # donchian BBW contraction gate percentile (campaign-7 F7).
+            # Deployment requires the Phase-2 promotion pipeline first.
+            overrides["don_bbw_gate_pctile"] = float(o[4:])
         elif o.startswith("r="):
             # Per-leg risk %, clamped to the account risk band. This is the
             # honest form of "dynamic leverage": sizing follows the leg's

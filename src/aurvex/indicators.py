@@ -195,6 +195,42 @@ def bollinger(closes: Sequence[Number], n: int = 20,
     return {"mid": mid, "upper": mid + k * std, "lower": mid - k * std, "std": std}
 
 
+def bbw_percentile(closes: Sequence[Number], n: int = 20, k: float = 2.0,
+                   look: int = 500, min_hist: int = 30) -> Optional[float]:
+    """Percentile of the LAST bar's Bollinger Band Width vs its trailing window.
+
+    Faithful port of the campaign-7 research definition
+    (scripts/swing_conditional_wave.py::bbw_pctile): BBW = (upper − lower) /
+    mid on BB(n, k) with POPULATION std; the current bar's BBW is compared
+    against the BBW of up to ``look`` STRICTLY PRIOR bars (the current bar is
+    excluded from its own reference window) and the returned value is
+    ``100 · mean(prior < current)`` — 0 means the tightest squeeze on record,
+    100 the widest. Returns ``None`` when fewer than ``min_hist`` prior BBW
+    values exist, so a gate consuming this cannot fire on thin history.
+
+    Cost note: intended to be called only AFTER a trigger fired (rare), so the
+    O(look·n) pure-python loop stays off the per-bar hot path.
+    """
+    if len(closes) < n or min_hist < 1:
+        return None
+    # BBW for each bar in the reference region + the current bar. Only the
+    # last (look + 1) bars can matter.
+    start = max(n - 1, len(closes) - 1 - look)
+    bbws: List[float] = []
+    for i in range(start, len(closes)):
+        window = closes[i - n + 1: i + 1]
+        mean = sum(window) / n
+        var = sum((x - mean) ** 2 for x in window) / n
+        std = var ** 0.5
+        mid = mean if abs(mean) > 1e-12 else 1e-12
+        bbws.append((2.0 * k * std) / mid)
+    cur = bbws[-1]
+    prior = bbws[:-1]
+    if len(prior) < min_hist:
+        return None
+    return 100.0 * sum(1 for b in prior if b < cur) / len(prior)
+
+
 # ---------------------------------------------------------------------------
 # Supertrend
 # ---------------------------------------------------------------------------
