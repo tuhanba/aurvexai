@@ -305,6 +305,17 @@ slow), not faster direction-calling.
   harness test with real channel exits; (c) reversal TA (RSI divergence)
   fails at swing TFs too; F1-contraction-break replicates squeeze (89%
   overlap — independent replication, not a new leg). Trial count now 192.
+- **Campaign 8 (2026-07-17, swing ICT @4h — the LAST untested TA family):
+  4/4 NO-GO.** FVG-retest continuation +0.010 (H2 −0.035), order-block
+  retest −0.052 (H2 t −2.2), sweep-reclaim@4h −0.205 (t −7.8 — fading the
+  swing extreme is measurably ANTI-edge, consistent with the trend legs
+  being the book), FVG-fade −0.124 (t −10.5). `scripts/swing_ict_wave.py`,
+  11 coins 5.8y, cost+funding in R, DSR n_trials=211. ICT/SMC is now dead
+  at BOTH horizons (1m/5m campaign 5; 4h here). **With this, the TA search
+  space testable on archived OHLCV is exhausted at every horizon.** What
+  remains is not TA: the carry executor port (validated, below), basis
+  spread (own research), pairs/stat-arb (needs two-leg infra), L2/tick
+  (data does not exist). Trial count now **215**.
 - **Carry executor**: engine port of the validated funding-harvest strategy
   (cross-margin, universe 5) as a separate low-frequency engine with its own
   risk rules. This is engineering, not research.
