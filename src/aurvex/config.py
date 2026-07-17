@@ -695,8 +695,50 @@ class Config:
     risk_throttle_mode: str = field(
         default_factory=lambda: _str("RISK_THROTTLE_MODE", "report_only"))
 
+    # -- Feed watchdog (P0.1 — 2026-07-16 stale-feed incident) ---------------
+    # Age thresholds for the newest CLOSED bar per timeframe, expressed as a
+    # grace period past the bar interval (a new bar closes every tf, so the
+    # steady-state age is < tf). Defaults: 1h → alert 75m / halt 90m;
+    # 4h → alert 4h15m / halt 4h30m. On ALERT: Telegram warning + dashboard
+    # badge. On HALT: ALL new entries blocked, manage-only, critical alert,
+    # risk state reported UNKNOWN (a kill switch on stale data is false safety).
+    feed_alert_grace_min: float = field(
+        default_factory=lambda: _float("FEED_ALERT_GRACE_MIN", 15.0))
+    feed_halt_grace_min: float = field(
+        default_factory=lambda: _float("FEED_HALT_GRACE_MIN", 30.0))
+    # Optional per-TF overrides, minutes from bar close: "1h=75/90,4h=255/270".
+    feed_tf_thresholds: str = field(
+        default_factory=lambda: _str("FEED_TF_THRESHOLDS", ""))
+
+    # -- Reconciliation enforcement (P0.3 — exchange is truth) ---------------
+    # Full reconcile pass every N seconds (startup + timer; N ≤ 300 per the
+    # live-safety mandate): positions + open orders fetched from Binance and
+    # diffed against DB state; DB ghosts closed (EXCHANGE_RECONCILE); unknown
+    # exchange positions raise a CRITICAL alert (never adopted); every open
+    # position must have its protective stop resting ON the exchange —
+    # recreated if missing (armed live) or critically alerted (disarmed).
+    reconcile_interval_sec: float = field(
+        default_factory=lambda: _float("RECONCILE_INTERVAL_SEC", 120.0))
+    # Wallet freshness: in live mode a wallet reading older than this is a
+    # health failure (the incident's frozen 196.72 balance), alerted loudly.
+    wallet_stale_sec: float = field(
+        default_factory=lambda: _float("WALLET_STALE_SEC", 600.0))
+
+    # -- Exposure / leverage integrity (P0.4) --------------------------------
+    # Alert ceiling for effective account leverage (MTM notional / equity).
+    # 0 = derive from max_portfolio_exposure_pct/100 (the cap itself).
+    max_account_leverage_alert: float = field(
+        default_factory=lambda: _float("MAX_ACCOUNT_LEVERAGE_ALERT", 0.0))
+
     # -- Logging -----------------------------------------------------------
     log_level: str = field(default_factory=lambda: _str("LOG_LEVEL", "INFO"))
+    # Optional rotating file log (P0.2). Empty = stderr only (container logs;
+    # docker-compose now also rotates those via the json-file driver options).
+    log_file: str = field(default_factory=lambda: _str("LOG_FILE", ""))
+    log_max_bytes: int = field(
+        default_factory=lambda: _int("LOG_MAX_BYTES", 10_000_000))
+    log_backup_count: int = field(
+        default_factory=lambda: _int("LOG_BACKUP_COUNT", 5))
 
     # ---------------------------------------------------------------------
     def validate(self) -> None:

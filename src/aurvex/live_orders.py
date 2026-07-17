@@ -329,6 +329,54 @@ class LiveOrderAdapter:
                               filled_qty=prev_filled + filled,
                               attempts=attempt, emergency=True)
 
+    # -- protective stops (P0.3: stops REST ON THE EXCHANGE) --------------------
+    def place_protective_stop(self, symbol: str, trade_side: str,
+                              stop_price: float) -> Dict[str, Any]:
+        """Place a reduce-only STOP_MARKET (closePosition) at ``stop_price``.
+
+        P0.3 contract: every open position must have its protective stop
+        resting ON the exchange — engine death must never strand a naked
+        position (on 2026-07-16 it did). closePosition=true flattens whatever
+        size exists when the stop triggers, so partial fills and scale-outs
+        can never leave an unprotected remainder. Requires the armed adapter
+        (five-gate lock); disarmed calls report and do nothing.
+        """
+        ok, why = self.engaged()
+        if not ok:
+            return {"ok": False, "reason": f"disarmed: {why}"}
+        close_side = "sell" if trade_side == "LONG" else "buy"
+        try:
+            o = self._ex().create_order(
+                symbol, "stop_market", close_side, None, None,
+                {"stopPrice": stop_price, "closePosition": True,
+                 "reduceOnly": True, "workingType": "MARK_PRICE"})
+            oid = str(o.get("id", ""))
+            log.warning("protective stop placed %s %s @ %s (order %s)",
+                        symbol, close_side, stop_price, oid)
+            return {"ok": True, "order_id": oid}
+        except Exception as exc:
+            log.error("protective stop placement FAILED %s @ %s: %s",
+                      symbol, stop_price, self._safe(exc))
+            return {"ok": False, "reason": self._safe(exc)}
+
+    @staticmethod
+    def is_protective_order(order: Dict[str, Any], trade_side: str) -> bool:
+        """True if an open-order dict is a resting protective stop for a
+        position of ``trade_side`` (reduce-only/close-position STOP order on
+        the closing side). Tolerant of ccxt/raw field spellings."""
+        otype = str(order.get("type", "")).lower().replace("-", "_")
+        if "stop" not in otype:
+            return False
+        info = order.get("info") or {}
+        reduce_only = bool(order.get("reduceOnly")
+                           or info.get("reduceOnly")
+                           or order.get("closePosition")
+                           or info.get("closePosition"))
+        if not reduce_only:
+            return False
+        close_side = "sell" if trade_side == "LONG" else "buy"
+        return str(order.get("side", "")).lower() == close_side
+
     # -- reconciliation ---------------------------------------------------------
     def reconcile(self, open_trades: List[Any]) -> Dict[str, Any]:
         """Compare exchange positions to the engine's open trades (report-only)."""

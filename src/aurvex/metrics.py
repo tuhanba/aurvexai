@@ -23,13 +23,21 @@ def _safe_div(a: float, b: float) -> float:
 
 
 def compute_metrics(trades: List[Trade]) -> Dict[str, Any]:
-    closed = [t for t in trades if t.status == "CLOSED"]
+    all_closed = [t for t in trades if t.status == "CLOSED"]
+    # MANUAL_CLOSE / EXCHANGE_RECONCILE rows carry NULL realized_pnl by design
+    # (the engine did not observe the exit; Binance is the accounting source —
+    # incident 2026-07-16). They are excluded from PnL math and surfaced as an
+    # explicit count so they can never silently skew expectancy.
+    closed = [t for t in all_closed if t.realized_pnl is not None]
+    unpriced = len(all_closed) - len(closed)
     n = len(closed)
     if n == 0:
-        return _empty_metrics()
+        out = _empty_metrics()
+        out["unpriced_closes"] = unpriced
+        return out
 
     pnls = [t.realized_pnl for t in closed]
-    r_multiples = [t.realized_pnl_pct for t in closed]
+    r_multiples = [t.realized_pnl_pct or 0.0 for t in closed]
     wins = [p for p in pnls if p > 0]
     losses = [p for p in pnls if p <= 0]
 
@@ -70,6 +78,7 @@ def compute_metrics(trades: List[Trade]) -> Dict[str, Any]:
 
     return {
         "total_trades": n,
+        "unpriced_closes": unpriced,
         "winrate": round(winrate, 2),
         "expectancy": round(expectancy, 4),
         "expectancy_r": round(expectancy_r, 4),
@@ -122,7 +131,8 @@ def _breakdown(trades: List[Trade], key_fn) -> List[Dict[str, Any]]:
 
 def _empty_metrics() -> Dict[str, Any]:
     return {
-        "total_trades": 0, "winrate": 0.0, "expectancy": 0.0, "expectancy_r": 0.0,
+        "total_trades": 0, "unpriced_closes": 0,
+        "winrate": 0.0, "expectancy": 0.0, "expectancy_r": 0.0,
         "profit_factor": None, "avg_r": 0.0, "avg_win": 0.0, "avg_loss": 0.0,
         "gross_profit": 0.0, "gross_loss": 0.0, "net_pnl": 0.0, "total_fees": 0.0,
         "tp1_hit_rate": 0.0, "sl_hit_rate": 0.0, "tp_closes": 0, "sl_closes": 0,

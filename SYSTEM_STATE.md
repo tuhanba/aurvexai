@@ -322,7 +322,42 @@ report says ELIGIBLE; both reversible, neither ever blocks a trade.
 
 ## 12. Test floor
 
-684 passing (`pytest`), including: no-lookahead, one-fill-per-closed-candle,
+778 passing (`pytest`), including: no-lookahead, one-fill-per-closed-candle,
 paper/live parity, multi-strategy allocation, same-profile-two-TF routing,
 per-strategy universe filter, exposure caps, live-gate disarmed-by-default,
-stale-entry guard, kline cache, shadow readiness.
+stale-entry guard, kline cache, shadow readiness, and the P0 live-safety
+exit criteria (`tests/test_p0_live_safety.py`).
+
+## 13. P0 live-safety layer (2026-07-17, post-incident)
+
+After the 2026-07-16 stale-feed incident (engine ran LIVE 4h18m on dead data
+with zero log output — RCA: `docs/incidents/2026-07-16-stale-feed.md`) the
+engine is **STOPPED** and stays stopped until the P0 exit criteria pass on
+the server AND the owner explicitly restarts it. This branch ships the P0
+layer:
+
+- **Feed watchdog** (`watchdog.py`): per-TF closed-bar age; OK→ALERT→HALT
+  (defaults: tf+15m alert, tf+30m halt; `FEED_TF_THRESHOLDS` overrides). On
+  HALT: ALL new entries blocked, manage-only, Telegram critical, dashboard
+  badge, **risk state = UNKNOWN** (a kill switch on stale data is false
+  safety). Synthetic provider exempt.
+- **Data-layer observability**: every fetch exception logs at ERROR (first
+  per cycle with traceback); one `feed:` INFO summary line per cycle; the
+  cycle heartbeat line always carries `data_age/feed/risk_state/exposure/
+  eff_lev`; background tasks supervised (restart + backoff + alert).
+- **Reconcile = enforcement** (`reconcile.py`, live+keys only): startup +
+  every `RECONCILE_INTERVAL_SEC` (120s). Exchange is truth: DB ghosts closed
+  as `EXCHANGE_RECONCILE` (close_price/PnL **NULL** — Binance is the
+  accounting source; analytics tolerate NULL), unknown exchange positions →
+  CRITICAL (never adopted), protective stops must REST on-exchange
+  (reduce-only STOP_MARKET; recreated if missing / CRITICAL if disarmed),
+  wallet synced to the exchange (`EXCHANGE_SYNC` ledger rows), stale wallet
+  = health failure.
+- **Exposure integrity**: the portfolio cap now binds on **mark-to-market**
+  notional incl. drift (the 321%/300% state alerts + blocks entries);
+  effective account leverage logged every cycle with an alert ceiling.
+- **Ops**: dashboard compose service no longer `depends_on` the engine (no
+  side-starts); container log rotation; optional rotating file logs
+  (`LOG_FILE`); dashboard exposure decision recorded in
+  `docs/decisions/2026-07-16-dashboard-exposure.md` (Tailscale/loopback
+  recommended, owner decision pending).

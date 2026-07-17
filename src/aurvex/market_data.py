@@ -19,7 +19,9 @@ from __future__ import annotations
 import logging
 import math
 import random
+import time
 import zlib
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from .config import Config
@@ -29,6 +31,56 @@ from .models import (Candle, MarketSnapshot, OrderBook, closed_view,
 _log = logging.getLogger("aurvex.market_data")
 
 
+@dataclass
+class FetchStats:
+    """Per-cycle data-layer observability (P0.2 — never fail silent).
+
+    Reset by ``begin_cycle()``; summarised into ONE INFO line + the heartbeat
+    by the engine. The 2026-07-16 incident produced ZERO fetch/error log lines
+    while the feed was dead for 4h18m — these counters make both the success
+    and the failure path visible every cycle.
+    """
+    kline_fetches: int = 0
+    kline_cache_hits: int = 0
+    bars_fetched: int = 0
+    orderbook_fetches: int = 0
+    errors: int = 0
+    last_error: str = ""
+    latency_ms: float = 0.0
+    # newest CLOSED bar close-time per tf seen this cycle (feeds the watchdog)
+    newest_close_ms: Dict[str, int] = field(default_factory=dict)
+    _traceback_logged: bool = False
+
+    def note_bars(self, tf: str, candles: List["Candle"]) -> None:
+        if candles:
+            close_ts = candles[-1].ts + interval_to_ms(tf)
+            if close_ts > self.newest_close_ms.get(tf, 0):
+                self.newest_close_ms[tf] = close_ts
+
+    def record_error(self, where: str, exc: Exception) -> None:
+        """Log EVERY caught data-layer exception at ERROR (P0.2). The first
+        error of a cycle carries the full traceback; the rest are one-liners so
+        a fully dead feed (dozens of failures per cycle) stays readable."""
+        self.errors += 1
+        self.last_error = f"{where}: {exc}"[:300]
+        if not self._traceback_logged:
+            self._traceback_logged = True
+            _log.error("data-layer error %s: %s", where, exc, exc_info=True)
+        else:
+            _log.error("data-layer error %s: %s", where, exc)
+
+    def summary(self) -> Dict[str, object]:
+        return {
+            "kline_fetches": self.kline_fetches,
+            "kline_cache_hits": self.kline_cache_hits,
+            "bars_fetched": self.bars_fetched,
+            "orderbook_fetches": self.orderbook_fetches,
+            "errors": self.errors,
+            "last_error": self.last_error,
+            "latency_ms": round(self.latency_ms, 1),
+        }
+
+
 class MarketDataProvider:
     def load_universe(self) -> List[str]:
         """Return all candidate symbols (e.g. liquid USDT perpetuals)."""
@@ -36,6 +88,13 @@ class MarketDataProvider:
 
     def get_snapshot(self, symbol: str) -> Optional[MarketSnapshot]:
         raise NotImplementedError
+
+    # -- P0.2 observability (no-op defaults for offline providers) -----------
+    def begin_cycle(self) -> None:
+        return None
+
+    def cycle_summary(self) -> Optional[Dict[str, object]]:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +123,14 @@ class CCXTProvider(MarketDataProvider):
         # magnitude at the deployed 17×(1h+4h+1d) configuration.
         self._kline_cache: Dict[Tuple[str, str], List[Candle]] = {}
         self._kline_next_ms: Dict[Tuple[str, str], int] = {}
+        # P0.2: per-cycle fetch stats (reset by the engine via begin_cycle()).
+        self.stats = FetchStats()
+
+    def begin_cycle(self) -> None:
+        self.stats = FetchStats()
+
+    def cycle_summary(self) -> Optional[Dict[str, object]]:
+        return self.stats.summary()
 
     @property
     def exchange(self):
@@ -86,6 +153,7 @@ class CCXTProvider(MarketDataProvider):
         try:
             tickers = ex.fetch_tickers()
         except Exception as exc:
+            self.stats.record_error("fetch_tickers", exc)
             _log.warning("fetch_tickers failed (%s); volume ranking degraded", exc)
             if self._universe_cache:      # keep the last good ranking
                 return list(self._universe_cache)
@@ -126,17 +194,29 @@ class CCXTProvider(MarketDataProvider):
         cached = self._kline_cache.get(key)
         if (self.cfg.kline_cache_enabled and cached
                 and now_ms() < self._kline_next_ms.get(key, 0)):
+            self.stats.kline_cache_hits += 1
+            self.stats.note_bars(tf, cached)
             return cached
+        t0 = time.monotonic()
         try:
             raw = self.exchange.fetch_ohlcv(symbol, tf, limit=limit)
         except Exception as exc:
-            _log.debug("fetch_ohlcv failed %s %s: %s", symbol, tf, exc)
+            # P0.2: NEVER fail silent. The pre-incident code logged this at
+            # DEBUG (invisible at LOG_LEVEL=INFO) and served the stale cache —
+            # the exact mechanism of the 2026-07-16 blind-engine incident.
+            self.stats.record_error(f"fetch_ohlcv {symbol} {tf}", exc)
+            if cached:
+                self.stats.note_bars(tf, cached)
             return cached
+        self.stats.latency_ms += (time.monotonic() - t0) * 1000.0
+        self.stats.kline_fetches += 1
         if not raw:
             return cached
         candles = closed_view([Candle.from_ccxt(r) for r in raw], tf)
         if not candles:
             return cached
+        self.stats.bars_fetched += len(candles)
+        self.stats.note_bars(tf, candles)
         self._kline_cache[key] = candles
         self._kline_next_ms[key] = candles[-1].ts + 2 * interval_to_ms(tf)
         return candles
@@ -162,11 +242,15 @@ class CCXTProvider(MarketDataProvider):
             if not rows:
                 return None
             candles[tf] = rows
+        t0 = time.monotonic()
         try:
             ob = ex.fetch_order_book(symbol, limit=self.cfg.orderbook_depth)
         except Exception as exc:
-            _log.debug("ccxt orderbook failed for %s: %s", symbol, exc)
+            # P0.2: loud, counted failure (was DEBUG → invisible in production).
+            self.stats.record_error(f"fetch_order_book {symbol}", exc)
             return None
+        self.stats.latency_ms += (time.monotonic() - t0) * 1000.0
+        self.stats.orderbook_fetches += 1
         orderbook = OrderBook(bids=ob.get("bids", []), asks=ob.get("asks", []))
         # last_price = live order-book mid (fetched fresh every snapshot): a
         # realistic current tick for spread/slippage guards. Falls back to the

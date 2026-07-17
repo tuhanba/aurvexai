@@ -586,6 +586,29 @@ class Storage:
             _trade_to_row(t))
         self.conn.commit()
 
+    def close_trade_reconcile(self, trade_id: str,
+                              close_time_ms: Optional[int] = None,
+                              reason: str = "EXCHANGE_RECONCILE") -> bool:
+        """Close a DB trade row whose position no longer exists on the exchange
+        (P0.3 reconciliation enforcement — exchange is the source of truth).
+
+        close_price / realized_pnl / realized_pnl_pct are intentionally left
+        NULL: the engine did not observe the exit, so fabricating a PnL would
+        contaminate every downstream statistic. Binance is the accounting
+        source for these rows (same semantics as the 2026-07-16 MANUAL_CLOSE
+        rows). Analytics must tolerate the NULLs (metrics.py does).
+
+        Returns True iff an OPEN row was closed.
+        """
+        cur = self.conn.execute(
+            "UPDATE trades SET status=?, close_time=?, close_price=NULL, "
+            "close_reason=?, remaining_fraction=0, realized_pnl=NULL, "
+            "realized_pnl_pct=NULL WHERE id=? AND status=?",
+            (CLOSED, int(close_time_ms if close_time_ms is not None
+                         else time.time() * 1000), reason, trade_id, OPEN))
+        self.conn.commit()
+        return cur.rowcount > 0
+
     def get_open_trades(self, mode: Optional[str] = None) -> List[Trade]:
         if mode:
             rows = self.conn.execute(
