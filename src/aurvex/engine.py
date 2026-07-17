@@ -39,12 +39,15 @@ from .market_data import build_provider
 from .models import (ALLOW, LONG, OPEN, REJECT, Decision, MarketSnapshot,
                      interval_to_ms, now_ms, profile_of)
 from .quality import grade as quality_grade
+from .reconcile import ReconcileEnforcer
 from .scanner import UniverseScanner
 from .setups import SetupDetector, build_context
 from .shadow import ShadowLearner, build_coin_library
 from .storage import Storage
 from .commander import build_commander, read_mode_request
 from .telegram import build_notifier
+from .watchdog import ALERT as FEED_ALERT, HALT as FEED_HALT, OK as FEED_OK
+from .watchdog import FeedWatchdog
 
 log = logging.getLogger("aurvex.engine")
 
@@ -132,6 +135,26 @@ class Engine:
                                              alert_hook=self._on_binance_status)
         self._binance_next_refresh_ms = 0
         self._binance_task: Optional[asyncio.Task] = None
+        # P0.1: feed watchdog. Registers every timeframe the strategies need so
+        # a feed that stops delivering ANY of them escalates OK→ALERT→HALT.
+        # The synthetic provider is exempt (deterministic offline timestamps).
+        self.watchdog = FeedWatchdog(cfg)
+        if cfg.data_provider != "synthetic":
+            self.watchdog.register(list(self._snapshot_tfs) if self.multi
+                                   else [cfg.ltf, cfg.htf])
+        self._feed_state = FEED_OK
+        # P0.3: reconciliation enforcement (exchange is truth). Uses the live
+        # executor's order adapter (five-gate locked) for protective stops.
+        self.reconciler = ReconcileEnforcer(
+            cfg, self.db, self.notifier,
+            adapter=getattr(self.executor, "order_adapter", None))
+        self._reconcile_next_ms = 0
+        self._reconcile_task: Optional[asyncio.Task] = None
+        # P0.4: exposure/leverage integrity (edge-triggered alert latches).
+        self._exposure_breach_active = False
+        self._leverage_alert_active = False
+        # P0.2: background-task supervision bookkeeping.
+        self._task_restarts: Dict[str, int] = {}
         self._stop = asyncio.Event()
         self._cycles = 0
         self._last_summary_day = -1
@@ -269,8 +292,11 @@ class Engine:
             self.scanner.scan()  # warm the universe once
         except Exception as exc:
             log.warning("initial scan failed: %s", exc)
-        # Start the Telegram command poll loop as a background task.
-        poll_task = asyncio.ensure_future(self.commander.poll_forever())
+        # Start the Telegram command poll loop as a SUPERVISED background task
+        # (P0.2): an unexpected exit restarts it with exponential backoff and
+        # fires an alert — background tasks must never die silently.
+        poll_task = asyncio.ensure_future(
+            self._supervised("commander_poll", self.commander.poll_forever))
         try:
             while not self._stop.is_set():
                 started = now_ms()
@@ -285,6 +311,9 @@ class Engine:
                 # Task 2: slow-timer Binance read-only refresh, spawned as a
                 # background thread task OUTSIDE the trade cycle's critical path.
                 self._maybe_refresh_binance()
+                # P0.3: reconciliation enforcement — startup + every
+                # reconcile_interval_sec (exchange is the source of truth).
+                self._maybe_reconcile()
                 if max_cycles is not None and self._cycles >= max_cycles:
                     break
                 elapsed = (now_ms() - started) / 1000.0
@@ -305,6 +334,41 @@ class Engine:
             await asyncio.wait_for(self._stop.wait(), timeout=seconds)
         except asyncio.TimeoutError:
             pass
+
+    async def _supervised(self, name: str, factory,
+                          base_delay: float = 2.0,
+                          max_delay: float = 300.0) -> None:
+        """Supervise a long-running background coroutine (P0.2).
+
+        A crash or unexpected clean exit restarts it with exponential backoff
+        (2s → 4s → ... → 5min cap); every restart is logged at ERROR, counted
+        in the heartbeat and alerted. Cancellation propagates (shutdown path).
+        A run that survives > 60s resets the backoff.
+        """
+        delay = base_delay
+        while not self._stop.is_set():
+            started = now_ms()
+            try:
+                await factory()
+                if self._stop.is_set():
+                    return
+                log.error("background task %s exited unexpectedly", name)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.error("background task %s crashed: %s", name, exc,
+                          exc_info=True)
+            if now_ms() - started > 60_000:
+                delay = base_delay          # it ran fine for a while — reset
+            self._task_restarts[name] = self._task_restarts.get(name, 0) + 1
+            try:
+                self.notifier.health_warning(
+                    f"background task {name} died — restart "
+                    f"#{self._task_restarts[name]} in {delay:.0f}s")
+            except Exception as exc:
+                log.debug("supervisor notify error: %s", exc)
+            await self._sleep(delay)
+            delay = min(max_delay, delay * 2)
 
     def _on_binance_status(self, status: str, detail: str) -> None:
         """Adapter status transition → Telegram (edge-triggered in the adapter)."""
@@ -337,6 +401,29 @@ class Engine:
         self._binance_task = loop.create_task(
             asyncio.to_thread(self.binance.refresh, symbols))
 
+    def _maybe_reconcile(self) -> None:
+        """Kick a reconciliation-enforcement pass when the timer is due (P0.3).
+
+        Startup + every reconcile_interval_sec (≤ 5 min). Runs in a worker
+        thread outside the trade cycle's critical path; the enforcer is
+        fail-soft by contract. No-op outside live mode / without keys.
+        """
+        interval_ms = self.cfg.reconcile_interval_sec * 1000.0
+        if interval_ms <= 0 or not self.reconciler.enabled:
+            return
+        if self._reconcile_task is not None and not self._reconcile_task.done():
+            return
+        if now_ms() < self._reconcile_next_ms:
+            return
+        self._reconcile_next_ms = now_ms() + int(interval_ms)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:      # no running loop (sync unit tests)
+            self.reconciler.run()
+            return
+        self._reconcile_task = loop.create_task(
+            asyncio.to_thread(self.reconciler.run))
+
     def _persist_telegram_health(self) -> None:
         """Write the notifier's (secret-free) health to storage for the dashboard."""
         try:
@@ -345,9 +432,31 @@ class Engine:
             log.debug("telegram health persist error: %s", exc)
 
     # -- portfolio snapshot ------------------------------------------------
+    def _marks(self) -> Dict[str, float]:
+        """Last mark prices the manage step persisted (display + MTM exposure)."""
+        meta = self.db.get_meta("marks") or {}
+        prices = meta.get("prices", {}) if isinstance(meta, dict) else {}
+        return {k: float(v) for k, v in prices.items() if v}
+
+    @staticmethod
+    def _mtm_notional(trades, marks: Dict[str, float]) -> float:
+        """Mark-to-market open notional (P0.4). Entry notional scaled by
+        mark/entry where a mark exists; entry notional otherwise. This is the
+        exposure the cap must bind on — the incident's 321%/300% state came
+        from enforcing the cap on entry notional while positions drifted."""
+        total = 0.0
+        for t in trades:
+            base = t.position_size * t.remaining_fraction
+            mark = marks.get(t.symbol)
+            if mark and t.entry:
+                base *= mark / t.entry
+            total += base
+        return total
+
     def _portfolio(self) -> PortfolioView:
         opens = self.db.get_open_trades(mode=self.cfg.mode)
-        open_notional = sum(t.position_size * t.remaining_fraction for t in opens)
+        # P0.4: the exposure cap binds on MTM notional including drift.
+        open_notional = self._mtm_notional(opens, self._marks())
         open_margin = sum(self._trade_margin(t) for t in opens)
         return PortfolioView(
             balance=self.db.get_balance(),
@@ -521,6 +630,11 @@ class Engine:
         adv = getattr(self.provider, "advance", None)
         if callable(adv):
             adv()
+        # P0.2: reset the provider's per-cycle fetch stats (ONE summary INFO
+        # line per cycle, success or failure — never silent again).
+        begin = getattr(self.provider, "begin_cycle", None)
+        if callable(begin):
+            begin()
 
         funnel = FunnelLogger()
         symbols = self.scanner.scan()
@@ -531,8 +645,30 @@ class Engine:
         open_notional = pf.open_notional   # running, updated as trades open this cycle
         open_margin = pf.open_margin       # running, updated as trades open this cycle
 
-        # Commander pause: skip new-entry scan entirely; open-trade management runs.
-        accepting_new = not self.commander.is_paused()
+        # P0.1: feed watchdog verdict from everything observed so far. On HALT
+        # the engine goes manage-only: ALL new entries are blocked; open-trade
+        # management continues (protective stops rest on the exchange, P0.3).
+        wd = self.watchdog.evaluate()
+        feed_halt = wd["state"] == FEED_HALT
+
+        # P0.4: exposure integrity on MTM notional (pf.open_notional is MTM).
+        # Above the cap: block new entries AND alert — the 321%/300% silent
+        # drift state must be impossible.
+        exposure_pct = (pf.open_notional / pf.balance * 100.0) if pf.balance else 0.0
+        exposure_breach = exposure_pct > self.cfg.max_portfolio_exposure_pct
+        self._maybe_exposure_alert(exposure_breach, exposure_pct)
+
+        # Commander pause / feed HALT / exposure breach: skip the new-entry
+        # scan entirely; open-trade management still runs.
+        accepting_new = (not self.commander.is_paused()
+                         and not feed_halt and not exposure_breach)
+        entries_blocked = []
+        if self.commander.is_paused():
+            entries_blocked.append("commander_pause")
+        if feed_halt:
+            entries_blocked.append("feed_halt")
+        if exposure_breach:
+            entries_blocked.append("exposure_breach")
         scanned = symbols[: self.cfg.max_symbols_per_cycle] if accepting_new else []
         candidates = 0
 
@@ -834,6 +970,21 @@ class Engine:
         except Exception as exc:
             log.debug("shadow update error: %s", exc)
 
+        # P0.1: feed the watchdog with the newest closed-bar CLOSE times seen
+        # this cycle — from the provider's fetch stats (covers cache serves and
+        # manage-only fetches) AND from the snapshots themselves (covers
+        # injected/test providers without stats). Synthetic stays exempt.
+        if self.cfg.data_provider != "synthetic":
+            stats_obj = getattr(self.provider, "stats", None)
+            for tf, close_ts in getattr(stats_obj, "newest_close_ms", {}).items():
+                self.watchdog.observe(tf, close_ts)
+            for _snap in snapshots.values():
+                for tf in _snap.candles:
+                    closed = _snap.closed_ltf(tf)
+                    if closed:
+                        self.watchdog.observe(
+                            tf, closed[-1].ts + interval_to_ms(tf))
+
         # Compute data freshness from the newest closed-bar timestamp seen this cycle.
         _max_bar_ts = 0
         for _snap in snapshots.values():
@@ -841,6 +992,52 @@ class Engine:
             if _closed:
                 _max_bar_ts = max(_max_bar_ts, _closed[-1].ts)
         data_age_ms = int(now_ms() - _max_bar_ts) if _max_bar_ts else 0
+
+        # P0.1/P0.2: end-of-cycle watchdog verdict + ONE feed summary INFO line.
+        wd = self.watchdog.evaluate()
+        self._maybe_feed_alerts(wd)
+        risk_state = wd["risk_state"]
+        feed_ages_sec = {tf: round(a / 1000.0)
+                         for tf, a in wd["ages_ms"].items()}
+        summary_fn = getattr(self.provider, "cycle_summary", None)
+        feed_summary = summary_fn() if callable(summary_fn) else None
+        if feed_summary is not None:
+            log.info("feed: symbols=%d fetches=%d cache_hits=%d bars=%d "
+                     "errors=%d latency_ms=%s ages=%s state=%s%s",
+                     len(snapshots), feed_summary["kline_fetches"],
+                     feed_summary["kline_cache_hits"],
+                     feed_summary["bars_fetched"], feed_summary["errors"],
+                     feed_summary["latency_ms"], feed_ages_sec, wd["state"],
+                     f" last_error={feed_summary['last_error']}"
+                     if feed_summary["errors"] else "")
+
+        # P0.3: reconcile wallet freshness → health failure when stale (live).
+        wallet_age_ms = self.reconciler.wallet_age_ms()
+        wallet_stale = bool(
+            self.reconciler.enabled
+            and (wallet_age_ms is None
+                 or wallet_age_ms > self.cfg.wallet_stale_sec * 1000))
+        if wallet_stale and self._cycles > 0:
+            self._maybe_wallet_stale_alert(wallet_age_ms)
+        elif not wallet_stale:
+            self._wallet_stale_alerted = False   # re-arm for the next episode
+
+        # P0.4: effective account leverage each cycle + configurable ceiling.
+        marks_now = self._marks()
+        opens_now = self.db.get_open_trades(mode=self.cfg.mode)
+        mtm_notional = self._mtm_notional(opens_now, marks_now)
+        unreal_now = 0.0
+        for t in opens_now:
+            mark = marks_now.get(t.symbol)
+            if mark and t.entry:
+                sign = 1 if t.side == LONG else -1
+                unreal_now += (t.position_size * t.remaining_fraction
+                               / t.entry) * (mark - t.entry) * sign
+        equity_now = self.db.get_balance() + unreal_now
+        effective_leverage = (mtm_notional / equity_now) if equity_now > 0 else 0.0
+        lev_ceiling = (self.cfg.max_account_leverage_alert
+                       or self.cfg.max_portfolio_exposure_pct / 100.0)
+        self._maybe_leverage_alert(effective_leverage, lev_ceiling)
 
         # Persist funnel.
         last_times = self.db.last_trade_times()
@@ -888,7 +1085,8 @@ class Engine:
             self._maybe_notify_daily_profit_lock(profit_lock_active, daily_pnl,
                                                  profit_target)
 
-        # Heartbeat (enriched — Block F).
+        # Heartbeat (enriched — Block F + P0 live-safety fields).
+        recon = self.reconciler.last_report or {}
         self.db.set_heartbeat("engine", {
             "ts": now_ms(), "cycle": self._cycles, "balance": bal,
             "open_trades": open_count, "scanned": len(symbols),
@@ -906,6 +1104,34 @@ class Engine:
             "regime_score": regime.get("score"),
             "regime_adx": regime.get("adx"),
             "last_error": self._last_error,
+            # P0.1 — feed watchdog: state + per-TF closed-bar ages. risk_state
+            # is UNKNOWN whenever the feed is halted: a kill switch computed
+            # from stale data is false safety and must not read as OK.
+            "feed_state": wd["state"],
+            "feed_ages_sec": feed_ages_sec,
+            "risk_state": risk_state,
+            "entries_blocked": entries_blocked,
+            # P0.2 — data-layer health (per-cycle fetch summary).
+            "feed": feed_summary,
+            "task_restarts": dict(self._task_restarts),
+            # P0.3 — reconcile + wallet freshness.
+            "reconcile": {
+                "enabled": self.reconciler.enabled,
+                "last_ok_ms": self.reconciler.last_ok_ms,
+                "ghosts_closed": len(recon.get("ghosts_closed", [])),
+                "unknown_positions": len(recon.get("unknown_positions", [])),
+                "naked_positions": len(recon.get("naked_positions", [])),
+                "qty_mismatches": len(recon.get("qty_mismatches", [])),
+                "errors": len(recon.get("errors", [])),
+            },
+            "wallet": self.reconciler.last_wallet,
+            "wallet_age_ms": wallet_age_ms,
+            "wallet_stale": wallet_stale,
+            # P0.4 — exposure/leverage integrity (MTM including drift).
+            "exposure_pct_mtm": round(exposure_pct, 2),
+            "exposure_cap_pct": self.cfg.max_portfolio_exposure_pct,
+            "exposure_breach": exposure_breach,
+            "effective_leverage": round(effective_leverage, 3),
         })
 
         # Daily summary once per UTC day (skip the very first cycle).
@@ -923,10 +1149,110 @@ class Engine:
         # Surface Telegram health to the dashboard (secret-free).
         self._persist_telegram_health()
 
-        log.info("cycle %d scanned=%d cand=%d setups=%d allow=%d exec=%d open=%d bal=%.2f",
+        # P0.1 contract: the heartbeat log line carries data_age + feed state
+        # EVERY cycle (it must be impossible to read the log and not know the
+        # feed's freshness), plus MTM exposure and effective leverage (P0.4).
+        log.info("cycle %d scanned=%d cand=%d setups=%d allow=%d exec=%d open=%d "
+                 "bal=%.2f data_age=%ds feed=%s risk_state=%s exposure=%.0f%% "
+                 "eff_lev=%.2fx%s",
                  self._cycles, len(symbols), candidates, stats.setup_detected_count,
                  stats.decision_allow_count, stats.executed_count, open_count,
-                 self.db.get_balance())
+                 self.db.get_balance(), int(data_age_ms / 1000), wd["state"],
+                 risk_state, exposure_pct, effective_leverage,
+                 f" ENTRIES_BLOCKED={'+'.join(entries_blocked)}"
+                 if entries_blocked else "")
+
+    # -- P0 alert helpers (edge-triggered — state transitions only) ----------
+    def _maybe_feed_alerts(self, wd: dict) -> None:
+        """Fire Telegram on feed-state transitions (P0.1): warning on ALERT,
+        critical on HALT (entries blocked, manage-only, risk UNKNOWN), and a
+        recovery note when the feed comes back. Never spams a steady state."""
+        state = wd["state"]
+        prev = self._feed_state
+        if state == prev:
+            return
+        self._feed_state = state
+        ages = {tf: f"{round(a / 60000)}m" for tf, a in wd["ages_ms"].items()}
+        try:
+            if state == FEED_HALT:
+                self.notifier.critical(
+                    f"⛔ FEED HALT — market data stale (ages {ages}). ALL new "
+                    f"entries blocked; manage-only using exchange-resident "
+                    f"stops. Risk state is UNKNOWN until data recovers.")
+            elif state == FEED_ALERT:
+                self.notifier.health_warning(
+                    f"📡 Feed ALERT — data aging (ages {ages}, worst "
+                    f"{wd['worst_tf']}). Halt threshold approaching.")
+            elif state == FEED_OK and prev in (FEED_ALERT, FEED_HALT):
+                self.notifier.send(
+                    f"✅ Feed recovered (ages {ages}) — normal operation "
+                    f"resumed.", critical=(prev == FEED_HALT))
+        except Exception as exc:
+            log.debug("feed alert notify error: %s", exc)
+        if state != FEED_OK:
+            log.warning("feed watchdog state %s → %s (ages %s)", prev, state, ages)
+        else:
+            log.info("feed watchdog recovered %s → OK (ages %s)", prev, ages)
+
+    def _maybe_exposure_alert(self, breached: bool, exposure_pct: float) -> None:
+        """Edge-triggered exposure-cap breach alert (P0.4). Entries are blocked
+        by the caller for as long as the breach persists."""
+        if breached and not self._exposure_breach_active:
+            self._exposure_breach_active = True
+            log.error("EXPOSURE BREACH: MTM exposure %.1f%% > cap %.1f%% — "
+                      "new entries blocked", exposure_pct,
+                      self.cfg.max_portfolio_exposure_pct)
+            try:
+                self.notifier.critical(
+                    f"🚨 Exposure breach: MTM notional {exposure_pct:.0f}% of "
+                    f"balance > cap {self.cfg.max_portfolio_exposure_pct:.0f}%. "
+                    f"New entries BLOCKED until exposure returns under the cap.")
+            except Exception as exc:
+                log.debug("exposure alert notify error: %s", exc)
+        elif not breached and self._exposure_breach_active:
+            self._exposure_breach_active = False
+            log.warning("exposure back under cap (%.1f%%) — entries unblocked",
+                        exposure_pct)
+            try:
+                self.notifier.send(
+                    f"✅ Exposure back under cap ({exposure_pct:.0f}%) — "
+                    f"new entries unblocked.")
+            except Exception as exc:
+                log.debug("exposure alert notify error: %s", exc)
+
+    def _maybe_leverage_alert(self, eff_lev: float, ceiling: float) -> None:
+        """Edge-triggered effective-account-leverage ceiling alert (P0.4)."""
+        if ceiling <= 0:
+            return
+        if eff_lev > ceiling and not self._leverage_alert_active:
+            self._leverage_alert_active = True
+            log.error("effective account leverage %.2fx > ceiling %.2fx",
+                      eff_lev, ceiling)
+            try:
+                self.notifier.health_warning(
+                    f"⚠️ Effective account leverage {eff_lev:.2f}x above the "
+                    f"{ceiling:.2f}x ceiling.")
+            except Exception as exc:
+                log.debug("leverage alert notify error: %s", exc)
+        elif eff_lev <= ceiling and self._leverage_alert_active:
+            self._leverage_alert_active = False
+
+    def _maybe_wallet_stale_alert(self, wallet_age_ms) -> None:
+        """One warning per staleness episode: the wallet reading is old (or was
+        never obtained) in live mode — the engine is blind to account state,
+        which is a health failure, not a cosmetic issue (P0.3)."""
+        if getattr(self, "_wallet_stale_alerted", False):
+            return
+        self._wallet_stale_alerted = True
+        age_txt = ("never" if wallet_age_ms is None
+                   else f"{round(wallet_age_ms / 60000)}m old")
+        log.error("wallet reading stale (%s) — account state unknown", age_txt)
+        try:
+            self.notifier.critical(
+                f"🚨 Wallet sync stale ({age_txt}) — the engine is blind to the "
+                f"real account balance. Check API keys / connectivity.")
+        except Exception as exc:
+            log.debug("wallet stale notify error: %s", exc)
 
     def _maybe_notify_daily_profit_lock(self, active: bool, daily_pnl: float,
                                         target: float) -> None:
@@ -1311,9 +1637,8 @@ class Engine:
 
 def run_engine(cfg: Config, max_cycles: Optional[int] = None,
                sleep_override: Optional[float] = None) -> None:
-    logging.basicConfig(
-        level=getattr(logging, cfg.log_level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    from .logging_setup import setup_logging
+    setup_logging(cfg, component="engine")
     engine = Engine(cfg)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)

@@ -115,8 +115,11 @@ def _trade_dict(t, balance: float = 0.0,
         "quality_score": round(t.metadata.get("quality_score", 0.0) or 0.0, 2),
         "quality_reasons": t.metadata.get("quality_reasons", []),
         "remaining_fraction": round(t.remaining_fraction, 3),
-        "realized_pnl": round(t.realized_pnl, 4),
-        "realized_pnl_pct": round(t.realized_pnl_pct, 4),
+        # None-safe: MANUAL_CLOSE / EXCHANGE_RECONCILE rows carry NULL PnL by
+        # design (Binance is the accounting source for those exits).
+        "realized_pnl": round(t.realized_pnl, 4) if t.realized_pnl is not None else None,
+        "realized_pnl_pct": (round(t.realized_pnl_pct, 4)
+                             if t.realized_pnl_pct is not None else None),
         "fees_paid": round(t.fees_paid, 4), "close_reason": t.close_reason,
         "open_time": t.open_time, "close_time": t.close_time,
         "tp_targets": [{"price": tp.price, "fraction": tp.fraction, "hit": tp.hit}
@@ -149,7 +152,8 @@ def _trade_dict(t, balance: float = 0.0,
     else:
         d.update({"mark": mark, "unrealized_pnl": None, "unrealized_r": None,
                   "price_move_pct": None, "stop_room_pct": None,
-                  "total_pnl": round(t.realized_pnl, 4)})
+                  "total_pnl": (round(t.realized_pnl, 4)
+                                if t.realized_pnl is not None else None)})
     return d
 
 
@@ -249,7 +253,13 @@ def create_app(cfg=None) -> Flask:
         engine_mode = hb_data.get("mode", cfg.mode)
         mode_ok = engine_mode == cfg.mode
 
-        ok = heartbeat_fresh and data_fresh and not kill_switch and mode_ok
+        # P0.1: the engine's own watchdog verdict outranks the heuristic
+        # data_fresh cut — HALT means entries are blocked and risk is UNKNOWN.
+        feed_state = hb_data.get("feed_state")
+        feed_ok = feed_state != "HALT"
+
+        ok = (heartbeat_fresh and data_fresh and feed_ok
+              and not kill_switch and mode_ok)
 
         reasons: list = []
         if not heartbeat_fresh:
@@ -257,6 +267,8 @@ def create_app(cfg=None) -> Flask:
                 f"stale heartbeat ({ts_age}ms)" if ts_age is not None else "no heartbeat")
         if not data_fresh:
             reasons.append(f"stale data ({data_age_ms}ms)")
+        if not feed_ok:
+            reasons.append(f"feed watchdog HALT (ages {hb_data.get('feed_ages_sec')})")
         if kill_switch:
             reasons.append("kill switch tripped")
         if not mode_ok:
@@ -276,6 +288,16 @@ def create_app(cfg=None) -> Flask:
             "mode_ok": mode_ok,
             "engine_mode": engine_mode,
             "config_mode": cfg.mode,
+            # P0.1/P0.3/P0.4 live-safety surfaces (from the engine heartbeat).
+            "feed_state": feed_state,
+            "feed_ages_sec": hb_data.get("feed_ages_sec"),
+            "risk_state": hb_data.get("risk_state"),
+            "entries_blocked": hb_data.get("entries_blocked"),
+            "exposure_pct_mtm": hb_data.get("exposure_pct_mtm"),
+            "exposure_breach": hb_data.get("exposure_breach"),
+            "effective_leverage": hb_data.get("effective_leverage"),
+            "wallet_stale": hb_data.get("wallet_stale"),
+            "reconcile": hb_data.get("reconcile"),
             "reasons": reasons,
             "heartbeat": hb_data,
         }), 200
@@ -335,6 +357,15 @@ def create_app(cfg=None) -> Flask:
             "mode_ok": engine_mode == cfg.mode,
             "engine_mode": engine_mode,
             "mode_banner": _mode_banner(cfg),
+            # P0 live-safety badges (engine heartbeat pass-through).
+            "feed_state": hb.get("feed_state"),
+            "feed_ages_sec": hb.get("feed_ages_sec"),
+            "risk_state": hb.get("risk_state"),
+            "entries_blocked": hb.get("entries_blocked"),
+            "exposure_pct_mtm": hb.get("exposure_pct_mtm"),
+            "exposure_breach": hb.get("exposure_breach"),
+            "effective_leverage": hb.get("effective_leverage"),
+            "wallet_stale": hb.get("wallet_stale"),
             # Task 1 — daily profit lock surfaces (from the engine heartbeat;
             # config supplies the static knobs when the heartbeat is missing).
             "daily_profit_lock_enabled": cfg.daily_profit_lock_enabled,
@@ -1019,9 +1050,8 @@ def create_app(cfg=None) -> Flask:
 
 def run_dashboard(cfg=None) -> None:
     cfg = cfg or load_config()
-    logging.basicConfig(
-        level=getattr(logging, cfg.log_level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    from ..logging_setup import setup_logging
+    setup_logging(cfg, component="dashboard")
     app = create_app(cfg)
     host = cfg.dashboard_host
     port = int(os.environ.get("DASHBOARD_PORT", cfg.dashboard_port))

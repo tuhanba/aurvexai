@@ -40,20 +40,35 @@ U17 = ("BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,"
 
 MAJORS = "BTC+ETH+SOL+BNB+XRP"
 
-# Owner decision 2026-07-09: ichimoku ACTIVE (shadow-only removed) and the
-# walkforward-ACCEPTED band_walk@4h added on its validated majors universe
-# (net +0.082R, PF 1.17, DSR +2.43 — scripts/harness_bandwalk.py).
+# Ichimoku's measured universe: the validated 12 minus TON (TON's futures
+# history is too thin to have been measured — evidence-strict pin,
+# docs/review/LEG_REVIEW_2026-07-17.md).
+U11_ICHI = "BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TRX+DOT"
+
+# Leg-review package 2026-07-17 (docs/review/LEG_REVIEW_2026-07-17.md):
+#   * squeeze@1h REMOVED — deployed config re-measured +0.018R over 4031
+#     trades (P(≤0)=0.25, MaxDD 50%); most trades, least R, cost-dominated.
+#   * squeeze@4h back to the validated q=20 (drop :q=30) — q20 re-measured
+#     +0.116R vs q30's +0.074/+0.078 on BOTH frames, better DSR/PF/MaxDD
+#     and better 2025+.
+#   * ichimoku pinned to its measured 11-coin universe — same-span evidence:
+#     +0.222R (t 3.11, +131R) vs +0.103 (+69R) on the 17-coin frame; the 5
+#     expansion coins alone measured +0.027R (t 0.20).
+#   * donchian & band_walk unchanged (donchian recency is the paper window's
+#     question; band_walk holds on majors).
+# Prior deployment line kept for rollback reference:
+#   donchian_trend@4h/1d:n=10 squeeze_breakout@1h/4h:ts=24:u=<U12>
+#   squeeze_breakout@4h/1d:ts=24:q=30 ichimoku_trend@4h/1d
+#   band_walk@4h/1d:ts=12:u=<MAJORS>
 STRATEGIES_FAST = (
     "donchian_trend@4h/1d:n=10 "
-    f"squeeze_breakout@1h/4h:ts=24:u={U12} "
-    "squeeze_breakout@4h/1d:ts=24:q=30 "
-    "ichimoku_trend@4h/1d "
+    "squeeze_breakout@4h/1d:ts=24 "
+    f"ichimoku_trend@4h/1d:u={U11_ICHI} "
     f"band_walk@4h/1d:ts=12:u={MAJORS}")
 STRATEGIES_BASE = (
     "donchian_trend@4h/1d "
-    f"squeeze_breakout@1h/4h:ts=24:u={U12} "
     "squeeze_breakout@4h/1d:ts=24 "
-    "ichimoku_trend@4h/1d "
+    f"ichimoku_trend@4h/1d:u={U11_ICHI} "
     f"band_walk@4h/1d:ts=12:u={MAJORS}")
 
 BLOCK = {
@@ -115,7 +130,7 @@ def main(argv=None) -> int:
     p.add_argument("--apply", action="store_true",
                    help="actually write (default: dry-run)")
     p.add_argument("--baseline", action="store_true",
-                   help="write the non-fast STRATEGIES (no :n=10 / :q=30)")
+                   help="write the non-fast STRATEGIES (no :n=10)")
     args = p.parse_args(argv)
 
     changes = dict(BLOCK)

@@ -181,7 +181,7 @@ correlation containment.
 ```
 RISK_PROFILE=aggressive_paper
 INITIAL_PAPER_BALANCE=200
-STRATEGIES=donchian_trend@4h/1d:n=10 squeeze_breakout@1h/4h:ts=24:u=BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TON+TRX+DOT squeeze_breakout@4h/1d:ts=24:q=30 ichimoku_trend@4h/1d band_walk@4h/1d:ts=12:u=BTC+ETH+SOL+BNB+XRP
+STRATEGIES=donchian_trend@4h/1d:n=10 squeeze_breakout@4h/1d:ts=24 ichimoku_trend@4h/1d:u=BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TRX+DOT band_walk@4h/1d:ts=12:u=BTC+ETH+SOL+BNB+XRP
 SHADOW_ONLY_SETUPS=
 GLOBAL_RANKING=true
 RANK_KEY=edge
@@ -210,6 +210,16 @@ LIVE_SEND_ORDERS=false
 The exact block above is written by `scripts/apply_fast_paper_env.py --apply`
 (dry-run default, timestamped backup, never touches secrets, can only ever
 write the live flags disarmed).
+
+**2026-07-17 leg-review package (STRATEGIES line above updated):**
+squeeze@1h REMOVED (re-measured +0.018R/4031 trades as deployed — retire);
+squeeze@4h reverted to the validated **q=20** (q20 re-measured +0.116R vs
+q30's +0.074/+0.078 on both frames, better DSR/PF/MaxDD/recency); ichimoku
+pinned to its measured 11-coin universe (same-span +0.222R/+131R vs
++0.103R/+69R on 17 coins; the 5 expansion coins alone ≈ 0). Donchian and
+band_walk unchanged. Evidence: `docs/review/LEG_REVIEW_2026-07-17.md`.
+The pre-2026-07-17 five-leg line is preserved in
+`scripts/apply_fast_paper_env.py` as the rollback reference.
 
 Three legs on ONE account (2026-07-08 wave): donchian 4h on all 17;
 squeeze 1h pinned to its validated 12 via `u=` (it measured NEGATIVE on the
@@ -262,10 +272,28 @@ slow), not faster direction-calling.
   the 17 is a **WATCH** (+0.068R, both halves positive but t<2 per half;
   not deployed — three squeeze TFs would stack correlation for little
   yield).
-- **Watch flag:** in the replication sim, donchian@4h's recent half (2025+)
-  is soft (+0.03R vs +0.48R in 2023–24). The authoritative 5.8-year harness
-  validation stands, but this is exactly what the 30–50-trade paper window
-  must confirm. Squeeze@4h is strong in BOTH halves including 2025+.
+- **Watch flag — now MEASURED (2026-07-17):** donchian@4h's 2025+ slice is
+  **−0.047R over 469 OOS trades** in the acceptance harness itself
+  (`docs/research/DON_BBW_GATE_REPORT.md` §5) — ~18 months of ≈zero net
+  edge. The full-6y verdict stays ACCEPTED (Exp-R +0.271, DSR +3.17
+  re-replicated), but the paper window and the Phase-1 leg review must
+  treat donchian recency as the primary open question. Squeeze@4h was
+  strong in BOTH halves including 2025+ (as of its validation).
+- **Phase-1 leg review (2026-07-17, `docs/review/LEG_REVIEW_2026-07-17.md`):**
+  all five deployed legs re-measured as deployed (real exits, DSR
+  n_trials=205). Recency (2025+) verdicts: **ichimoku is the only leg
+  measurably alive** (+0.142R, t 1.75; 6y +0.234, DSR +4.24); band_walk
+  weak-positive (+0.078); donchian ≈0 (−0.031/494); squeeze@4h ≈0;
+  **squeeze@1h re-measures +0.018R/4031 trades (P(≤0)=0.25, MaxDD 50%) —
+  RETIRE candidate.** The 17-coin universe dilutes the 4h legs heavily
+  (donchian +0.257→+0.061, ichimoku +0.234→+0.103 on the deployment frame).
+  Owner decisions pending; recommendations in the report §4.
+- **BBW contraction gate on donchian (campaign-7 F7): NO-GO (2026-07-17).**
+  The simplified-exit promise (+0.118→+0.169R) did NOT survive the real
+  channel-exit engine: per-trade Exp-R unchanged (+0.28 vs +0.27), total R
+  LOWER in every cell (−58…−76R / 23 quarters, P(delta≤0)=0.74–0.86), every
+  gated DSR below baseline. `DON_BBW_GATE_PCTILE` stays default-OFF research
+  infrastructure — do not enable. Trial count now **197**.
 - **Campaign 7 (2026-07-09, conditional swing TA — `CONDITIONAL_TA_WAVE_REPORT.md`):**
   first discovery-gate passes since ichimoku. (a) **band_walk @4h
   CANDIDATE** — two closes outside BB(20,2) + rising ADX, net +0.076R,
@@ -277,6 +305,17 @@ slow), not faster direction-calling.
   harness test with real channel exits; (c) reversal TA (RSI divergence)
   fails at swing TFs too; F1-contraction-break replicates squeeze (89%
   overlap — independent replication, not a new leg). Trial count now 192.
+- **Campaign 8 (2026-07-17, swing ICT @4h — the LAST untested TA family):
+  4/4 NO-GO.** FVG-retest continuation +0.010 (H2 −0.035), order-block
+  retest −0.052 (H2 t −2.2), sweep-reclaim@4h −0.205 (t −7.8 — fading the
+  swing extreme is measurably ANTI-edge, consistent with the trend legs
+  being the book), FVG-fade −0.124 (t −10.5). `scripts/swing_ict_wave.py`,
+  11 coins 5.8y, cost+funding in R, DSR n_trials=211. ICT/SMC is now dead
+  at BOTH horizons (1m/5m campaign 5; 4h here). **With this, the TA search
+  space testable on archived OHLCV is exhausted at every horizon.** What
+  remains is not TA: the carry executor port (validated, below), basis
+  spread (own research), pairs/stat-arb (needs two-leg infra), L2/tick
+  (data does not exist). Trial count now **215**.
 - **Carry executor**: engine port of the validated funding-harvest strategy
   (cross-margin, universe 5) as a separate low-frequency engine with its own
   risk rules. This is engineering, not research.
@@ -322,7 +361,42 @@ report says ELIGIBLE; both reversible, neither ever blocks a trade.
 
 ## 12. Test floor
 
-684 passing (`pytest`), including: no-lookahead, one-fill-per-closed-candle,
+778 passing (`pytest`), including: no-lookahead, one-fill-per-closed-candle,
 paper/live parity, multi-strategy allocation, same-profile-two-TF routing,
 per-strategy universe filter, exposure caps, live-gate disarmed-by-default,
-stale-entry guard, kline cache, shadow readiness.
+stale-entry guard, kline cache, shadow readiness, and the P0 live-safety
+exit criteria (`tests/test_p0_live_safety.py`).
+
+## 13. P0 live-safety layer (2026-07-17, post-incident)
+
+After the 2026-07-16 stale-feed incident (engine ran LIVE 4h18m on dead data
+with zero log output — RCA: `docs/incidents/2026-07-16-stale-feed.md`) the
+engine is **STOPPED** and stays stopped until the P0 exit criteria pass on
+the server AND the owner explicitly restarts it. This branch ships the P0
+layer:
+
+- **Feed watchdog** (`watchdog.py`): per-TF closed-bar age; OK→ALERT→HALT
+  (defaults: tf+15m alert, tf+30m halt; `FEED_TF_THRESHOLDS` overrides). On
+  HALT: ALL new entries blocked, manage-only, Telegram critical, dashboard
+  badge, **risk state = UNKNOWN** (a kill switch on stale data is false
+  safety). Synthetic provider exempt.
+- **Data-layer observability**: every fetch exception logs at ERROR (first
+  per cycle with traceback); one `feed:` INFO summary line per cycle; the
+  cycle heartbeat line always carries `data_age/feed/risk_state/exposure/
+  eff_lev`; background tasks supervised (restart + backoff + alert).
+- **Reconcile = enforcement** (`reconcile.py`, live+keys only): startup +
+  every `RECONCILE_INTERVAL_SEC` (120s). Exchange is truth: DB ghosts closed
+  as `EXCHANGE_RECONCILE` (close_price/PnL **NULL** — Binance is the
+  accounting source; analytics tolerate NULL), unknown exchange positions →
+  CRITICAL (never adopted), protective stops must REST on-exchange
+  (reduce-only STOP_MARKET; recreated if missing / CRITICAL if disarmed),
+  wallet synced to the exchange (`EXCHANGE_SYNC` ledger rows), stale wallet
+  = health failure.
+- **Exposure integrity**: the portfolio cap now binds on **mark-to-market**
+  notional incl. drift (the 321%/300% state alerts + blocks entries);
+  effective account leverage logged every cycle with an alert ceiling.
+- **Ops**: dashboard compose service no longer `depends_on` the engine (no
+  side-starts); container log rotation; optional rotating file logs
+  (`LOG_FILE`); dashboard exposure decision recorded in
+  `docs/decisions/2026-07-16-dashboard-exposure.md` (Tailscale/loopback
+  recommended, owner decision pending).

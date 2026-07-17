@@ -764,14 +764,34 @@ async function refresh(){
       'heartbeat age '+hbAgeTxt+' (stale ≥ '+Math.round((st.heartbeat_stale_ms||120000)/1000)+'s)',
       st.heartbeat_fresh?'ok':'err');
     const daMs = st.data_age_ms;
-    setBadge('bDataCard',
-      st.data_fresh?'FRESH':'STALE',
-      (daMs===null||daMs===undefined)?'no data seen yet':'last closed bar '+Math.round(daMs/1000)+'s ago',
-      st.data_fresh?'ok':'err');
-    setBadge('bKillCard',
-      st.kill_switch?'TRIPPED':'ARMED',
-      st.kill_switch?'entries paused — open trades still managed':'daily loss budget intact',
-      st.kill_switch?'err':'ok');
+    // P0.1: the engine's feed-watchdog verdict outranks the heuristic cut.
+    // HALT = entries blocked, manage-only; ALERT = aging, halt approaching.
+    const feedState = st.feed_state;
+    const feedAges = st.feed_ages_sec ?
+      Object.entries(st.feed_ages_sec).map(([tf,s])=>tf+' '+Math.round(s/60)+'m').join(' · ') : null;
+    let dataVal, dataSub, dataCls;
+    if(feedState==='HALT'){
+      dataVal='HALT'; dataCls='err';
+      dataSub='feed stale ('+(feedAges||'?')+') — entries BLOCKED, manage-only';
+    } else if(feedState==='ALERT'){
+      dataVal='AGING'; dataCls='warn';
+      dataSub='feed aging ('+(feedAges||'?')+') — halt threshold approaching';
+    } else {
+      dataVal=st.data_fresh?'FRESH':'STALE'; dataCls=st.data_fresh?'ok':'err';
+      dataSub=(daMs===null||daMs===undefined)?'no data seen yet':'last closed bar '+Math.round(daMs/1000)+'s ago'+(feedAges?' · '+feedAges:'');
+    }
+    setBadge('bDataCard', dataVal, dataSub, dataCls);
+    // P0.1: a kill switch computed from stale data is false safety — surface
+    // risk state UNKNOWN instead of a green ARMED when the feed is halted.
+    if(st.risk_state==='UNKNOWN'){
+      setBadge('bKillCard','UNKNOWN',
+        'feed stale — risk state cannot be trusted until data recovers','err');
+    } else {
+      setBadge('bKillCard',
+        st.kill_switch?'TRIPPED':'ARMED',
+        st.kill_switch?'entries paused — open trades still managed':'daily loss budget intact',
+        st.kill_switch?'err':'ok');
+    }
     setBadge('bModeCard',
       (st.engine_mode||st.mode||'paper').toUpperCase(),
       st.mode_ok?'engine and config agree':'MISMATCH: config='+st.config_mode,

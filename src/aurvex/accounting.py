@@ -34,8 +34,11 @@ def compute_accounting(initial_balance: float, balance: float,
                        marks: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
     marks = marks or {}
 
-    realized_closed = sum(t.realized_pnl for t in closed_trades)
-    realized_open_partial = sum(t.realized_pnl for t in open_trades)
+    # NULL realized_pnl (MANUAL_CLOSE / EXCHANGE_RECONCILE rows — the engine
+    # did not observe the exit) counts as 0 here: those closes never moved the
+    # internal balance, so the cash invariant still holds exactly.
+    realized_closed = sum(t.realized_pnl or 0.0 for t in closed_trades)
+    realized_open_partial = sum(t.realized_pnl or 0.0 for t in open_trades)
     total_realized = realized_closed + realized_open_partial
 
     open_notional = 0.0

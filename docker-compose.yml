@@ -1,5 +1,13 @@
 # AurvexAI clean-core. Two services share one SQLite WAL volume.
 # Engine writes; dashboard reads. SQLite is sufficient for this scale.
+#
+# P0.5 (2026-07-16 incident): the services are INDEPENDENT by policy — the
+# dashboard must never side-start the engine. The old `depends_on: engine`
+# meant `docker compose up -d dashboard` silently started a stopped engine
+# (the owner had to work around it with --no-deps). depends_on was removed;
+# start each service explicitly:
+#   docker compose up -d dashboard
+#   docker compose up -d engine        (only after P0 exit criteria + owner OK)
 services:
   engine:
     build: .
@@ -12,6 +20,11 @@ services:
       - aurvex-data:/app/data
     environment:
       - DB_PATH=/app/data/aurvex.db
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
 
   dashboard:
     build: .
@@ -23,7 +36,8 @@ services:
     ports:
       # The owner reaches the dashboard directly by IP — keep the open publish.
       # Set DASHBOARD_AUTH_USER/PASS in .env to require Basic auth on it.
-      # Safer alternative (requires an SSH tunnel; see DEPLOYMENT.md) — swap to:
+      # RECOMMENDED end-state (docs/decisions/2026-07-16-dashboard-exposure.md):
+      # bind loopback + Tailscale/SSH tunnel — swap to:
       # - "127.0.0.1:5000:5000"
       - "5000:5000"
     volumes:
@@ -31,8 +45,11 @@ services:
     environment:
       - DB_PATH=/app/data/aurvex.db
       - DASHBOARD_PORT=5000
-    depends_on:
-      - engine
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5000/health').status==200 else 1)"]
       interval: 30s
