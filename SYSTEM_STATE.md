@@ -181,7 +181,7 @@ correlation containment.
 ```
 RISK_PROFILE=aggressive_paper
 INITIAL_PAPER_BALANCE=200
-STRATEGIES=donchian_trend@4h/1d:n=10 squeeze_breakout@1h/4h:ts=24:u=BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TON+TRX+DOT squeeze_breakout@4h/1d:ts=24:q=30 ichimoku_trend@4h/1d band_walk@4h/1d:ts=12:u=BTC+ETH+SOL+BNB+XRP
+STRATEGIES=donchian_trend@4h/1d:n=10 squeeze_breakout@4h/1d:ts=24 ichimoku_trend@4h/1d:u=BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TRX+DOT band_walk@4h/1d:ts=12:u=BTC+ETH+SOL+BNB+XRP
 SHADOW_ONLY_SETUPS=
 GLOBAL_RANKING=true
 RANK_KEY=edge
@@ -210,6 +210,16 @@ LIVE_SEND_ORDERS=false
 The exact block above is written by `scripts/apply_fast_paper_env.py --apply`
 (dry-run default, timestamped backup, never touches secrets, can only ever
 write the live flags disarmed).
+
+**2026-07-17 leg-review package (STRATEGIES line above updated):**
+squeeze@1h REMOVED (re-measured +0.018R/4031 trades as deployed — retire);
+squeeze@4h reverted to the validated **q=20** (q20 re-measured +0.116R vs
+q30's +0.074/+0.078 on both frames, better DSR/PF/MaxDD/recency); ichimoku
+pinned to its measured 11-coin universe (same-span +0.222R/+131R vs
++0.103R/+69R on 17 coins; the 5 expansion coins alone ≈ 0). Donchian and
+band_walk unchanged. Evidence: `docs/review/LEG_REVIEW_2026-07-17.md`.
+The pre-2026-07-17 five-leg line is preserved in
+`scripts/apply_fast_paper_env.py` as the rollback reference.
 
 Three legs on ONE account (2026-07-08 wave): donchian 4h on all 17;
 squeeze 1h pinned to its validated 12 via `u=` (it measured NEGATIVE on the

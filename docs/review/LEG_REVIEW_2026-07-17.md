@@ -107,5 +107,48 @@ positive in the paper window.
 | ichimoku | keep; queue 12-coin `u=` pin | Phase-2 cell (config-only precedent) |
 | band_walk | keep as deployed | none |
 
-Trial count after this campaign: **205**. Reproduction:
+## 5. Addendum (same day) — follow-up measurements & the applied package
+
+Owner directive: "do whichever is fastest to profit." The fastest gain is
+subtraction + un-dilution, all config-only. Two follow-up measurements
+closed the open questions (trial count now **207**):
+
+### 5a. squeeze@4h q=20 vs deployed q=30 — **revert to q=20 confirmed**
+
+| frame | q=30 | q=20 |
+|---|---|---|
+| 11c 6y | +0.074, DSR 2.03, MaxDD 31.7%, 2025+ −0.041 | **+0.116, DSR 2.82, MaxDD 24.4%**, H1/H2 +0.111/+0.120, 2025+ +0.004 |
+| 17c 3y | +0.078, DSR 1.54, MaxDD 18.4%, 2025+ +0.024 | **+0.116, DSR 2.13, MaxDD 15.7%**, 2025+ +0.057 |
+
+q=20 wins on every axis, and total R too (6y frame: 907×0.116=+105R vs
+1049×0.074=+77R). The FAST q=30 "more action" loosening gave back more than
+its promised 15%: drop `:q=30`.
+
+### 5b. ichimoku 11-coin pin — same-span derivation from the checkpoints
+
+Span 2024-03..2026-03 (the 17c cell's OOS window): 11-coin **+0.222R
+(t 3.11, DSR +3.00, total +131R, n=590)** vs 17-coin +0.103 (t 1.62,
++69R, n=665). Inside the 17c run, the 5 expansion coins contributed
++0.027R (t 0.20, +4.3R/161 trades) — pure dilution. 2025+: pinned +0.169
+(t 1.90) vs 17c +0.042. Pin = the measured 11 (validated 12 minus TON,
+whose futures history is too thin to have been measured).
+
+### 5c. Applied package (recommended STRATEGIES, 2026-07-17)
+
+```
+STRATEGIES=donchian_trend@4h/1d:n=10 squeeze_breakout@4h/1d:ts=24 ichimoku_trend@4h/1d:u=BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TRX+DOT band_walk@4h/1d:ts=12:u=BTC+ETH+SOL+BNB+XRP
+```
+
+- squeeze@1h removed (§2 retire case; frees slots/exposure at 4× trade rate).
+- squeeze@4h at validated q=20 (5a).
+- ichimoku pinned to its measured 11 (5b).
+- donchian n=10 and band_walk unchanged; UNIVERSE_INCLUDE stays the 17
+  (donchian/squeeze@4h keep their validated shared universe — donchian's
+  17c dilution stays flagged for the paper window, §2).
+
+Config-only: no decision-path or risk-model change; the prior five-leg line
+is preserved in `scripts/apply_fast_paper_env.py` as rollback reference.
+Deployment happens only via the owner running the apply script + restart.
+
+Trial count after this campaign: **207**. Reproduction:
 `python scripts/leg_review.py fetch` → `run <leg>` (resumable) → `report`.
