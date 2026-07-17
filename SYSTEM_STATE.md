@@ -262,10 +262,19 @@ slow), not faster direction-calling.
   the 17 is a **WATCH** (+0.068R, both halves positive but t<2 per half;
   not deployed — three squeeze TFs would stack correlation for little
   yield).
-- **Watch flag:** in the replication sim, donchian@4h's recent half (2025+)
-  is soft (+0.03R vs +0.48R in 2023–24). The authoritative 5.8-year harness
-  validation stands, but this is exactly what the 30–50-trade paper window
-  must confirm. Squeeze@4h is strong in BOTH halves including 2025+.
+- **Watch flag — now MEASURED (2026-07-17):** donchian@4h's 2025+ slice is
+  **−0.047R over 469 OOS trades** in the acceptance harness itself
+  (`docs/research/DON_BBW_GATE_REPORT.md` §5) — ~18 months of ≈zero net
+  edge. The full-6y verdict stays ACCEPTED (Exp-R +0.271, DSR +3.17
+  re-replicated), but the paper window and the Phase-1 leg review must
+  treat donchian recency as the primary open question. Squeeze@4h was
+  strong in BOTH halves including 2025+ (as of its validation).
+- **BBW contraction gate on donchian (campaign-7 F7): NO-GO (2026-07-17).**
+  The simplified-exit promise (+0.118→+0.169R) did NOT survive the real
+  channel-exit engine: per-trade Exp-R unchanged (+0.28 vs +0.27), total R
+  LOWER in every cell (−58…−76R / 23 quarters, P(delta≤0)=0.74–0.86), every
+  gated DSR below baseline. `DON_BBW_GATE_PCTILE` stays default-OFF research
+  infrastructure — do not enable. Trial count now **197**.
 - **Campaign 7 (2026-07-09, conditional swing TA — `CONDITIONAL_TA_WAVE_REPORT.md`):**
   first discovery-gate passes since ichimoku. (a) **band_walk @4h
   CANDIDATE** — two closes outside BB(20,2) + rising ADX, net +0.076R,
