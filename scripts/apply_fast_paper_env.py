@@ -60,14 +60,26 @@ U11_ICHI = "BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TRX+DOT"
 #   donchian_trend@4h/1d:n=10 squeeze_breakout@1h/4h:ts=24:u=<U12>
 #   squeeze_breakout@4h/1d:ts=24:q=30 ichimoku_trend@4h/1d
 #   band_walk@4h/1d:ts=12:u=<MAJORS>
+# TF-expansion follow-up 2026-07-18 (owner: "more trades AND more profit"):
+#   * squeeze@2h ADDED as a 5th leg on its validated 11-coin universe.
+#     Acceptance cell (DON_BBW_CACHE 1h→2h resample, DSR n_trials=217):
+#     +0.065R over 2041 trades (2.25x squeeze@4h), HIGHER total R (+132 vs
+#     +105), and ALIVE in 2025+ (+0.109, t 2.03) where squeeze@4h is dead
+#     (+0.004, t 0.05). DSR +2.44, both halves positive. Paper-window
+#     candidate (H2 t=1.16 below the strict 1.5 kill line — the 30-50 trade
+#     window is the confirmation authority). ichimoku@2h was REJECTED same
+#     day (edge collapsed, total R halved). docs/review/LEG_REVIEW_2026-07-17
+#     §6.
 STRATEGIES_FAST = (
     "donchian_trend@4h/1d:n=10 "
     "squeeze_breakout@4h/1d:ts=24 "
+    f"squeeze_breakout@2h/8h:ts=24:u={U12} "
     f"ichimoku_trend@4h/1d:u={U11_ICHI} "
     f"band_walk@4h/1d:ts=12:u={MAJORS}")
 STRATEGIES_BASE = (
     "donchian_trend@4h/1d "
     "squeeze_breakout@4h/1d:ts=24 "
+    f"squeeze_breakout@2h/8h:ts=24:u={U12} "
     f"ichimoku_trend@4h/1d:u={U11_ICHI} "
     f"band_walk@4h/1d:ts=12:u={MAJORS}")
 
