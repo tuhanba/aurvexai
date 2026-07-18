@@ -240,6 +240,11 @@ class TelegramCommander(BaseCommander):
             "/pause":      self._cmd_pause,
             "/resume":     self._cmd_resume,
             "/resumeday":  self._cmd_resumeday,
+            "/live":       self._cmd_live,
+            "/paper":      self._cmd_paper,
+            "/panic":      self._cmd_panic,
+            "/risk":       self._cmd_risk,
+            "/safety":     self._cmd_safety,
             "/livecheck":  self._cmd_livecheck,
             "/livemode":   self._cmd_livemode,
             "/papermode":  self._cmd_papermode,
@@ -271,9 +276,14 @@ class TelegramCommander(BaseCommander):
             "/pause     — pause new entries\n"
             "/resume    — resume entries\n"
             "/resumeday — clear today's profit lock, resume entries\n"
+            "/live &lt;token&gt; — GO LIVE now (no restart)\n"
+            "/paper     — back to paper now (no restart)\n"
+            "/panic     — flatten EVERYTHING + pause (emergency)\n"
+            "/risk &lt;pct&gt; — set per-trade risk now\n"
+            "/safety    — feed/exposure/wallet/reconcile card\n"
             "/livecheck — live readiness\n"
-            "/livemode confirm &lt;token&gt; — queue live mode\n"
-            "/papermode — queue paper mode\n"
+            "/livemode confirm &lt;token&gt; — queue live mode (legacy)\n"
+            "/papermode — queue paper mode (legacy)\n"
             "/stop      — shutdown engine"
         )
 
@@ -424,6 +434,125 @@ class TelegramCommander(BaseCommander):
         self._paused = False
         log.info("commander: new entries RESUMED")
         self._send("▶ New entries <b>resumed</b>.")
+
+    def _cmd_live(self, args: List[str]) -> None:
+        """ONE command to go live, no restart: /live <token>.
+
+        Token must match LIVE_HUMAN_CONFIRM (the human-confirm gate moves
+        into this command); every other gate is verified by the engine. On
+        success the executor is hot-swapped and the choice persists across
+        restarts (DB meta mode_override)."""
+        e = self._engine
+        if e is None:
+            self._send("Engine not attached.")
+            return
+        token = args[0] if args else ""
+        if not e.cfg.live_human_confirm:
+            self._send("❌ LIVE_HUMAN_CONFIRM not set in .env "
+                       "(run arm_live_env.py first).")
+            return
+        if token != e.cfg.live_human_confirm:
+            self._send("❌ Token mismatch. Usage: /live &lt;token&gt;")
+            return
+        ok, msg = e.switch_mode("live")
+        if ok:
+            self._send(f"🔴 <b>LIVE — orders are REAL from this cycle.</b>\n"
+                       f"{msg}\nSwitch back anytime: /paper · emergency: /panic")
+        else:
+            self._send(f"❌ Live switch refused: {msg}")
+
+    def _cmd_paper(self, _args: List[str]) -> None:
+        """ONE command back to paper, no restart. Refused while live
+        positions are open (never orphan a real position — /panic first)."""
+        e = self._engine
+        if e is None:
+            self._send("Engine not attached.")
+            return
+        ok, msg = e.switch_mode("paper")
+        self._send(("📄 <b>PAPER mode.</b>\n" + msg) if ok
+                   else f"❌ Paper switch refused: {msg}")
+
+    def _cmd_panic(self, _args: List[str]) -> None:
+        """Emergency flatten: close every open position of the current mode,
+        cancel resting orders + market-close on the exchange when armed
+        (adapter trips — no further real sends until restart), and pause new
+        entries. The one button to press when in doubt."""
+        e = self._engine
+        if e is None:
+            self._send("Engine not attached.")
+            return
+        out = e.panic_flatten()
+        self._paused = True
+        syms = "+".join(out["closed"]) if out["closed"] else "none open"
+        exch = ("exchange positions flattened, adapter TRIPPED "
+                "(restart required for real sends)" if out["exchange"]
+                else "no exchange action (disarmed/paper)")
+        self._send(
+            f"🆘 <b>PANIC executed</b> [{out['mode']}]\n"
+            f"closed: {syms}\n"
+            f"booked pnl: {out['pnl']:+.2f} USDT\n"
+            f"{exch}\n"
+            f"new entries PAUSED — /resume when ready.")
+
+    def _cmd_risk(self, args: List[str]) -> None:
+        """/risk <pct> — change per-trade risk NOW (clamped to the profile
+        band, applied to every strategy leg). Lasts until restart; put it in
+        .env via update_env.py to make it permanent."""
+        e = self._engine
+        if e is None:
+            self._send("Engine not attached.")
+            return
+        if not args:
+            self._send(f"risk_pct = {e.cfg.risk_pct:g}%  "
+                       f"(band {e.cfg.min_risk_pct:g}–{e.cfg.max_risk_pct:g})\n"
+                       f"Usage: /risk 1.0")
+            return
+        try:
+            want = float(args[0])
+        except ValueError:
+            self._send("Usage: /risk 1.0")
+            return
+        lo, hi = e.cfg.min_risk_pct, e.cfg.max_risk_pct
+        newv = max(lo, min(hi, want))
+        e.cfg.risk_pct = newv
+        for sp in getattr(e, "specs", []):        # multi-strategy leg clones
+            sp.pcfg.risk_pct = newv
+        clamped = "" if newv == want else f" (clamped to band {lo:g}–{hi:g})"
+        log.warning("commander: risk_pct set to %.3g%%%s", newv, clamped)
+        self._send(f"⚖️ risk_pct → <b>{newv:g}%</b>{clamped}\n"
+                   f"Applies from the next entry. Until restart; use "
+                   f"update_env.py --risk-pct to persist.")
+
+    def _cmd_safety(self, _args: List[str]) -> None:
+        """P0 safety card: feed / risk-state / exposure / leverage / wallet /
+        reconcile at a glance — the incident-shaped questions, one command."""
+        e = self._engine
+        if e is None:
+            self._send("Engine not attached.")
+            return
+        hb = (e.db.get_heartbeat("engine") or {}).get("status", {})
+        ages = hb.get("feed_ages_sec") or {}
+        ages_txt = " ".join(f"{tf}:{round(a/60)}m" for tf, a in ages.items()) \
+            or "—"
+        rec = hb.get("reconcile") or {}
+        wallet = hb.get("wallet") or {}
+        w_age = hb.get("wallet_age_ms")
+        w_txt = (f"{wallet.get('total', '?')} USDT "
+                 f"({round(w_age/60000)}m ago)" if wallet and w_age is not None
+                 else "not synced")
+        blocked = hb.get("entries_blocked") or []
+        self._send(
+            f"<b>Safety</b> [{hb.get('mode', e.cfg.mode)}]\n"
+            f"feed:      {hb.get('feed_state', '?')}  ({ages_txt})\n"
+            f"risk state: {hb.get('risk_state', '?')}\n"
+            f"exposure:  {hb.get('exposure_pct_mtm', '?')}% / "
+            f"{hb.get('exposure_cap_pct', '?')}%  "
+            f"lev {hb.get('effective_leverage', '?')}x\n"
+            f"wallet:    {w_txt}\n"
+            f"reconcile: enabled={rec.get('enabled')} naked={rec.get('naked_positions', '?')} "
+            f"unknown={rec.get('unknown_positions', '?')} errs={rec.get('errors', '?')}\n"
+            f"entries:   {'BLOCKED: ' + '+'.join(blocked) if blocked else 'open'}"
+        )
 
     def _cmd_resumeday(self, _args: List[str]) -> None:
         """Clear TODAY's daily profit lock/flatten latch and resume entries.

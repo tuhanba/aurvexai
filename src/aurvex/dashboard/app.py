@@ -202,6 +202,14 @@ def create_app(cfg=None) -> Flask:
     db = Storage(cfg.db_path)
     shadow = ShadowLearner(cfg, db)
 
+    def _mode() -> str:
+        """ACTIVE trading mode: the engine's persisted /live-/paper decision
+        (DB meta mode_override) outranks this container's env AX_MODE, so a
+        hot-swapped engine and the dashboard can never disagree about which
+        mode's trades to display."""
+        m = db.get_meta("mode_override")
+        return m if m in ("paper", "live") else cfg.mode
+
     # Optional HTTP Basic auth (Task 4). Active ONLY when both envs are set;
     # /health stays open because the docker healthcheck hits it from localhost.
     if cfg.dashboard_auth_user and cfg.dashboard_auth_pass:
@@ -225,7 +233,7 @@ def create_app(cfg=None) -> Flask:
 
     @app.route("/")
     def index():
-        return render_template("index.html", mode=cfg.mode,
+        return render_template("index.html", mode=_mode(),
                                initial_balance=cfg.initial_paper_balance)
 
     @app.route("/health")
@@ -258,8 +266,8 @@ def create_app(cfg=None) -> Flask:
                           or data_age_ms < cycle_interval_ms * 5)
 
         kill_switch = bool(hb_data.get("kill_switch", False))
-        engine_mode = hb_data.get("mode", cfg.mode)
-        mode_ok = engine_mode == cfg.mode
+        engine_mode = hb_data.get("mode", _mode())
+        mode_ok = engine_mode == _mode()
 
         # P0.1: the engine's own watchdog verdict outranks the heuristic
         # data_fresh cut — HALT means entries are blocked and risk is UNKNOWN.
@@ -280,7 +288,7 @@ def create_app(cfg=None) -> Flask:
         if kill_switch:
             reasons.append("kill switch tripped")
         if not mode_ok:
-            reasons.append(f"mode mismatch: engine={engine_mode} config={cfg.mode}")
+            reasons.append(f"mode mismatch: engine={engine_mode} expected={_mode()}")
 
         # "ok" is kept for backward compat, but the four truths it folds are
         # exposed SEPARATELY so the UI renders four independent badges.
@@ -318,7 +326,7 @@ def create_app(cfg=None) -> Flask:
         if raw:
             hb = dict(raw.get("status") or {})
             hb["ts"] = raw.get("ts")
-        opens = db.get_open_trades(mode=cfg.mode)
+        opens = db.get_open_trades(mode=_mode())
         balance = db.get_balance()
 
         # Epoch label from DB meta.
@@ -328,7 +336,7 @@ def create_app(cfg=None) -> Flask:
 
         # Daily PnL for kill-switch display.
         _day_start = _day_start_ms(cfg)
-        daily_pnl = db.daily_realized_pnl(_day_start, mode=cfg.mode)
+        daily_pnl = db.daily_realized_pnl(_day_start, mode=_mode())
 
         # Task 4: the four independent status truths (never folded into one
         # boolean for the UI) + env-driven heartbeat staleness cut.
@@ -343,10 +351,10 @@ def create_app(cfg=None) -> Flask:
         else:
             data_fresh = (data_age_ms is None
                           or data_age_ms < cfg.cycle_interval_sec * 1000 * 5)
-        engine_mode = hb.get("mode", cfg.mode)
+        engine_mode = hb.get("mode", _mode())
 
         return jsonify({
-            "mode": cfg.mode,
+            "mode": _mode(),
             "balance": balance,
             "initial_balance": cfg.initial_paper_balance,
             "open_trades": len(opens),
@@ -366,7 +374,7 @@ def create_app(cfg=None) -> Flask:
             "heartbeat_age_ms": hb_age_ms,
             "heartbeat_stale_ms": cfg.heartbeat_stale_ms,
             "data_fresh": data_fresh,
-            "mode_ok": engine_mode == cfg.mode,
+            "mode_ok": engine_mode == _mode(),
             "engine_mode": engine_mode,
             "mode_banner": _mode_banner(cfg),
             # P0 live-safety badges (engine heartbeat pass-through).
@@ -416,7 +424,7 @@ def create_app(cfg=None) -> Flask:
         marks_meta = db.get_meta("marks") or {}
         marks = marks_meta.get("prices", {}) if isinstance(marks_meta, dict) else {}
         rows = [_trade_dict(t, balance=balance, marks=marks)
-                for t in db.get_open_trades(mode=cfg.mode)]
+                for t in db.get_open_trades(mode=_mode())]
         upnls = [r["unrealized_pnl"] for r in rows
                  if r["unrealized_pnl"] is not None]
         return jsonify({
@@ -431,11 +439,11 @@ def create_app(cfg=None) -> Flask:
     def trades_closed():
         balance = db.get_balance()
         return jsonify({"trades": [_trade_dict(t, balance=balance)
-                                   for t in db.get_closed_trades(limit=100, mode=cfg.mode)]})
+                                   for t in db.get_closed_trades(limit=100, mode=_mode())]})
 
     @app.route("/api/metrics")
     def metrics():
-        return jsonify(compute_metrics(db.get_closed_trades(limit=2000, mode=cfg.mode)))
+        return jsonify(compute_metrics(db.get_closed_trades(limit=2000, mode=_mode())))
 
     @app.route("/api/shadow")
     def shadow_stats():
@@ -462,8 +470,8 @@ def create_app(cfg=None) -> Flask:
         acc = compute_accounting(
             initial_balance=cfg.initial_paper_balance,
             balance=db.get_balance(),
-            open_trades=db.get_open_trades(mode=cfg.mode),
-            closed_trades=db.get_closed_trades(limit=5000, mode=cfg.mode),
+            open_trades=db.get_open_trades(mode=_mode()),
+            closed_trades=db.get_closed_trades(limit=5000, mode=_mode()),
             marks=marks,
         )
         acc["marks_ts"] = marks_meta.get("ts") if isinstance(marks_meta, dict) else None
@@ -478,7 +486,7 @@ def create_app(cfg=None) -> Flask:
         liq-safety ratio, slot occupancy time, and missed-opportunity count
         (resolved shadow rows that were rejected rather than traded).
         """
-        opens = db.get_open_trades(mode=cfg.mode)
+        opens = db.get_open_trades(mode=_mode())
         balance = db.get_balance()
 
         open_notional = sum(t.position_size * t.remaining_fraction for t in opens)
@@ -585,7 +593,7 @@ def create_app(cfg=None) -> Flask:
         # 200 USDT / 10% aggressive epoch (budget = 20 USDT).
         import datetime as _dt
         _day_start = _day_start_ms(cfg)
-        daily_pnl = db.daily_realized_pnl(_day_start, mode=cfg.mode)
+        daily_pnl = db.daily_realized_pnl(_day_start, mode=_mode())
         daily_loss_budget = balance * (cfg.max_daily_loss_pct / 100.0)
         daily_loss_used_pct = (
             round(max(0.0, -daily_pnl) / daily_loss_budget * 100.0, 2)
@@ -652,7 +660,7 @@ def create_app(cfg=None) -> Flask:
         marks_meta = db.get_meta("marks") or {}
         marks = marks_meta.get("prices", {}) if isinstance(marks_meta, dict) else {}
         unreal = 0.0
-        for t in db.get_open_trades(mode=cfg.mode):
+        for t in db.get_open_trades(mode=_mode()):
             mark = marks.get(t.symbol)
             if mark and t.entry:
                 qty = t.position_size * t.remaining_fraction / t.entry
@@ -683,7 +691,7 @@ def create_app(cfg=None) -> Flask:
         display; the live decision itself stays with the owner + the
         five-gate lock.
         """
-        closed = db.get_closed_trades(limit=5000, mode=cfg.mode)
+        closed = db.get_closed_trades(limit=5000, mode=_mode())
         per: Dict[str, Dict[str, Any]] = {}
         for t in closed:
             s = per.setdefault(t.setup_type, {"n": 0, "wins": 0, "sum_r": 0.0})
@@ -716,7 +724,7 @@ def create_app(cfg=None) -> Flask:
     def history():
         """Daily PnL calendar + R-multiple list + per-strategy cumulative
         curves, all from closed trades. Read-only aggregation."""
-        closed = sorted(db.get_closed_trades(limit=5000, mode=cfg.mode),
+        closed = sorted(db.get_closed_trades(limit=5000, mode=_mode()),
                         key=lambda t: t.close_time or 0)
         daily: Dict[str, float] = {}
         rs: list = []
@@ -793,9 +801,9 @@ def create_app(cfg=None) -> Flask:
 
         balance = db.get_balance()
         opened = []
-        for t in db.get_open_trades(mode=cfg.mode):
+        for t in db.get_open_trades(mode=_mode()):
             opened.append(opened_receipt(t, balance=balance, cfg=cfg))
-        for t in db.get_closed_trades(limit=20, mode=cfg.mode):
+        for t in db.get_closed_trades(limit=20, mode=_mode()):
             opened.append(opened_receipt(t, balance=balance, cfg=cfg))
 
         rejected = []
@@ -855,15 +863,15 @@ def create_app(cfg=None) -> Flask:
         from ..diagnosis import diagnose
         from ..quality import grade_performance
 
-        closed = db.get_closed_trades(limit=5000, mode=cfg.mode)
+        closed = db.get_closed_trades(limit=5000, mode=_mode())
         metrics_d = compute_metrics(closed)
         st = shadow.stats()
 
-        opens = db.get_open_trades(mode=cfg.mode)
+        opens = db.get_open_trades(mode=_mode())
         balance = db.get_balance()
         import datetime as _dt
         _day_start = _day_start_ms(cfg)
-        daily_pnl = db.daily_realized_pnl(_day_start, mode=cfg.mode)
+        daily_pnl = db.daily_realized_pnl(_day_start, mode=_mode())
         daily_budget = balance * (cfg.max_daily_loss_pct / 100.0)
         daily_used_pct = (round(max(0.0, -daily_pnl) / daily_budget * 100.0, 2)
                           if daily_budget > 0 else 0.0)
@@ -914,7 +922,7 @@ def create_app(cfg=None) -> Flask:
 
         return jsonify({
             "engine": {"alive": alive, "kill_switch": bool(hb_data.get("kill_switch", False))},
-            "mode": cfg.mode,
+            "mode": _mode(),
             "live": "disabled" if not cfg.live_enabled else "ENABLED",
             "live_enabled": cfg.live_enabled,
             "risk_profile": cfg.risk_profile,
@@ -968,16 +976,16 @@ def create_app(cfg=None) -> Flask:
         rows = setup_health(setups_in, shadow_only=cfg.shadow_only_setups)
 
         # Risk-throttle inputs (report-only).
-        closed = db.get_closed_trades(limit=20, mode=cfg.mode)
+        closed = db.get_closed_trades(limit=20, mode=_mode())
         recent_rs = [t.realized_pnl_pct for t in closed
                      if t.realized_pnl_pct is not None]
         recent_avg_r = (sum(recent_rs) / len(recent_rs)) if recent_rs else None
-        metrics = compute_metrics(db.get_closed_trades(limit=5000, mode=cfg.mode))
+        metrics = compute_metrics(db.get_closed_trades(limit=5000, mode=_mode()))
 
         import datetime as _dt
         _day_start = _day_start_ms(cfg)
         balance = db.get_balance()
-        daily_pnl = db.daily_realized_pnl(_day_start, mode=cfg.mode)
+        daily_pnl = db.daily_realized_pnl(_day_start, mode=_mode())
         daily_budget = balance * (cfg.max_daily_loss_pct / 100.0)
         daily_used_pct = (round(max(0.0, -daily_pnl) / daily_budget * 100.0, 2)
                           if daily_budget > 0 else 0.0)
@@ -1020,7 +1028,7 @@ def create_app(cfg=None) -> Flask:
         # 2) Realised outcome per grade from CLOSED trades that carry a grade.
         agg: Dict[str, Dict[str, float]] = {
             g: {"n": 0, "wins": 0, "sum_r": 0.0} for g in order}
-        for t in db.get_closed_trades(limit=5000, mode=cfg.mode):
+        for t in db.get_closed_trades(limit=5000, mode=_mode()):
             g = t.metadata.get("quality_grade")
             if g not in agg:
                 continue
@@ -1045,7 +1053,7 @@ def create_app(cfg=None) -> Flask:
         # Phase 6: full per-grade exit-path performance + separation verdict.
         from ..quality import grade_performance
         performance = grade_performance(
-            db.get_closed_trades(limit=5000, mode=cfg.mode))
+            db.get_closed_trades(limit=5000, mode=_mode()))
 
         return jsonify({
             "label_only": True,
