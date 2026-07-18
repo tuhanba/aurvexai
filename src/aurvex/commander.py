@@ -446,8 +446,9 @@ class TelegramCommander(BaseCommander):
             "2. Set LIVE_HUMAN_CONFIRM=&lt;token&gt; in .env\n"
             "3. Send: <code>/livemode confirm &lt;token&gt;</code>\n"
             "4. Restart the engine\n"
-            "\n⚠️ Live executor still only simulates (_send_order is a stub).\n"
-            "See ROADMAP.md Phase-4 before any real-order activation."
+            "\n⚠️ With LIVE_SEND_ORDERS=false the live executor only "
+            "simulates.\nWith ALL five gates open (incl. LIVE_SEND_ORDERS"
+            "=true + keys) orders are REAL."
         )
         self._send("\n".join(lines))
 
@@ -476,11 +477,23 @@ class TelegramCommander(BaseCommander):
             return
         write_mode_request("live", reason="telegram /livemode confirm")
         log.warning("commander: live mode queued via telegram command")
+        # Truthful arming summary (the old "still a stub" reminder predated
+        # Stage 3 and was DANGEROUSLY misleading once the adapter existed).
+        armed = bool(cfg.live_enabled and cfg.live_human_confirm
+                     and getattr(cfg, "live_send_orders", False)
+                     and cfg.binance_api_key and cfg.binance_api_secret)
+        warning = (
+            "\n🔴 <b>After restart orders are REAL</b> — all five gates will "
+            "be open (canary sizing applies to first entries)."
+            if armed else
+            "\nℹ️ LIVE_SEND_ORDERS is not armed — live mode will still "
+            "SIMULATE sends until the Stage-3 switch is set."
+        )
         self._send(
             "✅ <b>Live mode queued.</b>\n"
             "data/mode_request.json written.\n"
-            "Restart the engine to apply.\n"
-            "\n⚠️ Reminder: _send_order is still a stub — no real orders until Phase-4."
+            "Restart the engine to apply."
+            + warning
         )
 
     def _cmd_papermode(self, _args: List[str]) -> None:
