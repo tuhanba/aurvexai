@@ -239,6 +239,7 @@ class TelegramCommander(BaseCommander):
             "/profile":    self._cmd_profile,
             "/pause":      self._cmd_pause,
             "/resume":     self._cmd_resume,
+            "/resumeday":  self._cmd_resumeday,
             "/livecheck":  self._cmd_livecheck,
             "/livemode":   self._cmd_livemode,
             "/papermode":  self._cmd_papermode,
@@ -269,6 +270,7 @@ class TelegramCommander(BaseCommander):
             "/profile   — strategy profile\n"
             "/pause     — pause new entries\n"
             "/resume    — resume entries\n"
+            "/resumeday — clear today's profit lock, resume entries\n"
             "/livecheck — live readiness\n"
             "/livemode confirm &lt;token&gt; — queue live mode\n"
             "/papermode — queue paper mode\n"
@@ -422,6 +424,37 @@ class TelegramCommander(BaseCommander):
         self._paused = False
         log.info("commander: new entries RESUMED")
         self._send("▶ New entries <b>resumed</b>.")
+
+    def _cmd_resumeday(self, _args: List[str]) -> None:
+        """Clear TODAY's daily profit lock/flatten latch and resume entries.
+
+        The daily profit target sets ``profit_target_hit_day`` (and the
+        day-open equity baseline ``profit_day``) in DB meta, blocking new
+        entries until the day boundary. This owner command releases the lock
+        NOW: both keys are deleted, so the guard re-baselines at current
+        equity and the entry gate opens on the next cycle. It touches nothing
+        else — kill switch, risk model and open trades are unaffected.
+        (Re-added 2026-07-18: existed as a server-local command, lost in the
+        conflict-reset; now a first-class, tested command.)
+        """
+        e = self._engine
+        if e is None:
+            self._send("Engine not attached.")
+            return
+        try:
+            e.db.conn.execute(
+                "DELETE FROM meta WHERE key IN "
+                "('profit_target_hit_day','profit_day')")
+            e.db.conn.commit()
+        except Exception as exc:
+            self._send(f"❌ resumeday failed: {exc}")
+            return
+        log.warning("commander: daily profit lock CLEARED via /resumeday")
+        self._send(
+            "▶️ <b>Günlük kâr kilidi kaldırıldı.</b>\n"
+            "Yeni girişler bir sonraki cycle'dan itibaren tekrar açık; "
+            "gün-başı özkaynak tabanı şimdiki değerden yeniden kuruldu.\n"
+            "(Kill switch ve açık işlem yönetimi etkilenmedi.)")
 
     def _cmd_livecheck(self, _args: List[str]) -> None:
         e = self._engine
