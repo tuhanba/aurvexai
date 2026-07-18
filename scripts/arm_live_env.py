@@ -38,7 +38,7 @@ import shutil
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
-from update_env import _LINE_RE, apply_to_lines, _read_lines  # noqa: E402
+from update_env import _LINE_RE, _read_lines  # noqa: E402
 
 
 def _has_nonempty_secret(lines, key: str) -> bool:
@@ -56,10 +56,13 @@ def _has_nonempty_secret(lines, key: str) -> bool:
     return False
 
 
-def _upsert_secret_line(lines, key: str, value: str):
-    """Upsert ``key=value`` where value is sensitive: apply_to_lines refuses
-    to touch secret keys, so this dedicated helper writes it and reports only
-    '(hidden)'. Returns (new_lines, changed:bool)."""
+def _upsert_line(lines, key: str, value: str):
+    """Upsert ``key=value`` regardless of whether the key already exists.
+
+    apply_to_lines both refuses secret keys AND only appends keys from its
+    own ALLOWED_KEYS list (a missing LIVE_* key would be silently dropped —
+    found the hard way with LIVE_CANARY_RISK_PCT), so the arm script writes
+    every key through this dedicated helper. Returns (new_lines, True)."""
     out, found = [], False
     for raw in lines:
         s = raw.strip()
@@ -89,6 +92,12 @@ def main(argv=None) -> int:
     p.add_argument("--yes-real-orders", action="store_true",
                    help="required literal acknowledgement: this system will "
                         "send REAL orders to Binance USDT-M futures")
+    p.add_argument("--full-size", action="store_true",
+                   help="disable canary shrink: write LIVE_CANARY_RISK_PCT=100 "
+                        "so live entries use FULL risk sizing (RISK_PCT) from "
+                        "the first trade. Owner decision 2026-07-18 — on a "
+                        "small account the 0.1%% canary produces sub-minimum-"
+                        "notional orders the exchange refuses anyway.")
     p.add_argument("--disarm", action="store_true",
                    help="flip LIVE_ENABLED and LIVE_SEND_ORDERS back to false")
     p.add_argument("--apply", action="store_true",
@@ -103,10 +112,11 @@ def main(argv=None) -> int:
     lines = _read_lines(env_path)
 
     if args.disarm:
-        changes = {"LIVE_ENABLED": "false", "LIVE_SEND_ORDERS": "false"}
-        new_lines, log = apply_to_lines(lines, changes)
+        new_lines, _ = _upsert_line(lines, "LIVE_ENABLED", "false")
+        new_lines, _ = _upsert_line(new_lines, "LIVE_SEND_ORDERS", "false")
         print("DISARM plan:")
-        print("\n".join(log) or "  (no matching keys — nothing to do)")
+        print("  ~ LIVE_ENABLED=false")
+        print("  ~ LIVE_SEND_ORDERS=false")
     else:
         # ---- arming: every gate input must be explicit -------------------
         if not args.token or len(args.token) < 6 or " " in args.token:
@@ -125,12 +135,20 @@ def main(argv=None) -> int:
                       f"TRADE-ONLY (withdraw-disabled) key first — this "
                       f"script never writes secrets for you.")
                 return 2
-        changes = {"LIVE_ENABLED": "true", "LIVE_SEND_ORDERS": "true"}
-        new_lines, log = apply_to_lines(lines, changes)
-        new_lines, _ = _upsert_secret_line(new_lines, "LIVE_HUMAN_CONFIRM",
-                                           args.token)
+        new_lines, _ = _upsert_line(lines, "LIVE_ENABLED", "true")
+        new_lines, _ = _upsert_line(new_lines, "LIVE_SEND_ORDERS", "true")
         print("ARM plan (gates 1/2/4 + token; gate 3 stays interactive):")
-        print("\n".join(log))
+        print("  ~ LIVE_ENABLED=true")
+        print("  ~ LIVE_SEND_ORDERS=true")
+        if args.full_size:
+            # LiveExecutor caps the multiplier at 1.0, so 100 simply means
+            # "no shrink": live sizing == the shared RISK_PCT sizing.
+            new_lines, _ = _upsert_line(new_lines, "LIVE_CANARY_RISK_PCT",
+                                        "100")
+            print("  ~ LIVE_CANARY_RISK_PCT=100 (FULL SIZE — canary shrink "
+                  "disabled; live trades risk the full RISK_PCT)")
+        new_lines, _ = _upsert_line(new_lines, "LIVE_HUMAN_CONFIRM",
+                                    args.token)
         print("  ~ LIVE_HUMAN_CONFIRM: set (hidden)")
         print("  ✓ BINANCE_API_KEY / SECRET present (values not read)")
 
@@ -154,9 +172,11 @@ def main(argv=None) -> int:
     print("  3. docker compose up -d --force-recreate engine")
     print("  4. curl -s http://127.0.0.1:5000/health   "
           "(expect \"engine_mode\": \"live\")")
-    print("First live entries are canary-sized (LIVE_CANARY_RISK_PCT); "
-          "protective stops rest on-exchange; reconcile enforcement + feed "
-          "watchdog are active. Watch Telegram for the first trades.")
+    sizing = ("FULL SIZE (canary disabled — owner decision)" if args.full_size
+              else "canary-sized (LIVE_CANARY_RISK_PCT)")
+    print(f"First live entries are {sizing}; protective stops rest "
+          f"on-exchange; reconcile enforcement + feed watchdog are active. "
+          f"Watch Telegram for the first trades.")
     return 0
 
 
