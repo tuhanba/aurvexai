@@ -152,3 +152,36 @@ Deployment happens only via the owner running the apply script + restart.
 
 Trial count after this campaign: **207**. Reproduction:
 `python scripts/leg_review.py fetch` → `run <leg>` (resumable) → `report`.
+
+## 6. TF-expansion follow-up (2026-07-18) — "more trades AND more profit?"
+
+Owner question: a path to higher frequency AND higher return. The only
+evidence-permitted lever is extending a PROVEN edge to an untested faster
+timeframe (loosening thresholds always measured lower total R). Two cells,
+real engine exits, DSR n_trials=217:
+
+| cell | n | Exp-R | total R | DSR | H2 (t) | 2025+ (t) |
+|---|---|---|---|---|---|---|
+| ichimoku @4h (deploy) | 1704 | +0.234 | +399 | +4.24 | +0.271 (4.1) | +0.142 (1.75) |
+| ichimoku @2h | 3612 | +0.057 | +204 | +1.90 | +0.041 (1.1) | +0.025 (0.49) |
+| squeeze @4h q20 | 907 | +0.116 | +105 | +2.82 | +0.120 (2.1) | +0.004 (0.05) |
+| **squeeze @2h q20** | **2041** | +0.065 | **+132** | +2.44 | +0.042 (1.2) | **+0.109 (2.03)** |
+
+**ichimoku@2h: NO-GO.** 2.1× the trades but per-trade edge collapses
+(+0.234→+0.057), total R HALVES, 2025+ dead (t 0.49). The faster cadence's
+cost drag eats it — the squeeze@1h structural finding repeats. Ichimoku
+stays 4h.
+
+**squeeze@2h: CANDIDATE (the honest "yes").** 2.25× the trades, HIGHER
+total R (+132 vs +105), and — decisively — ALIVE in 2025+ (+0.109, t 2.03)
+where squeeze@4h is dead (+0.004, t 0.05). Both halves positive; DSR +2.44.
+Caveat: H2 t=1.16 is below the strict 1.5 kill threshold, so it is a
+paper-window candidate, not a proven slam-dunk — but it is the only
+breakout-family cell with a significant recent slice.
+
+**Recommendation:** add squeeze@2h to the paper window as a new leg (its own
+u=validated-12, ts=24, q=20). It is measured-positive and DSR-clean, unlike
+the retired squeeze@1h. Correlation with squeeze@4h/donchian@4h is contained
+by the shared kill switch + exposure cap. Deploy via STRATEGIES; the
+30–50-trade paper window is the confirmation authority for the H2-t softness.
+Trial count now 217.

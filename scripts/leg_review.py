@@ -70,7 +70,7 @@ V17 = V12 + EXTRA5
 MAJORS5 = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
 MONTHS = [f"{y}-{m:02d}" for y in range(2020, 2027)
           for m in range(1, 13)][6:78]                  # 2020-07 .. 2026-06
-N_TRIALS = 207                       # 197 prior + 8 review cells + 2 q20 cells
+N_TRIALS = 217          # 197 prior + 8 review + 2 q20 + 2×2h expansion cells
 RECENCY_MS = 1_735_689_600_000                          # 2025-01-01T00:00Z
 LONG_FIRST_MS = 1_604_188_800_000                       # listed by 2020-10-31
 
@@ -99,6 +99,13 @@ LEGS = {
     "sqz4h_q20_11c6y":     ("squeeze_breakout", "4h", "1d", V12, "long6y",
                             {"time_stop_bars": 24, "sqz_pctile": 20}),
     "sqz4h_q20_17c3y":     ("squeeze_breakout", "4h", "1d", V17, "common",
+                            {"time_stop_bars": 24, "sqz_pctile": 20}),
+    # TF-expansion cells (owner question 2026-07-18: "more trades AND more
+    # profit?"): take the book's strongest/only-alive-in-2025 leg (ichimoku)
+    # and the old squeeze@2h WATCH to the untested 2h dilim — 12 decision
+    # windows/day instead of 6. 2h bars resampled from the 1h archive cache.
+    "ichimoku_2h_11c6y":   ("ichimoku_trend", "2h", "8h", V12, "long6y", {}),
+    "sqz2h_q20_11c6y":     ("squeeze_breakout", "2h", "8h", V12, "long6y",
                             {"time_stop_bars": 24, "sqz_pctile": 20}),
 }
 
@@ -191,10 +198,19 @@ def _load_symbol(sym, tf, cache_dir, tf_ms):
 
 
 def load_leg_data(universe, tf, span):
-    tf_ms = {"1h": 3_600_000, "4h": 14_400_000}[tf]
-    cache = CACHE1H if tf == "1h" else CACHE4H
+    tf_ms = {"1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000}[tf]
     candles = {}
     for s in universe:
+        if tf == "2h":
+            # 2h is not archived per-file: resample from the 1h cache (same
+            # integrity checks apply to the 1h source).
+            c1 = _load_symbol(s, "1h", CACHE1H, 3_600_000)
+            if c1 is None:
+                continue
+            from aurvex.backtest import resample as _resample
+            candles[f"{s[:-4]}/USDT:USDT"] = _resample(c1, "1h", "2h")
+            continue
+        cache = CACHE1H if tf == "1h" else CACHE4H
         c = _load_symbol(s, tf, cache, tf_ms)
         if c is not None:
             candles[f"{s[:-4]}/USDT:USDT"] = c
@@ -331,7 +347,7 @@ def report():
             print(f"\n  {leg}: INCOMPLETE ({len(state['windows'])} windows) — "
                   f"rerun `leg_review.py run {leg}`")
             continue
-        tf_ms = {"1h": 3_600_000, "4h": 14_400_000}[ltf]
+        tf_ms = {"1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000}[ltf]
         trades_by_window = [
             [_trade_to_result(t, tf_ms) for t in state["windows"][wi]]
             for wi in sorted(state["windows"])]

@@ -181,7 +181,7 @@ correlation containment.
 ```
 RISK_PROFILE=aggressive_paper
 INITIAL_PAPER_BALANCE=200
-STRATEGIES=donchian_trend@4h/1d:n=10 squeeze_breakout@4h/1d:ts=24 ichimoku_trend@4h/1d:u=BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TRX+DOT band_walk@4h/1d:ts=12:u=BTC+ETH+SOL+BNB+XRP
+STRATEGIES=donchian_trend@4h/1d:n=10 squeeze_breakout@4h/1d:ts=24 squeeze_breakout@2h/8h:ts=24:u=BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TON+TRX+DOT ichimoku_trend@4h/1d:u=BTC+ETH+SOL+BNB+XRP+DOGE+ADA+AVAX+LINK+TRX+DOT band_walk@4h/1d:ts=12:u=BTC+ETH+SOL+BNB+XRP
 SHADOW_ONLY_SETUPS=
 GLOBAL_RANKING=true
 RANK_KEY=edge
@@ -210,6 +210,15 @@ LIVE_SEND_ORDERS=false
 The exact block above is written by `scripts/apply_fast_paper_env.py --apply`
 (dry-run default, timestamped backup, never touches secrets, can only ever
 write the live flags disarmed).
+
+**2026-07-18 TF-expansion (owner: "more trades AND more profit"):**
+squeeze@2h ADDED as a 5th leg (its validated 12-coin universe, ts=24,
+q=20). Acceptance cell: +0.065R over 2041 trades (2.25× squeeze@4h),
+HIGHER total R (+132 vs +105R), and ALIVE in 2025+ (+0.109, t 2.03) where
+squeeze@4h is dead. DSR +2.44. Paper-window CANDIDATE — H2 t=1.16 is below
+the strict 1.5 kill line, so the 30–50-trade window confirms or retires it.
+ichimoku@2h was REJECTED the same day (edge collapsed +0.234→+0.057, total
+R halved). `docs/review/LEG_REVIEW_2026-07-17.md` §6.
 
 **2026-07-17 leg-review package (STRATEGIES line above updated):**
 squeeze@1h REMOVED (re-measured +0.018R/4031 trades as deployed — retire);

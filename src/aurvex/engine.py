@@ -62,7 +62,8 @@ _LEG_EDGE_SHARPE = {
     "squeeze_breakout@4h": 1.95,
     "donchian_trend": 1.06,
     "band_walk": 0.94,
-    "squeeze_breakout": 0.62,      # the 1h leg
+    "squeeze_breakout@2h": 0.90,   # 2h leg — DSR 2.44, alive in 2025+ (t 2.03)
+    "squeeze_breakout": 0.62,      # the retired 1h leg (unused once removed)
 }
 
 
