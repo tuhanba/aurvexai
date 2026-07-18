@@ -261,6 +261,117 @@ class Engine:
         log.info("stop requested")
         self._stop.set()
 
+    # -- one-command mode switching (owner request 2026-07-18) -------------
+    def live_gates_ok(self) -> "tuple[bool, str]":
+        """Env-side gates required before a live switch (keys + arming)."""
+        cfg = self.cfg
+        if not cfg.live_enabled:
+            return False, "LIVE_ENABLED is false"
+        if not cfg.live_human_confirm:
+            return False, "LIVE_HUMAN_CONFIRM token not set"
+        if not getattr(cfg, "live_send_orders", False):
+            return False, "LIVE_SEND_ORDERS is false"
+        if not (cfg.binance_api_key and cfg.binance_api_secret):
+            return False, "Binance API keys absent"
+        return True, ""
+
+    def switch_mode(self, mode: str) -> "tuple[bool, str]":
+        """Hot-swap paper↔live WITHOUT a restart, safely.
+
+        The decision brain is mode-agnostic (parity); only the executor and
+        the reconciler enablement differ — exactly what gets swapped here.
+        Rules:
+          * →live: every env gate must be open; any open PAPER trades are
+            force-closed at their marks first (reason MODE_SWITCH) so no
+            paper row is ever orphaned/managed under live accounting.
+          * →paper: REFUSED while live DB trades are open — switching away
+            from live must never orphan a real position (/panic first).
+        The chosen mode persists in DB meta ("mode_override") and is applied
+        on startup (live only if gates still pass), so a container recreate
+        keeps the owner's decision without the queued-request dance.
+        """
+        mode = (mode or "").lower()
+        if mode not in ("paper", "live"):
+            return False, f"unknown mode '{mode}'"
+        if mode == self.cfg.mode:
+            return True, f"already in {mode} mode"
+        if mode == "live":
+            ok, why = self.live_gates_ok()
+            if not ok:
+                return False, f"gate closed: {why}"
+            closed = []
+            marks = self._marks()
+            for t in self.db.get_open_trades(mode="paper"):
+                px = marks.get(t.symbol) or t.entry
+                ev = self.executor.force_close(t, float(px),
+                                               reason="MODE_SWITCH")
+                self.journal.record_fills(t, [ev])
+                closed.append(t.symbol.split("/")[0])
+            note = (f"; {len(closed)} paper position(s) closed at mark "
+                    f"({'+'.join(closed)})" if closed else "")
+        else:
+            live_open = self.db.get_open_trades(mode="live")
+            if live_open:
+                syms = ", ".join(t.symbol for t in live_open)
+                return False, (f"{len(live_open)} LIVE position(s) still open "
+                               f"({syms}) — /panic or let them close first")
+            note = ""
+        self.cfg.mode = mode
+        self.executor = self._build_executor(self.cfg)
+        self.reconciler.adapter = getattr(self.executor, "order_adapter", None)
+        self._reconcile_next_ms = 0            # immediate reconcile pass
+        self.notifier.set_mode(mode)
+        self.db.set_meta("mode_override", mode)
+        log.warning("MODE SWITCHED to %s (no restart)%s", mode.upper(), note)
+        return True, f"switched to {mode.upper()}{note}"
+
+    def _apply_mode_override_on_start(self) -> None:
+        """Startup: re-apply the persisted /live-/paper decision (live only if
+        the gates still pass — a pulled key silently degrades to paper with a
+        loud log, never a crash)."""
+        want = self.db.get_meta("mode_override")
+        if want in ("paper", "live") and want != self.cfg.mode:
+            ok, why = self.switch_mode(want)
+            if not ok:
+                log.warning("mode_override '%s' NOT applied: %s", want, why)
+
+    def panic_flatten(self, reason: str = "PANIC") -> "dict":
+        """One-command emergency flatten (owner's /panic).
+
+        Books a force-close for every open trade of the CURRENT mode at its
+        last mark; when the live adapter is armed it also cancels all resting
+        orders and market-closes the real positions (emergency_stop — which
+        TRIPS the adapter: no further real sends until restart, by design).
+        Returns a summary dict for the commander to render."""
+        opens = self.db.get_open_trades(mode=self.cfg.mode)
+        marks = self._marks()
+        closed = []
+        pnl = 0.0
+        for t in opens:
+            px = marks.get(t.symbol) or t.entry
+            try:
+                ev = self.executor.force_close(t, float(px), reason=reason)
+                self.journal.record_fills(t, [ev])
+                pnl += ev.pnl
+                closed.append(t.symbol.split("/")[0])
+            except Exception as exc:
+                log.error("panic close failed %s: %s", t.symbol, exc)
+        exchange_hit = False
+        adapter = getattr(self.executor, "order_adapter", None)
+        if adapter is not None:
+            try:
+                armed, _ = adapter.engaged()
+                if armed:
+                    adapter.emergency_stop([t.symbol for t in opens],
+                                           reason="telegram /panic")
+                    exchange_hit = True
+            except Exception as exc:
+                log.error("panic exchange flatten error: %s", exc)
+        log.warning("PANIC flatten: %d closed, pnl %+0.2f, exchange=%s",
+                    len(closed), pnl, exchange_hit)
+        return {"closed": closed, "pnl": pnl, "exchange": exchange_hit,
+                "mode": self.cfg.mode}
+
     async def run(self, max_cycles: Optional[int] = None,
                   sleep_override: Optional[float] = None) -> None:
         bal = self.db.get_balance()
@@ -276,6 +387,8 @@ class Engine:
         self.notifier.system_started(self.cfg.mode, bal, epoch=self.cfg.epoch_label)
         self._persist_telegram_health()
         self._risk_modulation_preflight()
+        # Persisted /live-/paper decision survives restarts (owner request).
+        self._apply_mode_override_on_start()
         # Check for a queued mode-request from the commander (written by /livemode
         # or /papermode on the previous run).
         mode_req = read_mode_request()
@@ -284,10 +397,13 @@ class Engine:
             if requested in {"paper", "live"}:
                 log.info("applying queued mode request: %s → %s",
                          self.cfg.mode, requested)
-                self.cfg.mode = requested
-                self.notifier.set_mode(requested)   # keep the [MODE] tag truthful
+                # Route through switch_mode so the executor/reconciler are
+                # actually rebuilt (the old direct cfg.mode assignment left
+                # the paper executor in place) and the choice persists.
+                ok, msg = self.switch_mode(requested)
                 self.notifier.send(
-                    f"ℹ️ Mode applied from queued request: {requested.upper()}")
+                    f"ℹ️ Queued mode request: {msg}" if ok else
+                    f"⚠️ Queued mode request REFUSED: {msg}")
         try:
             self.scanner.scan()  # warm the universe once
         except Exception as exc:
