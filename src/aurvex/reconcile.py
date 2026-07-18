@@ -63,6 +63,10 @@ class ReconcileEnforcer:
         self.last_wallet: Optional[Dict[str, float]] = None
         self.last_wallet_ms: int = 0
         self.last_report: Dict[str, Any] = {}
+        # Qty-mismatch alert dedupe: a TP-ladder partial fill on the exchange
+        # legitimately diverges from the DB row until the next bar-close books
+        # it — without dedupe that is one CRITICAL every pass for hours.
+        self._mismatch_alerted: Dict[str, float] = {}
 
     # -- plumbing --------------------------------------------------------------
     @property
@@ -162,16 +166,31 @@ class ReconcileEnforcer:
         for o in open_orders:
             orders_by_symbol.setdefault(o.get("symbol", ""), []).append(o)
 
-        # 1) DB says OPEN, exchange says flat → close the ghost row + alert.
+        # 1) DB says OPEN, exchange says flat → close the DB row. Prefer the
+        #    REAL exit: fetch the userTrades close fills and book the actual
+        #    price/PnL (EXCHANGE_CLOSE) so live per-trade PnL is never blind;
+        #    only when no fills are recoverable fall back to the NULL-PnL
+        #    EXCHANGE_RECONCILE semantics.
         for t in open_trades:
             if t.symbol in exch_qty:
+                continue
+            real = self._close_with_exchange_pnl(ex, t)
+            if real is not None:
+                report["ghosts_closed"].append(t.symbol)
+                log.warning("reconcile: %s closed on-exchange — booked REAL "
+                            "exit px=%.6g pnl=%+.4f (EXCHANGE_CLOSE)",
+                            t.symbol, real["price"], real["pnl"])
+                self._alert(
+                    f"✅ {t.symbol} closed on the exchange → booked real exit "
+                    f"@ {real['price']:.6g}, PnL {real['pnl']:+.2f} USDT "
+                    f"(source: Binance fills).")
                 continue
             closed = self.db.close_trade_reconcile(t.id, now_ms())
             if closed:
                 report["ghosts_closed"].append(t.symbol)
                 log.warning("reconcile: closed DB ghost %s (%s) — no exchange "
-                            "position (close_reason=EXCHANGE_RECONCILE, "
-                            "PnL NULL — Binance is the accounting source)",
+                            "position and no recoverable fills "
+                            "(close_reason=EXCHANGE_RECONCILE, PnL NULL)",
                             t.symbol, t.id)
                 self._alert(
                     f"🔧 Reconcile: DB row {t.symbol} was OPEN but the exchange "
@@ -192,6 +211,11 @@ class ReconcileEnforcer:
                     f"instruction required.", critical=True)
 
         # 3) Both sides exist but quantities disagree → CRITICAL report.
+        #    Edge-triggered per symbol: a TP-ladder partial fill on the
+        #    exchange is EXPECTED to diverge until the next bar-close books
+        #    it engine-side — alert once per episode / material change, not
+        #    every 2-minute pass.
+        matched_syms = set()
         for t in open_trades:
             e_qty = exch_qty.get(t.symbol)
             if e_qty is None:
@@ -203,11 +227,20 @@ class ReconcileEnforcer:
                 report["qty_mismatches"].append(
                     {"symbol": t.symbol, "exchange_qty": e_qty,
                      "engine_qty": o_signed})
-                self._alert(
-                    f"🚨 Reconcile CRITICAL: {t.symbol} qty mismatch — "
-                    f"exchange {e_qty:.6f} vs engine {o_signed:.6f}. "
-                    f"No auto-adjust; exchange is truth — investigate.",
-                    critical=True)
+                ratio = e_qty / o_signed if o_signed else 0.0
+                prev = self._mismatch_alerted.get(t.symbol)
+                if prev is None or abs(ratio - prev) > 0.05:
+                    self._mismatch_alerted[t.symbol] = ratio
+                    self._alert(
+                        f"🚨 Reconcile: {t.symbol} qty mismatch — exchange "
+                        f"{e_qty:.6f} vs engine {o_signed:.6f}. If a TP just "
+                        f"filled on-exchange this resolves at the next bar "
+                        f"close; otherwise investigate. No auto-adjust.",
+                        critical=True)
+            else:
+                matched_syms.add(t.symbol)
+        for sym in matched_syms:                  # re-arm after convergence
+            self._mismatch_alerted.pop(sym, None)
 
         # 4) Protective stop must REST on the exchange for every live position.
         self._enforce_protective_stops(open_trades, exch_qty,
@@ -215,6 +248,47 @@ class ReconcileEnforcer:
 
         # 5) Wallet sync (exchange balance is truth in live mode).
         self._sync_wallet(ex, report)
+
+    def _close_with_exchange_pnl(self, ex, t) -> Optional[Dict[str, float]]:
+        """Book the REAL exit for a vanished position from Binance userTrades.
+
+        Collects the trade's closing-side fills since it opened, computes the
+        VWAP close price, the summed exchange ``realizedPnl`` net of the
+        closing commissions, and writes them to the row (EXCHANGE_CLOSE).
+        Returns {price, pnl} on success, None when fills are unavailable —
+        callers then fall back to the NULL-PnL semantics. Never raises."""
+        try:
+            since = max(0, int(t.open_time or 0) - 60_000)
+            fills = ex.fetch_my_trades(t.symbol, since=since, limit=200) or []
+        except Exception as exc:
+            log.debug("fetch_my_trades %s failed: %s", t.symbol,
+                      self._safe(exc))
+            return None
+        close_side = "sell" if t.side == "LONG" else "buy"
+        qty = notional = pnl = fees = 0.0
+        last_ts = 0
+        for f in fills:
+            if str(f.get("side", "")).lower() != close_side:
+                continue
+            amt = float(f.get("amount") or 0.0)
+            px = float(f.get("price") or 0.0)
+            info = f.get("info") or {}
+            qty += amt
+            notional += amt * px
+            pnl += float(info.get("realizedPnl") or 0.0)
+            fee = f.get("fee") or {}
+            fees += float(fee.get("cost") or 0.0)
+            last_ts = max(last_ts, int(f.get("timestamp") or 0))
+        if qty <= 0 or notional <= 0:
+            return None
+        price = notional / qty
+        net = pnl - fees
+        risk = (t.metadata or {}).get("risk_amount") or t.max_loss or 1e-9
+        ok = self.db.close_trade_exchange(
+            t.id, close_price=price, realized_pnl=net,
+            realized_pnl_pct=net / risk, fees=fees,
+            close_time_ms=last_ts or now_ms())
+        return {"price": price, "pnl": net} if ok else None
 
     # -- protective stops --------------------------------------------------------
     def _enforce_protective_stops(self, open_trades, exch_qty,

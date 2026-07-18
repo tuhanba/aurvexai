@@ -693,6 +693,16 @@ def create_app(cfg=None) -> Flask:
         """
         closed = db.get_closed_trades(limit=5000, mode=_mode())
         per: Dict[str, Dict[str, Any]] = {}
+        # Every DEPLOYED leg appears — with n=0 until it trades. (The 2026-07
+        # incident audit: band_walk was live yet invisible on the panels
+        # because the rows were built only from trades that already closed.)
+        if (cfg.strategies or "").strip():        # multi-strategy deployments
+            try:
+                from ..setups import parse_strategies
+                for sp in parse_strategies(cfg):
+                    per.setdefault(sp.key, {"n": 0, "wins": 0, "sum_r": 0.0})
+            except Exception as exc:
+                log.debug("deployed-leg seed failed: %s", exc)
         for t in closed:
             s = per.setdefault(t.setup_type, {"n": 0, "wins": 0, "sum_r": 0.0})
             s["n"] += 1

@@ -609,6 +609,26 @@ class Storage:
         self.conn.commit()
         return cur.rowcount > 0
 
+    def close_trade_exchange(self, trade_id: str, close_price: float,
+                             realized_pnl: float, realized_pnl_pct: float,
+                             fees: float, close_time_ms: int) -> bool:
+        """Close a DB row with the REAL exit observed on the exchange
+        (reconcile fetched the userTrades fills). Unlike
+        close_trade_reconcile this records actual numbers — close_reason
+        'EXCHANGE_CLOSE', source-of-truth Binance. The balance meta is NOT
+        adjusted here: in live mode the wallet sync owns the balance mirror
+        (adjusting both would double-count)."""
+        cur = self.conn.execute(
+            "UPDATE trades SET status=?, close_time=?, close_price=?, "
+            "close_reason='EXCHANGE_CLOSE', remaining_fraction=0, "
+            "realized_pnl=?, realized_pnl_pct=?, fees_paid=fees_paid+? "
+            "WHERE id=? AND status=?",
+            (CLOSED, int(close_time_ms), float(close_price),
+             float(realized_pnl), float(realized_pnl_pct), float(fees),
+             trade_id, OPEN))
+        self.conn.commit()
+        return cur.rowcount > 0
+
     def get_open_trades(self, mode: Optional[str] = None) -> List[Trade]:
         if mode:
             rows = self.conn.execute(
