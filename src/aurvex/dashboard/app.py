@@ -247,7 +247,15 @@ def create_app(cfg=None) -> Flask:
 
         data_age_ms = hb_data.get("data_age_ms")
         cycle_interval_ms = cfg.cycle_interval_sec * 1000
-        data_fresh = (data_age_ms is None or data_age_ms < cycle_interval_ms * 5)
+        # P0.1: when the engine reports a watchdog verdict, IT is the data
+        # freshness authority (per-TF thresholds). The legacy 5×cycle
+        # heuristic misreads 4h/1d cadence as permanently stale — keep it
+        # only for pre-watchdog heartbeats.
+        if hb_data.get("feed_state") is not None:
+            data_fresh = hb_data.get("feed_state") != "HALT"
+        else:
+            data_fresh = (data_age_ms is None
+                          or data_age_ms < cycle_interval_ms * 5)
 
         kill_switch = bool(hb_data.get("kill_switch", False))
         engine_mode = hb_data.get("mode", cfg.mode)
@@ -329,8 +337,12 @@ def create_app(cfg=None) -> Flask:
         heartbeat_fresh = bool(hb_age_ms is not None
                                and hb_age_ms < cfg.heartbeat_stale_ms)
         data_age_ms = hb.get("data_age_ms")
-        data_fresh = (data_age_ms is None
-                      or data_age_ms < cfg.cycle_interval_sec * 1000 * 5)
+        # Watchdog verdict outranks the legacy heuristic (see /health).
+        if hb.get("feed_state") is not None:
+            data_fresh = hb.get("feed_state") != "HALT"
+        else:
+            data_fresh = (data_age_ms is None
+                          or data_age_ms < cfg.cycle_interval_sec * 1000 * 5)
         engine_mode = hb.get("mode", cfg.mode)
 
         return jsonify({
