@@ -347,7 +347,7 @@ def report():
             print(f"\n  {leg}: INCOMPLETE ({len(state['windows'])} windows) — "
                   f"rerun `leg_review.py run {leg}`")
             continue
-        tf_ms = {"1h": 3_600_000, "4h": 14_400_000}[ltf]
+        tf_ms = {"1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000}[ltf]
         trades_by_window = [
             [_trade_to_result(t, tf_ms) for t in state["windows"][wi]]
             for wi in sorted(state["windows"])]
