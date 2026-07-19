@@ -245,6 +245,7 @@ class TelegramCommander(BaseCommander):
             "/panic":      self._cmd_panic,
             "/risk":       self._cmd_risk,
             "/safety":     self._cmd_safety,
+            "/capacity":   self._cmd_capacity,
             "/livecheck":  self._cmd_livecheck,
             "/livemode":   self._cmd_livemode,
             "/papermode":  self._cmd_papermode,
@@ -281,6 +282,7 @@ class TelegramCommander(BaseCommander):
             "/panic     — flatten EVERYTHING + pause (emergency)\n"
             "/risk &lt;pct&gt; — set per-trade risk now\n"
             "/safety    — feed/exposure/wallet/reconcile card\n"
+            "/capacity  — trades turned down for slots/exposure\n"
             "/livecheck — live readiness\n"
             "/livemode confirm &lt;token&gt; — queue live mode (legacy)\n"
             "/papermode — queue paper mode (legacy)\n"
@@ -522,6 +524,55 @@ class TelegramCommander(BaseCommander):
         self._send(f"⚖️ risk_pct → <b>{newv:g}%</b>{clamped}\n"
                    f"Applies from the next entry. Until restart; use "
                    f"update_env.py --risk-pct to persist.")
+
+    def _cmd_capacity(self, _args: List[str]) -> None:
+        """How many VALIDATED trades did we turn down for CAPACITY this epoch?
+
+        The only remaining trade-count lever is slots + exposure cap (every
+        other lever loosens the edge). These are NOT edge decisions — a
+        ranked-out or exposure-capped candidate already passed the gate; it
+        just had no room. This command surfaces the counts so raising slots/
+        exposure is a data decision, never a blind one:
+          * ranked_out (funnel): qualified candidates that lost the slot race
+          * exposure_cap / no_free_margin (resolved rejected shadows)
+        High numbers → capacity is the bottleneck, raising slots/exposure adds
+        REAL trades. Low → slots aren't binding; we're genuinely at the ceiling.
+        """
+        e = self._engine
+        if e is None:
+            self._send("Engine not attached.")
+            return
+        try:
+            ro = e.db.conn.execute(
+                "SELECT COALESCE(SUM(ranked_out),0) AS n FROM funnel").fetchone()
+            ranked_out = int(ro["n"]) if ro and ro["n"] else 0
+            rows = e.db.conn.execute(
+                "SELECT rr.reason AS reason, COUNT(*) AS n FROM shadows s "
+                "JOIN shadow_reject_reason rr ON rr.shadow_id = s.id "
+                "WHERE s.outcome != 'OPEN' GROUP BY rr.reason").fetchall()
+            by_reason = {r["reason"]: int(r["n"]) for r in rows}
+        except Exception as exc:
+            self._send(f"❌ capacity read failed: {exc}")
+            return
+        exp_cap = by_reason.get("exposure_cap", 0)
+        margin = by_reason.get("no_free_margin", 0)
+        hb = (e.db.get_heartbeat("engine") or {}).get("status", {})
+        total_cap = ranked_out + exp_cap + margin
+        verdict = ("kapasite DARBOĞAZ — slot/exposure yükseltmek gerçek işlem "
+                   "ekler" if total_cap >= 10 else
+                   "kapasite bağlamıyor — slot zaten darboğaz değil (tavana yakın)")
+        self._send(
+            f"<b>Capacity — kapasite yüzünden kaçırılan geçerli işlemler</b>\n"
+            f"slots:     {hb.get('open_trades', '?')}/{e.cfg.max_open_trades} "
+            f"kullanımda\n"
+            f"exposure:  {hb.get('exposure_pct_mtm', '?')}% / "
+            f"{e.cfg.max_portfolio_exposure_pct:g}%\n"
+            f"— bu epoch kaçırılan —\n"
+            f"slot dolu (ranked_out): {ranked_out}\n"
+            f"exposure cap:           {exp_cap}\n"
+            f"serbest marj yok:       {margin}\n"
+            f"toplam:                 <b>{total_cap}</b>\n"
+            f"→ {verdict}")
 
     def _cmd_safety(self, _args: List[str]) -> None:
         """P0 safety card: feed / risk-state / exposure / leverage / wallet /
