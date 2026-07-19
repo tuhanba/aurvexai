@@ -169,3 +169,19 @@ microsecond-timestamp defect.
 **The honest fast option that survives:** squeeze @1h (~3 trades/day) plus
 donchian @4h (~1.4–2/day) ≈ 4.5–5 trades/day fleet-wide with positive
 expectancy — see `SYSTEM_STATE.md` §6–7 for the exact config.
+
+## Campaign 9 (2026-07-19) — the last untested method: joint ML feature-combo
+
+Owner mandate *"denemediğin test veya teknik analiz kalmasın"* (leave no test
+or TA untried) prompted the one method never run: instead of hand-crafting
+confluence, feed ~40 causal OHLCV features into a gradient-boosted learner and
+let it find any predictive combination itself. Walk-forward, H-bar purge, net
+of 0.13% cost, R vs 2×ATR stop. A first run showed a fantasy edge (t≈+497,
+100% positive folds) — traced to a centred `np.convolve(mode="same")` leaking
+future bars, and **caught as a bug, not shipped as an edge.** Lookahead-fixed,
+the result is NO-GO at every horizon: **4h −0.01/−0.03R, 1h −0.06R, 1m scalp
+−0.94R** (t ≈ −1000, 0% positive folds across 2–3.5M OOS trades). Nonlinear ML
+does not rescue scalp — it confirms the cost bound with the strongest
+statistical signal in the whole program. Full detail:
+`docs/research/ML_FEATURE_COMBINATION_EDGE.md`. **TA adequacy is now
+exhaustive; there is no untried method left.**

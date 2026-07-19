@@ -69,7 +69,7 @@ and the subsequent path — that is the cleanest arbiter and costs nothing but
 time. **Do not wholesale-drop the owner's flatten on model evidence blind to
 half its mechanism.**
 
-## 5. TA adequacy — **SETTLED (exhaustive; one ML variant remains, offered)**
+## 5. TA adequacy — **SETTLED (exhaustive; the last ML cell is now run — NO-GO)**
 
 **215 pre-registered trials** across 25 signal families and every
 archive-accessible information source, all NO-GO after cost except the 5
@@ -87,10 +87,13 @@ deployed swing legs:
 Structural reason: gross edge ceiling ≈ +0.07R; taker round-trip cost
 0.13% = 0.2–0.6R at scalp stops. **Cost > gross edge — combining signals
 raises gross marginally but never lowers cost, and the axes aren't
-independent.** The only genuinely untested method is a *joint ML
-feature-combination model* at scalp; expected outcome NO-GO (cost bound +
-overfit + DSR), but it is the one open cell and can be run to close it for
-good. Scalp reopens only with **materially lower fees or L2/tick data +
+independent.** The only genuinely untested method was a *joint ML
+feature-combination model* — a gradient-boosted learner over ~40 causal
+features, which subsumes hand-crafted confluence. **It has now been run and is
+NO-GO at every horizon** (4h −0.01/−0.03R, 1h −0.06R, 1m scalp −0.94R;
+`ML_FEATURE_COMBINATION_EDGE.md`) — the strongest statistical signal in the
+whole program (t ≈ −1000 at scalp), confirming rather than rescuing the cost
+bound. Scalp reopens only with **materially lower fees or L2/tick data +
 latency infra** — structural, not a modeling trick.
 
 ## Bottom line for live
@@ -101,7 +104,7 @@ latency infra** — structural, not a modeling trick.
 | trade count | settled — max Σ total R | keep 5 legs; frequency via /capacity data |
 | risk % | bracketed [1.0–1.5%] | keep 1.5%, don't raise; expect 40–70% DD |
 | daily target | strong signal, model-blind to peak-lock | raise floor to 6–8% (low-regret); paper window is the arbiter |
-| TA | exhaustive (215 trials) | swing book is the edge; one ML-scalp cell open (offered) |
+| TA | exhaustive (215 trials + ML feature-combo, all NO-GO) | swing book is the edge; the last ML cell is now run and closed |
 
 Nothing changed in the engine — measurement only. The one config change with
 a real evidence base and low regret is raising `DAILY_PROFIT_LOCK_PCT` from 4
