@@ -113,13 +113,22 @@ def features(a):
     atr = _atr(h, l, c)
     adx, pdi, ndi = _adx(h, l, c)
     e9, e21, e50 = _ema(c, 9), _ema(c, 21), _ema(c, 50)
-    sma20 = np.convolve(c, np.ones(20) / 20, mode="same")
+    # CAUSAL trailing means only — np.convolve(mode="same") is CENTRED and
+    # leaks future bars (caught 2026-07-19: it produced fantasy t>400 edges).
+    def _trail_mean(x, w):
+        cs = np.cumsum(np.insert(x, 0, 0.0))
+        out = np.zeros(n)
+        for i in range(n):
+            lo = max(0, i - w + 1)
+            out[i] = (cs[i + 1] - cs[lo]) / (i + 1 - lo)
+        return out
+    sma20 = _trail_mean(c, 20)
     std20 = np.array([c[max(0, i - 19):i + 1].std() for i in range(n)])
     bbpos = (c - sma20) / np.maximum(2 * std20, 1e-12)
     rng = (h - l) / np.maximum(c, 1e-12)
     clv = ((c - l) - (h - c)) / np.maximum(h - l, 1e-12)
     body = (c - o) / np.maximum(h - l, 1e-12)
-    vmean = np.convolve(v, np.ones(20) / 20, mode="same")
+    vmean = _trail_mean(v, 20)
     vr = v / np.maximum(vmean, 1e-12)
     feats = {}
     for lag in (1, 2, 3, 5, 10, 20):
@@ -148,7 +157,7 @@ def features(a):
 
 
 def run(tf, coins, horizons, train=3000, test=800):
-    from sklearn.ensemble import GradientBoostingClassifier
+    from sklearn.ensemble import HistGradientBoostingClassifier
     print(f"\n===== ML feature-combo edge — {tf} bars, {len(coins)} coins =====",
           flush=True)
     for H in horizons:
@@ -169,9 +178,9 @@ def run(tf, coins, horizons, train=3000, test=800):
                 Xtr = X[s - train:s - H]           # purge H bars
                 ytr = y[s - train:s - H]
                 Xte = X[s:s + test]
-                m = GradientBoostingClassifier(
-                    n_estimators=80, max_depth=3, learning_rate=0.05,
-                    subsample=0.8, random_state=7)
+                m = HistGradientBoostingClassifier(
+                    max_iter=120, max_depth=4, learning_rate=0.06,
+                    l2_regularization=1.0, random_state=7)
                 if len(np.unique(ytr)) < 2:
                     s += test; continue
                 m.fit(Xtr, ytr)

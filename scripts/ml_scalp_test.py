@@ -30,7 +30,7 @@ def load1m(sym):
 
 def run(horizons, train=20000, test=5000):
     import math
-    from sklearn.ensemble import GradientBoostingClassifier
+    from sklearn.ensemble import HistGradientBoostingClassifier
     print(f"===== ML feature-combo SCALP edge — 1m bars, {len(COINS)} coins =====",
           flush=True)
     # Pre-load + featurize once per coin (expensive on 1.3M bars).
@@ -54,8 +54,8 @@ def run(horizons, train=20000, test=5000):
                 Xte = X[s:s+test]
                 if len(np.unique(ytr)) < 2:
                     s += test; continue
-                m = GradientBoostingClassifier(n_estimators=60, max_depth=3,
-                    learning_rate=0.05, subsample=0.8, random_state=7)
+                m = HistGradientBoostingClassifier(max_iter=120, max_depth=4,
+                    learning_rate=0.06, l2_regularization=1.0, random_state=7)
                 m.fit(Xtr, ytr)
                 p = m.predict_proba(Xte)[:, 1]
                 sig = np.where(p > 0.55, 1, np.where(p < 0.45, -1, 0))
