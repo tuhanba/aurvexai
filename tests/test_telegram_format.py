@@ -413,3 +413,37 @@ def test_no_secret_in_trade_opened_via_real_notifier():
     blob = json.dumps(payload)
     assert FAKE_TOKEN not in blob
     assert FAKE_CHAT not in blob
+
+
+def test_no_tp_legs_show_exit_mechanism_not_sentinel():
+    """donchian/ichimoku/squeeze/band_walk carry a 1000R unreachable sentinel
+    TP; the entry receipt must show the real exit mechanism, never the absurd
+    sentinel price (owner report 2026-07-19: TP showed 22.76 / -181.29)."""
+    from aurvex.telegram import BaseNotifier, _exit_label
+    from aurvex.models import Trade, TPTarget
+
+    class Cap(BaseNotifier):
+        def __init__(self):
+            super().__init__(mode="live"); self.msgs = []
+        def _deliver(self, t):
+            self.msgs.append(t); return True
+
+    assert _exit_label("donchian_trend") == "channel break"
+    assert _exit_label("ichimoku_trend") == "TK-cross"
+    assert _exit_label("squeeze_breakout@2h") == "time-stop"   # disambiguated key
+    assert _exit_label("band_walk") == "time-stop"
+    assert _exit_label("bugra_replica") is None                # real TPs
+
+    t = Trade(symbol="AVAX/USDT:USDT", side="SHORT",
+              setup_type="ichimoku_trend", entry=6.481, stop_loss=6.669,
+              tp_targets=[TPTarget(price=-181.29, fraction=1.0),
+                          TPTarget(price=-181.29, fraction=0.0),
+                          TPTarget(price=-181.29, fraction=0.0)],
+              position_size=98.49, risk_pct=1.5, leverage=10, max_loss=2.98,
+              score=20, threshold=0, margin_used=9.85,
+              metadata={"actual_risk_amount": 2.98})
+    n = Cap()
+    n.trade_opened(t, balance=196.0)
+    msg = n.msgs[0]
+    assert "-181" not in msg and "TP1" not in msg
+    assert "exit on TK-cross" in msg
