@@ -448,6 +448,11 @@ class TelegramCommander(BaseCommander):
         if e is None:
             self._send("Engine not attached.")
             return
+        # Accept both "/live <token>" and the muscle-memory "/live confirm
+        # <token>" (the old /livemode confirm syntax) so the leading word
+        # never gets mistaken for the token.
+        if args and args[0].lower() == "confirm":
+            args = args[1:]
         token = args[0] if args else ""
         if not e.cfg.live_human_confirm:
             self._send("❌ LIVE_HUMAN_CONFIRM not set in .env "
