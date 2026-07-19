@@ -109,6 +109,24 @@ def _tp_price(t, idx: int) -> str:
         return "—"
 
 
+# Profiles with NO profit target by design — they exit on a mechanism, not a
+# price, and carry an unreachable 1000R sentinel TP (which would otherwise
+# render as an absurd/negative price on the receipt). Map each to its real
+# exit so the entry card shows the truth instead of the sentinel.
+_NO_TP_EXIT: Dict[str, str] = {
+    "donchian_trend": "channel break",
+    "ichimoku_trend": "TK-cross",
+    "squeeze_breakout": "time-stop",
+    "band_walk": "time-stop",
+}
+
+
+def _exit_label(setup_type: object) -> Optional[str]:
+    """Exit mechanism for a no-profit-target leg, else None (real TPs)."""
+    from .models import profile_of
+    return _NO_TP_EXIT.get(profile_of(str(setup_type or "")))
+
+
 # Direction / lifecycle badges — one glance tells you what happened.
 _SIDE_EMOJI: Dict[str, str] = {"LONG": "🟢", "SHORT": "🔴"}
 
@@ -348,12 +366,21 @@ class BaseNotifier:
         cfg_part += f" · {target_risk:.3f} USDT)" if target_risk is not None else ")"
         risk_val = f"{account_risk_pct:.2f}% acct · {actual_risk:.2f} USDT{cfg_part}"
 
+        # No-TP legs (donchian/ichimoku/squeeze/band_walk) exit on a mechanism,
+        # not a price — show that instead of the unreachable 1000R sentinel
+        # (which otherwise renders as an absurd/negative "TP").
+        exit_lbl = _exit_label(t.setup_type)
         rows = [
             ("Entry", f"{entry:.6g}"),
             ("Stop", f"{t.stop_loss:.6g}"),
-            ("TP1", _tp_price(t, 0)),
-            ("TP2", _tp_price(t, 1)),
-            ("TP3", _tp_price(t, 2)),
+        ]
+        if exit_lbl:
+            rows.append(("Target", f"exit on {exit_lbl} (no fixed TP)"))
+        else:
+            rows += [("TP1", _tp_price(t, 0)),
+                     ("TP2", _tp_price(t, 1)),
+                     ("TP3", _tp_price(t, 2))]
+        rows += [
             ("", ""),
             ("Leverage", f"{t.leverage}x · margin {margin_used:.2f} USDT"),
             ("Notional", f"{t.position_size:.2f} USDT"),
