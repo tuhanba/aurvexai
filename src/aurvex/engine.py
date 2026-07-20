@@ -27,7 +27,8 @@ import logging
 import signal as os_signal
 from typing import Dict, List, Optional
 
-from .binance_account import build_binance_adapter
+from .binance_account import (build_binance_adapter, STATUS_CONNECTED,
+                              STATUS_KEYS_ABSENT, STATUS_UNSAFE_KEY)
 from .config import Config
 from .decision import DecisionEngine
 from .executors import PaperExecutor
@@ -275,6 +276,108 @@ class Engine:
         if not (cfg.binance_api_key and cfg.binance_api_secret):
             return False, "Binance API keys absent"
         return True, ""
+
+    def live_preflight(self) -> Dict[str, Any]:
+        """Comprehensive pre-arm readiness audit (owner /livecheck).
+
+        Read-only: never sends an order, never switches mode. Verifies EVERY
+        gate AND the operational preconditions that actually protect real money
+        — most importantly the API-key WITHDRAW self-check (a withdraw-capable
+        key is a drain-the-account risk) and that protective-stop filters are
+        cached (send_entry REFUSES without them). Returns
+        {ready, rows:[{ok, label, detail, critical}], blockers:[...],
+        account_status}. ``ready`` is True only when no CRITICAL row failed."""
+        cfg = self.cfg
+        rows: List[Dict[str, Any]] = []
+        blockers: List[str] = []
+
+        def add(ok, label, detail="", critical=False):
+            rows.append({"ok": ok, "label": label, "detail": detail,
+                         "critical": critical})
+            if ok is False and critical:
+                blockers.append(label)
+
+        # --- the five-gate lock ---
+        add(cfg.live_enabled, "Gate 1 · LIVE_ENABLED=true", critical=True)
+        add(bool(cfg.live_human_confirm), "Gate 2 · LIVE_HUMAN_CONFIRM set",
+            critical=True)
+        add(cfg.mode == "live", "Gate 3 · engine mode = live",
+            "" if cfg.mode == "live" else f"now '{cfg.mode}'", critical=True)
+        add(bool(getattr(cfg, "live_send_orders", False)),
+            "Gate 4 · LIVE_SEND_ORDERS=true", critical=True)
+        add(bool(cfg.binance_api_key and cfg.binance_api_secret),
+            "Gate 5 · Binance API keys present", critical=True)
+
+        adapter = getattr(self.executor, "order_adapter", None)
+        if adapter is not None:
+            armed, why = adapter.engaged()
+            add(armed, "Adapter engaged (five-gate lock open)",
+                "" if armed else why, critical=True)
+            if getattr(adapter, "tripped", False):
+                add(False, "Adapter not tripped",
+                    "adapter is TRIPPED — restart + review required",
+                    critical=True)
+        else:
+            add(None, "Order adapter present", "paper executor — no adapter")
+
+        # --- API-key withdraw safety (CRITICAL) + connectivity ---
+        status = None
+        try:
+            status = (self.binance.refresh() or {}).get("status")
+        except Exception as exc:
+            status = "error"
+            log.debug("preflight account refresh error: %s", exc)
+        if status == STATUS_UNSAFE_KEY:
+            add(False, "API key is TRADE-ONLY (withdraw OFF)",
+                "UNSAFE: key can WITHDRAW — rotate to a trade-only key NOW",
+                critical=True)
+        elif status == STATUS_CONNECTED:
+            add(True, "API key trade-only + account connected")
+        elif status == STATUS_KEYS_ABSENT:
+            add(False, "Binance account connected", "keys_absent", critical=True)
+        else:
+            add(False, "Binance account connected", status or "error",
+                critical=True)
+
+        # --- protective-stop filters cached (send_entry REFUSES otherwise) ---
+        syms = list(getattr(self.scanner, "last_universe", None)
+                    or cfg.universe_include or [])
+        missing = [s for s in syms if not self.db.get_symbol_filters(s)]
+        if syms:
+            add(not missing, "Symbol filters cached for the universe",
+                (f"{len(missing)}/{len(syms)} missing e.g. {missing[:3]}"
+                 if missing else f"{len(syms)} symbols"), critical=bool(missing))
+        else:
+            add(None, "Symbol filters cached", "universe not warmed yet")
+
+        # --- feed health / risk state ---
+        try:
+            rs = self.watchdog.evaluate().get("risk_state", "UNKNOWN")
+        except Exception:
+            rs = "UNKNOWN"
+        add(rs == "OK", f"Feed healthy (risk_state={rs})", critical=(rs != "OK"))
+
+        # --- daily kill switch not currently fired ---
+        day = _day_ordinal(offset_hours=cfg.day_boundary_offset_hours)
+        fired = self._kill_switch_fired_day == day
+        add(not fired, "Daily kill switch not fired today",
+            "kill switch is ACTIVE — trading halted for the day" if fired else "",
+            critical=fired)
+
+        # --- dashboard auth (port is internet-published) — WARN, not block ---
+        auth = bool(cfg.dashboard_auth_user and cfg.dashboard_auth_pass)
+        add(auth, "Dashboard auth set",
+            "" if auth else "port 5000 is internet-published — set "
+            "DASHBOARD_AUTH_USER/PASS", critical=False)
+
+        # --- canary sizing for the first live entries — WARN, not block ---
+        canary = getattr(cfg, "live_canary_risk_pct", 0.0)
+        add(0 < canary <= cfg.risk_pct,
+            f"Canary sizing set (LIVE_CANARY_RISK_PCT={canary})",
+            "first live entries shrink to canary size", critical=False)
+
+        return {"ready": not blockers, "rows": rows, "blockers": blockers,
+                "account_status": status}
 
     def switch_mode(self, mode: str) -> "tuple[bool, str]":
         """Hot-swap paper↔live WITHOUT a restart, safely.

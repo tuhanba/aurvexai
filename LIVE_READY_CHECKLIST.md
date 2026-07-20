@@ -83,9 +83,17 @@ today** — but the path is now concrete, not hypothetical.
    `.env`; restart; confirm `/api/binance` = `connected`, never `unsafe_key`.
 3. Set `LIVE_ENABLED=true`, `LIVE_HUMAN_CONFIRM=<token>`,
    `LIVE_SEND_ORDERS=true`, and a small `LIVE_CANARY_RISK_PCT` in `.env`.
-4. Telegram: `/livecheck`, then `/livemode confirm <token>`; restart.
-5. Watch the first canary trades end-to-end (entry ack, SL/TP resting on the
-   exchange, `reconcile` clean); `/papermode` + restart aborts at any time.
+4. **Run the preflight** — Telegram `/livecheck` (or `python
+   scripts/live_preflight.py`). It audits ALL five gates + the operational
+   preconditions that protect real money (API-key WITHDRAW self-check,
+   protective-stop filters cached, feed health, kill switch, dashboard auth,
+   canary sizing) and prints a single **READY / NOT READY** verdict. Do not arm
+   until it is 🟢 READY — every 🚨 row is a hard blocker.
+5. Telegram: `/livemode confirm <token>` + restart (or one-command `/live
+   <token>`).
+6. Watch the first canary trades end-to-end (entry ack, SL/TP resting on the
+   exchange, `reconcile` clean); `/panic` or `/papermode` + restart aborts at
+   any time.
 
 ## 6. Bottom line
 
