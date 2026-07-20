@@ -290,7 +290,7 @@ def _live_cfg(tmp_path, armed=False):
 
 
 def test_reconcile_closes_ghost_row_null_pnl_and_alerts(tmp_path):
-    cfg = _live_cfg(tmp_path)
+    cfg = _live_cfg(tmp_path, armed=True)   # ghost-close is an ARMED action
     db = Storage(cfg.db_path)
     db.ensure_balance(200.0)
     ghost = _open_trade(symbol="ETH/USDT:USDT")
@@ -316,6 +316,32 @@ def test_reconcile_closes_ghost_row_null_pnl_and_alerts(tmp_path):
     assert db.get_balance() == pytest.approx(176.5)
     ledger = db.get_ledger(limit=5)
     assert any(r["reason"] == "EXCHANGE_SYNC" for r in ledger)
+    db.close()
+
+
+def test_reconcile_disarmed_does_not_close_simulated_rows(tmp_path):
+    """The 'trades won't stay open' bug: in live mode but DISARMED
+    (LIVE_SEND_ORDERS off) the executor books SIMULATED fills that never reach
+    the exchange, so a flat exchange is EXPECTED. Reconcile must NOT close those
+    DB rows as EXCHANGE_RECONCILE — only an ARMED reconcile treats the exchange
+    as the accounting source."""
+    cfg = _live_cfg(tmp_path, armed=False)          # live + keys, orders OFF
+    db = Storage(cfg.db_path)
+    db.ensure_balance(200.0)
+    for sym in ("SOL/USDT:USDT", "XRP/USDT:USDT", "LINK/USDT:USDT"):
+        db.upsert_trade(_open_trade(symbol=sym))
+    fake = FakeExchange(positions=[], total=0.0)     # exchange flat (never sent)
+    notifier = CaptureNotifier()
+    rec = ReconcileEnforcer(cfg, db, notifier,
+                            exchange_factory=lambda *a, **k: fake)
+
+    report = rec.run()
+
+    assert report["armed"] is False
+    assert report["ghosts_closed"] == []             # nothing reconciled away
+    assert len(db.get_open_trades(mode="live")) == 3  # all simulated rows live
+    assert db.get_balance() == 200.0                  # simulated balance intact
+    assert not any("EXCHANGE_RECONCILE" in m for m in notifier.messages)
     db.close()
 
 
