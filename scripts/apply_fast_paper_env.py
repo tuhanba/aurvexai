@@ -91,7 +91,19 @@ BLOCK = {
     "GLOBAL_RANKING": "true",
     "RANK_KEY": "edge",
     "LTF_LIMIT": "525",
-    "RISK_PCT": "1.5",
+    # Joint operating point (2026-07-20, docs/research/JOINT_OPERATING_POINT.md).
+    # The concurrency-aware sweep (scripts/joint_operating_point.py) settles the
+    # combined risk × slots × target question: aggregate risk = slots × per-trade
+    # risk is the real budget, and the 5 legs are near-independent (corr +0.05),
+    # so a SMALLER per-trade risk spread over the slots beats a big per-trade risk
+    # in a few. Deployed 1.5% × 6 = 9% aggregate was the over-concentrated corner
+    # (worst MAR/DD on the frontier). Per-trade risk 1.5 → 0.5 (band 0.25–0.75)
+    # keeps the 6 slots but drops aggregate to 3% → positive MAR, ~halved
+    # drawdown. Slots (the "trade count" lever) already at 6; 8 is the next step
+    # once the account funds more concurrent min-notionals. Config-only, parity-safe.
+    "RISK_PCT": "0.5",
+    "MIN_RISK_PCT": "0.25",
+    "MAX_RISK_PCT": "0.75",
     "MAX_OPEN_TRADES": "6",
     # Owner decision 2026-07-12: 300% (was 200%) so the notional cap stops
     # binding at ~4-5 positions and all 6 slots can fill -> more coins open at
