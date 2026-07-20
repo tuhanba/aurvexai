@@ -98,6 +98,13 @@ def main(argv=None) -> int:
                         "the first trade. Owner decision 2026-07-18 — on a "
                         "small account the 0.1%% canary produces sub-minimum-"
                         "notional orders the exchange refuses anyway.")
+    p.add_argument("--canary-risk-pct", type=float, default=0.25,
+                   help="LIVE_CANARY_RISK_PCT — per-trade risk %% for the FIRST "
+                        "live trades (default 0.25; NOT 0.1, which is often "
+                        "sub-minimum-notional). Ignored when --full-size is set. "
+                        "The joint operating point (JOINT_OPERATING_POINT.md) puts "
+                        "the base at 0.5%%, so 0.25%% is a half-size canary that "
+                        "ramps to full base once live expectancy confirms.")
     p.add_argument("--disarm", action="store_true",
                    help="flip LIVE_ENABLED and LIVE_SEND_ORDERS back to false")
     p.add_argument("--apply", action="store_true",
@@ -147,6 +154,11 @@ def main(argv=None) -> int:
                                         "100")
             print("  ~ LIVE_CANARY_RISK_PCT=100 (FULL SIZE — canary shrink "
                   "disabled; live trades risk the full RISK_PCT)")
+        else:
+            cval = f"{args.canary_risk_pct:g}"
+            new_lines, _ = _upsert_line(new_lines, "LIVE_CANARY_RISK_PCT", cval)
+            print(f"  ~ LIVE_CANARY_RISK_PCT={cval} (half-size canary for the "
+                  f"first live trades; ramp to base RISK_PCT once confirmed)")
         new_lines, _ = _upsert_line(new_lines, "LIVE_HUMAN_CONFIRM",
                                     args.token)
         print("  ~ LIVE_HUMAN_CONFIRM: set (hidden)")
