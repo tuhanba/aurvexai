@@ -41,6 +41,7 @@ from .models import (ALLOW, LONG, OPEN, REJECT, Decision, MarketSnapshot,
                      interval_to_ms, now_ms, profile_of)
 from .quality import grade as quality_grade
 from .reconcile import ReconcileEnforcer
+from .regime import RegimeEnsemble, RegimeInputs
 from .scanner import UniverseScanner
 from .setups import SetupDetector, build_context
 from .shadow import ShadowLearner, build_coin_library
@@ -165,6 +166,14 @@ class Engine:
         self._loss_alerts_fired: set = set()
         self._weekly_report_sent: tuple = ()
         self._regime_cache: dict = {}
+        # Regime-adaptive portfolio, Phase 1 (OBSERVATIONAL). The multi-dim
+        # ensemble computes + stores a RegimeState for the dashboard/history; it
+        # does NOT drive sizing — the legacy _market_regime() trend score still
+        # owns the risk multiplier / profit target, so parity is untouched. Off
+        # unless REGIME_ENSEMBLE_ENABLED.
+        self.regime_ensemble = RegimeEnsemble(cfg)
+        self._regime_state = None
+        self._regime_next_ms: int = 0
         self._kill_switch_fired_day: int = -1
         self._profit_lock_fired_day: int = -1
         self._last_error: str = ""
@@ -231,6 +240,17 @@ class Engine:
         exit_meta = self._exit_by_setup.get(signal.setup_type)
         if exit_meta:
             d.metadata.update(exit_meta)
+        # Regime-adaptive Phase 1: stamp the OBSERVATIONAL regime context onto the
+        # decision so it lands in signal_events / trade metadata for later
+        # attribution. Gated on the ensemble flag → when OFF, decision metadata is
+        # byte-identical to the pre-Phase-1 engine (parity guarantee).
+        if getattr(self.cfg, "regime_ensemble_enabled", False):
+            d.metadata["policy_version"] = self.cfg.policy_version
+            st = self._regime_state
+            if st is not None:
+                d.metadata["regime_label"] = st.label
+                d.metadata["regime_confidence"] = round(st.confidence, 3)
+                d.metadata["regime_transition_risk"] = round(st.transition_risk, 3)
         return d
 
     def _signal_ltf(self, setup_type: str) -> str:
@@ -727,6 +747,61 @@ class Engine:
             log.debug("regime compute error: %s", exc)
         # keep last good value; else a neutral (chop) reading
         return cache or {"ts": now, "score": 0.0, "adx": None}
+
+    def _evaluate_regime(self, snapshots: Dict[str, MarketSnapshot]) -> None:
+        """OBSERVATIONAL (Phase 1): compute + store the multi-dimensional
+        RegimeState. It changes NOTHING about sizing or the decision — the
+        legacy ``_market_regime()`` trend score still drives the risk multiplier
+        and adaptive profit target, so paper/live/backtest parity is fully
+        preserved. Off unless ``regime_ensemble_enabled`` (default), in which
+        case this is a zero-cost no-op.
+
+        Refreshed at most every ``regime_refresh_sec`` (regime is a slow
+        variable). Fail-soft: any error keeps the last state and never disturbs
+        the cycle. Universe dims (breadth/correlation/liquidity) read the
+        already-fetched cycle snapshots — no extra network in the hot path.
+        """
+        cfg = self.cfg
+        if not getattr(cfg, "regime_ensemble_enabled", False):
+            return
+        now = now_ms()
+        if now < self._regime_next_ms:
+            return
+        self._regime_next_ms = now + int(cfg.regime_refresh_sec * 1000)
+        try:
+            leader = snapshots.get(cfg.regime_symbol)
+            if leader is not None:
+                leader_bars = leader.closed_ltf(cfg.regime_tf)
+            else:
+                snap = self.provider.get_snapshot(cfg.regime_symbol, [cfg.regime_tf])
+                leader_bars = snap.closed_ltf(cfg.regime_tf) if snap else []
+            uni_bars: Dict[str, list] = {}
+            uni_liq: Dict[str, float] = {}
+            uni_spr: Dict[str, float] = {}
+            cap = cfg.regime_universe_sample or len(snapshots)
+            for i, (sym, s) in enumerate(snapshots.items()):
+                if i >= cap:
+                    break
+                bars = s.closed_ltf(cfg.regime_tf)
+                if bars:
+                    uni_bars[sym] = bars
+                if s.quote_volume_24h:
+                    uni_liq[sym] = s.quote_volume_24h
+                ob = s.orderbook
+                if ob is not None and ob.spread_pct is not None:
+                    uni_spr[sym] = ob.spread_pct
+            state = self.regime_ensemble.evaluate(RegimeInputs(
+                leader_bars=leader_bars, universe_bars=uni_bars,
+                universe_liquidity=uni_liq, universe_spreads=uni_spr,
+                prev_state=self._regime_state, ts=now))
+            self._regime_state = state
+            self.db.record_regime(state.to_dict())
+            log.info("regime: %s conf=%.2f trans=%.2f dims=[%s]%s",
+                     state.label, state.confidence, state.transition_risk,
+                     ",".join(state.features_used),
+                     "" if state.data_ok else " DATA_INCOMPLETE")
+        except Exception as exc:
+            log.debug("regime ensemble eval error: %s", exc)
 
     def _effective_profit_pct(self) -> float:
         """Daily profit-target %%: flat daily_profit_lock_pct, or — when
@@ -1265,6 +1340,11 @@ class Engine:
         lev_ceiling = (self.cfg.max_account_leverage_alert
                        or self.cfg.max_portfolio_exposure_pct / 100.0)
         self._maybe_leverage_alert(effective_leverage, lev_ceiling)
+
+        # Regime-adaptive Phase 1 (OBSERVATIONAL): compute + store the
+        # multi-dimensional regime read from this cycle's snapshots. No-op unless
+        # regime_ensemble_enabled; never influences the decisions above.
+        self._evaluate_regime(snapshots)
 
         # Persist funnel.
         last_times = self.db.last_trade_times()

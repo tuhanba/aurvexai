@@ -436,6 +436,48 @@ class Storage:
                 fetched_ts INTEGER
             );
         """)
+        # Regime-adaptive portfolio, Phase 1 (OBSERVATIONAL). Additive-only.
+        # regime_history: one row per regime recompute (dashboard/history/research).
+        # policy_versions: the audit trail of allocation-policy versions (§H).
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS regime_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER,
+                label TEXT,
+                confidence REAL,
+                prev_label TEXT,
+                transition_risk REAL,
+                persistence_bars INTEGER,
+                data_ok INTEGER,
+                score REAL,
+                adx REAL,
+                opportunity_score REAL DEFAULT 0,
+                sub_scores_json TEXT,
+                reason TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_regime_ts ON regime_history(ts);
+            CREATE TABLE IF NOT EXISTS policy_versions (
+                version TEXT PRIMARY KEY,
+                created_ts INTEGER,
+                regime_model TEXT,
+                risk_allocator TEXT,
+                universe_policy TEXT,
+                margin_solver TEXT,
+                config_snapshot_json TEXT
+            );
+        """)
+        # Regime audit columns on trades (additive; populated from the decision
+        # metadata at open time — empty/0 for pre-Phase-1 and flags-OFF rows).
+        if "policy_version" not in cols:
+            self.conn.execute(
+                "ALTER TABLE trades ADD COLUMN policy_version TEXT DEFAULT ''")
+        if "regime_label" not in cols:
+            self.conn.execute(
+                "ALTER TABLE trades ADD COLUMN regime_label TEXT DEFAULT ''")
+        if "regime_confidence" not in cols:
+            self.conn.execute(
+                "ALTER TABLE trades ADD COLUMN regime_confidence REAL DEFAULT 0")
+        self.conn.commit()
         # The unique index dedups new-epoch rows. Legacy rows have signal_bar_ts=0
         # but SQLite treats every NULL/0 group key independently only for NULLs;
         # to avoid a build failure on a contaminated legacy table we create the
@@ -569,6 +611,45 @@ class Storage:
     def get_ledger(self, limit: int = 200) -> List[Dict[str, Any]]:
         rows = self.conn.execute(
             "SELECT * FROM balance_ledger ORDER BY ts DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+    # -- regime history (observational) ------------------------------------
+    def record_regime(self, state: Dict[str, Any],
+                      opportunity_score: float = 0.0) -> None:
+        """Append one regime-ensemble evaluation. ``state`` is RegimeState.to_dict().
+
+        Observational only — nothing reads this back to make a decision. Never
+        raises into the cycle (best-effort persistence)."""
+        try:
+            self.conn.execute(
+                "INSERT INTO regime_history(ts,label,confidence,prev_label,"
+                "transition_risk,persistence_bars,data_ok,score,adx,"
+                "opportunity_score,sub_scores_json,reason) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (int(state.get("ts") or time.time() * 1000),
+                 state.get("label", ""), float(state.get("confidence", 0.0) or 0.0),
+                 state.get("prev_label", ""),
+                 float(state.get("transition_risk", 0.0) or 0.0),
+                 int(state.get("persistence_bars", 0) or 0),
+                 1 if state.get("data_ok") else 0,
+                 float(state.get("score", 0.0) or 0.0),
+                 state.get("adx"),
+                 float(opportunity_score or 0.0),
+                 json.dumps(state.get("sub_scores", {})),
+                 state.get("reason", "")))
+            self.conn.commit()
+        except sqlite3.Error:
+            pass
+
+    def latest_regime(self) -> Optional[Dict[str, Any]]:
+        row = self.conn.execute(
+            "SELECT * FROM regime_history ORDER BY ts DESC LIMIT 1").fetchone()
+        return dict(row) if row else None
+
+    def recent_regimes(self, limit: int = 100) -> List[Dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM regime_history ORDER BY ts DESC LIMIT ?",
+            (limit,)).fetchall()
         return [dict(r) for r in rows]
 
     # -- trades ------------------------------------------------------------

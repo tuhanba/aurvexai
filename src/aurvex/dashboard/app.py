@@ -463,6 +463,22 @@ def create_app(cfg=None) -> Flask:
     def balance():
         return jsonify({"balance": db.get_balance(), "ledger": db.get_ledger(limit=100)})
 
+    @app.route("/api/regime")
+    def regime():
+        """Regime-adaptive Phase 1 (OBSERVATIONAL): the latest multi-dimensional
+        regime read + recent history. Empty when the ensemble is disabled — it
+        never affects decisions, it is a monitoring surface only."""
+        import json as _json
+        latest = db.latest_regime()
+        if latest and latest.get("sub_scores_json"):
+            try:
+                latest["sub_scores"] = _json.loads(latest["sub_scores_json"])
+            except (ValueError, TypeError):
+                latest["sub_scores"] = {}
+        history = db.recent_regimes(limit=200)
+        return jsonify({"latest": latest, "history": history,
+                        "enabled": bool(getattr(cfg, "regime_ensemble_enabled", False))})
+
     @app.route("/api/accounting")
     def accounting():
         marks_meta = db.get_meta("marks") or {}

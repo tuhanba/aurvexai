@@ -2,9 +2,26 @@
 
 **Regime-Adaptive Multi-Edge Portfolio Engine — implementation plan for Claude Code**
 
-Author: system owner review · Date: 2026-07-20 · Status: research complete,
-implementation not started. This file is the single source of truth for the
-build. Read it top to bottom before touching code.
+Author: system owner review · Date: 2026-07-20 · Status: **Phase 1 IMPLEMENTED
+(observational, flag-gated OFF)**; Phases 2–8 pending. This file is the single
+source of truth for the build. Read it top to bottom before touching code.
+
+## Build progress
+
+- **Phase 1 — DONE (this PR).** Observational multi-dimensional regime ensemble.
+  New: `src/aurvex/regime.py` (`RegimeEnsemble`, `RegimeState`, dimensions
+  trend/vol/breadth/corr/liq, confidence, persistence, transition risk,
+  hysteresis, PANIC override, fail-safe). Additive DB migrations
+  (`regime_history`, `policy_versions`, trades audit columns). Config flags
+  (all default OFF/neutral). Engine wiring: `_evaluate_regime()` stores a
+  `RegimeState` per cycle and stamps observational context onto decisions/
+  trades; **`_market_regime()` and `decide()` are untouched** so sizing is
+  byte-identical. Read-only `/api/regime` surface. Tests: `test_regime_ensemble`
+  (14), `test_regime_parity` (5), `test_regime_dashboard` (3). Full suite
+  **846 passed**. Nothing changes a decision until `REGIME_ENSEMBLE_ENABLED` is
+  turned on, and even then Phase 1 only observes.
+- **Phases 2–8 — pending**, per §26. Each decision-changing phase must pass its
+  §18 acceptance gate (backtest) then paper confirmation before it arms.
 
 > **Prime directive.** This is an *additive support layer*, not a rewrite.
 > `DecisionEngine.decide()` stays byte-identical (paper/live/backtest parity is

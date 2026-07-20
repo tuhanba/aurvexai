@@ -303,6 +303,48 @@ class Config:
         default_factory=lambda: _float("REGIME_TILT", 0.35))
     edge_weight_strength: float = field(
         default_factory=lambda: _float("EDGE_WEIGHT_STRENGTH", 0.35))
+
+    # -- Regime ensemble (REGIME_ADAPTIVE_PORTFOLIO_IMPLEMENTATION.md, Phase 1) --
+    # Multi-dimensional, confidence-scored, hysteresis-stable market-regime read.
+    # PHASE 1 IS OBSERVATIONAL: when enabled the engine computes and STORES a
+    # RegimeState (dashboard/history/research) but the number that drives sizing
+    # stays the SAME legacy trend score, so behaviour is byte-identical. OFF by
+    # default → the legacy 1-D BTC-ADX path runs unchanged.
+    regime_ensemble_enabled: bool = field(
+        default_factory=lambda: _bool("REGIME_ENSEMBLE_ENABLED", False))
+    # Which dimensions to compute (comma-separated subset of
+    # trend,vol,breadth,corr,liq). "trend" is the required anchor.
+    regime_dims: List[str] = field(
+        default_factory=lambda: _list("REGIME_DIMS",
+                                      ["trend", "vol", "breadth", "corr", "liq"]))
+    # Hysteresis: a new raw label must persist this many evaluations before it
+    # becomes the effective label (PANIC may override). Prevents whipsaw.
+    regime_confirm_bars: int = field(
+        default_factory=lambda: _int("REGIME_CONFIRM_BARS", 2))
+    # Below this confidence the effective label collapses to UNCERTAIN.
+    regime_conf_min: float = field(
+        default_factory=lambda: _float("REGIME_CONF_MIN", 0.35))
+    # Persistence (in evaluations) at which the confidence persist-factor saturates.
+    regime_conf_persist_bars: int = field(
+        default_factory=lambda: _int("REGIME_CONF_PERSIST_BARS", 3))
+    # PANIC bypasses the confirmation delay (react immediately to a crash).
+    regime_panic_immediate: bool = field(
+        default_factory=lambda: _bool("REGIME_PANIC_IMMEDIATE", True))
+    # Trailing window (bars) for the volatility percentile dimension.
+    regime_vol_lookback: int = field(
+        default_factory=lambda: _int("REGIME_VOL_LOOKBACK", 180))
+    # Rolling window (bars) for the cross-sectional correlation dimension.
+    regime_corr_window: int = field(
+        default_factory=lambda: _int("REGIME_CORR_WINDOW", 30))
+    # How many universe symbols to sample for breadth/correlation dims (0 = all
+    # of the working universe). Kept small so the extra fetch stays cheap.
+    regime_universe_sample: int = field(
+        default_factory=lambda: _int("REGIME_UNIVERSE_SAMPLE", 12))
+    # Policy version stamped on every trade for the audit trail (§H). Phase 1
+    # default is the baseline sentinel; it changes only when a decision-changing
+    # phase arms.
+    policy_version: str = field(
+        default_factory=lambda: _str("POLICY_VERSION", "RAPB-v0-baseline"))
     # Day-boundary offset in hours from UTC for ALL daily counters (kill
     # switch, profit lock, daily PnL window, daily-summary/report dedup).
     # 0 = UTC midnight (default, unchanged). 3 = Türkiye saati (UTC+3): the
