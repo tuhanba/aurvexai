@@ -59,15 +59,17 @@ banked at the target by the flatten but shows +1% to my closed-R model. So
 the model sees the flatten's *capping harm* but not its *peak-lock benefit*.
 The net is genuinely uncertain from this analysis.
 
-**Low-regret recommendation:** the +4% *floor* is suspiciously low for a
-skew book. Raise the floor toward the adaptive ceiling — **`DAILY_PROFIT_LOCK_PCT`
-6–8%** (the adaptive path already reaches 10% in trend) — which reduces the
-capping harm while keeping some peak-lock protection. This is reversible and
-low-regret. The DEFINITIVE resolution needs either an intraday-MTM engine
-backtest (bigger build) or the paper window, which logs every flatten event
-and the subsequent path — that is the cleanest arbiter and costs nothing but
-time. **Do not wholesale-drop the owner's flatten on model evidence blind to
-half its mechanism.**
+**Resolved (2026-07-20) → `DAILY_PROFIT_LOCK_PCT` raised 4 → 8.** The deployed
+flatten is *adaptive* (4% floor → 10% ceiling by BTC-4h-ADX), so the fixed-4%
+picture above was too pessimistic; replaying the true adaptive mechanism on the
+real stream (`ADAPTIVE_PROFIT_FLOOR.md`, `scripts/adaptive_floor_sweep.py`)
+shows raising the floor is **monotonically better** (MAR −0.55 @4% → −0.29 @8%
+→ −0.19 @10%; no-flatten best at +20 but model-blind to peak-lock). Floor 8% is
+the low-regret, reversible middle: it halves the modelled capping harm while
+keeping the peak-lock flatten (fires later, not never). The DEFINITIVE
+resolution — whether to drop the flatten entirely — needs the paper window,
+which logs every flatten event and the subsequent path. **Do not wholesale-drop
+the owner's flatten on model evidence blind to half its mechanism.**
 
 ## 5. TA adequacy — **SETTLED (exhaustive; the last ML cell is now run — NO-GO)**
 
@@ -103,7 +105,7 @@ latency infra** — structural, not a modeling trick.
 | leverage | settled — return-neutral | keep efficient policy |
 | trade count | settled — max Σ total R | keep 5 legs; frequency via /capacity data |
 | risk % | bracketed [1.0–1.5%] | keep 1.5%, don't raise; expect 40–70% DD |
-| daily target | strong signal, model-blind to peak-lock | raise floor to 6–8% (low-regret); paper window is the arbiter |
+| daily target | resolved (adaptive-aware) | floor raised 4→8% (applied); full drop deferred to paper window |
 | TA | exhaustive (215 trials + ML feature-combo, all NO-GO) | swing book is the edge; the last ML cell is now run and closed |
 
 Nothing changed in the engine — measurement only. The one config change with
