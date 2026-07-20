@@ -103,14 +103,24 @@ BLOCK = {
     "UNIVERSE_SIZE": "17",
     "UNIVERSE_INCLUDE": U17,
     "MIN_QUOTE_VOLUME_24H": "10000000",     # 10M — pinned coins clear it in quiet markets
-    # Owner decision 2026-07-11: take profit and stop for the day at +4% on a
-    # MARK-TO-MARKET basis — the moment intraday total (realized+unrealized)
-    # gain hits +4% of the day-open equity, CLOSE all positions and lock new
+    # Owner decision 2026-07-11: take profit and stop for the day on a MARK-TO-
+    # MARKET basis — the moment intraday total (realized+unrealized) gain hits
+    # the (adaptive) target of day-open equity, CLOSE all positions and lock new
     # entries (don't wait for trades to close). Daily window rolls at 00:00
     # Türkiye saati (UTC+3), when the lock releases and trading resumes.
-    "DAILY_PROFIT_LOCK_PCT": "4",
+    #
+    # Floor raised 4% -> 8% (2026-07-20, data-backed). The deployed adaptive
+    # flatten (BTC-4h-ADX floor->ceiling) was simulated on the real 5-leg OOS
+    # stream (docs/research/ADAPTIVE_PROFIT_FLOOR.md): raising the floor is
+    # MONOTONICALLY better (MAR -0.55 @4% -> -0.29 @8%) because a low floor caps
+    # the skew edge's runner days. 8% roughly halves the modelled capping harm
+    # while KEEPING the peak-lock flatten (fires later, not never) and staying
+    # fully reversible. Dropping the flatten entirely scores best in the model
+    # but the model is blind to the intraday peak-lock benefit, so that call is
+    # left to the paper window's flatten-event logs — not made on model evidence.
+    "DAILY_PROFIT_LOCK_PCT": "8",
     "DAILY_PROFIT_FLATTEN": "true",
-    # Adaptive target by MEASURED trend regime (BTC 4h ADX): 4% floor in chop,
+    # Adaptive target by MEASURED trend regime (BTC 4h ADX): 8% floor in chop,
     # up to 10% ceiling in a strong trend — let winners run on hype days, bank
     # fast in chop. Never changes per-trade risk; only when we take the day.
     "DAILY_PROFIT_ADAPTIVE": "true",

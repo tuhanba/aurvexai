@@ -112,6 +112,9 @@ def test_update_env_writes_profit_lock_and_offset(tmp_path):
 def test_apply_fast_paper_block_has_owner_values():
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
     import apply_fast_paper_env as a
-    assert a.BLOCK["DAILY_PROFIT_LOCK_PCT"] == "4"
+    # floor raised 4 -> 8 (2026-07-20, ADAPTIVE_PROFIT_FLOOR.md): a low floor
+    # caps the skew edge's runner days; 8 halves the modelled harm, keeps the
+    # peak-lock flatten, stays reversible.
+    assert a.BLOCK["DAILY_PROFIT_LOCK_PCT"] == "8"
     assert a.BLOCK["DAY_BOUNDARY_OFFSET_HOURS"] == "3"
     assert a.BLOCK["MIN_QUOTE_VOLUME_24H"] == "10000000"
