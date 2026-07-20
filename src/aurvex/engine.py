@@ -335,6 +335,13 @@ class Engine:
             ok, why = self.switch_mode(want)
             if not ok:
                 log.warning("mode_override '%s' NOT applied: %s", want, why)
+                # A stale live intent whose gates are now closed must not linger
+                # as a half-state — reconcile the persisted override to reality
+                # so the box stays cleanly in its actual (paper) mode.
+                if want == "live":
+                    self.db.set_meta("mode_override", self.cfg.mode)
+                    log.warning("cleared stale live mode_override → %s",
+                                self.cfg.mode)
 
     def panic_flatten(self, reason: str = "PANIC") -> "dict":
         """One-command emergency flatten (owner's /panic).

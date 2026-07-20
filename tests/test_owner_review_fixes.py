@@ -28,6 +28,11 @@ def _live_cfg(tmp_path) -> Config:
     c.telegram_enabled = False
     c.binance_api_key = "k" * 16
     c.binance_api_secret = "s" * 16
+    # Ghost-close / wallet-sync treat the exchange as the accounting source and
+    # run only when ARMED (orders actually sent); arm the gates for these tests.
+    c.live_enabled = True
+    c.live_human_confirm = "CONFIRM"
+    c.live_send_orders = True
     return c
 
 

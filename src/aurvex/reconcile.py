@@ -27,6 +27,15 @@ every RECONCILE_INTERVAL_SEC (≤ 5 min):
 Fail-soft: ``run()`` never raises; every failure is loud (ERROR log + report
 fields) and leaves DB state untouched. All network calls are read-only except
 protective-stop placement, which goes through the five-gate-locked adapter.
+
+ARMED vs DISARMED (2026-07-20 fix): steps 1 (ghost-close) and 5 (wallet balance
+sync) treat the exchange as the ACCOUNTING source and run ONLY when ARMED
+(orders actually being sent). Under a DISARMED live adapter (LIVE_SEND_ORDERS
+off) the executor books SIMULATED fills that never reach the exchange, so a flat
+exchange is EXPECTED — closing those rows against it was the "trades won't stay
+open" bug. The exchange-MONITORING checks (2 unknown position, 4 naked stop) run
+whenever ``enabled`` (live + keys) so a real position appearing while disarmed
+is never silently ignored.
 """
 from __future__ import annotations
 
@@ -77,6 +86,29 @@ class ReconcileEnforcer:
                 and bool(self.cfg.binance_api_key)
                 and bool(self.cfg.binance_api_secret))
 
+    @property
+    def armed(self) -> bool:
+        """True only when orders are ACTUALLY being sent to the exchange (the
+        five-gate lock is open). This gates the parts of reconcile that treat
+        the exchange as the ACCOUNTING source — closing DB rows against a flat
+        exchange, and syncing the balance to the real wallet.
+
+        When live mode is DISARMED (LIVE_SEND_ORDERS off), `LiveExecutor` books
+        SIMULATED fills that never reach the exchange, so a flat exchange is the
+        EXPECTED state, NOT evidence of a ghost — reconciling those simulated
+        rows away is the "trades won't stay open" bug. The exchange-MONITORING
+        checks (unknown position, naked stop) still run under `enabled` so a
+        real position appearing while disarmed is never silently ignored."""
+        if not self.enabled:
+            return False
+        ad = self.adapter
+        if ad is not None:
+            try:
+                return bool(ad.engaged()[0])
+            except Exception:
+                return False
+        return bool(getattr(self.cfg, "live_send_orders", False))
+
     def _ex(self):
         if self._client is None:
             self._client = self._factory("binanceusdm",
@@ -110,6 +142,7 @@ class ReconcileEnforcer:
     def run(self) -> Dict[str, Any]:
         """One full enforcement pass. Never raises."""
         report: Dict[str, Any] = {"ts": now_ms(), "enabled": self.enabled,
+                                  "armed": self.armed,
                                   "ghosts_closed": [], "unknown_positions": [],
                                   "qty_mismatches": [], "stops_recreated": [],
                                   "naked_positions": [], "errors": []}
@@ -171,7 +204,11 @@ class ReconcileEnforcer:
         #    price/PnL (EXCHANGE_CLOSE) so live per-trade PnL is never blind;
         #    only when no fills are recoverable fall back to the NULL-PnL
         #    EXCHANGE_RECONCILE semantics.
-        for t in open_trades:
+        #    ONLY when ARMED: with orders disarmed the executor books SIMULATED
+        #    fills that never hit the exchange, so a flat exchange is EXPECTED,
+        #    not a ghost — closing those rows is the "trades won't stay open"
+        #    bug. Skip the close; the monitoring checks below still run.
+        for t in open_trades if self.armed else ():
             if t.symbol in exch_qty:
                 continue
             real = self._close_with_exchange_pnl(ex, t)
@@ -340,9 +377,12 @@ class ReconcileEnforcer:
                             "used": float(usdt.get("used") or 0.0)}
         self.last_wallet_ms = now_ms()
         report["wallet"] = dict(self.last_wallet)
-        # Live mode: the engine balance mirrors the exchange wallet, never the
-        # reverse. Sync through the ledger so every change is auditable.
-        if self.cfg.mode == "live" and total > 0:
+        # Armed live: the engine balance mirrors the exchange wallet, never the
+        # reverse. Sync through the ledger so every change is auditable. When
+        # DISARMED the engine runs on its own SIMULATED balance (like paper), so
+        # the real wallet is read for health/display only — never written over
+        # the simulated balance.
+        if self.armed and total > 0:
             current = self.db.get_balance()
             if abs(total - current) > 1e-6:
                 self.db.adjust_balance(change=total - current, mode="live",
