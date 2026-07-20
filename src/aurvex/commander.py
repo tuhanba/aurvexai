@@ -51,6 +51,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .config import Config
 from .models import now_ms
+from .telegram import _esc
 
 log = logging.getLogger("aurvex.commander")
 
@@ -643,31 +644,36 @@ class TelegramCommander(BaseCommander):
 
     def _cmd_livecheck(self, _args: List[str]) -> None:
         e = self._engine
-        cfg = e.cfg if e else self._cfg
-        live_enabled = cfg.live_enabled
-        has_token = bool(cfg.live_human_confirm)
-        mode_is_live = cfg.mode == "live"
-        req_pending = os.path.exists(_MODE_REQUEST_FILE)
+        if e is None or not hasattr(e, "live_preflight"):
+            # Engine not attached (rare) — fall back to the env-only view.
+            cfg = self._cfg
+            self._send(
+                "<b>Live readiness</b> (engine not attached — env only)\n"
+                f"{'✅' if cfg.live_enabled else '❌'} LIVE_ENABLED\n"
+                f"{'✅' if cfg.live_human_confirm else '❌'} LIVE_HUMAN_CONFIRM\n"
+                f"{'✅' if getattr(cfg,'live_send_orders',False) else '❌'} "
+                "LIVE_SEND_ORDERS\n"
+                f"{'✅' if cfg.mode=='live' else '❌'} AX_MODE=live")
+            return
+        rep = e.live_preflight()
 
-        checks = [
-            ("LIVE_ENABLED=true in env",    "✅" if live_enabled else "❌"),
-            ("LIVE_HUMAN_CONFIRM set in env","✅" if has_token else "❌"),
-            ("AX_MODE=live in env",         "✅" if mode_is_live else "❌"),
-            ("mode_request.json pending",   "✅" if req_pending else "—"),
-        ]
-        lines = ["<b>Live readiness checklist</b>\n"]
-        for label, mark in checks:
-            lines.append(f"{mark}  {label}")
-        lines.append(
-            "\nTo activate live mode:\n"
-            "1. Set LIVE_ENABLED=true in .env\n"
-            "2. Set LIVE_HUMAN_CONFIRM=&lt;token&gt; in .env\n"
-            "3. Send: <code>/livemode confirm &lt;token&gt;</code>\n"
-            "4. Restart the engine\n"
-            "\n⚠️ With LIVE_SEND_ORDERS=false the live executor only "
-            "simulates.\nWith ALL five gates open (incl. LIVE_SEND_ORDERS"
-            "=true + keys) orders are REAL."
-        )
+        def mark(ok):
+            return "✅" if ok is True else ("❌" if ok is False else "—")
+
+        lines = ["<b>Live preflight — full readiness audit</b>\n"]
+        for r in rep["rows"]:
+            crit = " 🚨" if (r["ok"] is False and r["critical"]) else ""
+            detail = f" · <i>{_esc(r['detail'])}</i>" if r["detail"] else ""
+            lines.append(f"{mark(r['ok'])}{crit} {_esc(r['label'])}{detail}")
+        if rep["ready"]:
+            lines.append(
+                "\n🟢 <b>READY</b> — all critical gates + preconditions pass. "
+                "Arm with <code>/live &lt;token&gt;</code> (canary sizing "
+                "applies to the first entries). Watch the first trade end-to-end.")
+        else:
+            blk = ", ".join(_esc(b) for b in rep["blockers"])
+            lines.append(f"\n🔴 <b>NOT READY</b> — blocked by: {blk}.\n"
+                         "Real orders stay OFF until every 🚨 row is cleared.")
         self._send("\n".join(lines))
 
     def _cmd_livemode(self, args: List[str]) -> None:
