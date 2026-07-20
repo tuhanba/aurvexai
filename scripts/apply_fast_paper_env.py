@@ -104,13 +104,20 @@ BLOCK = {
     "RISK_PCT": "0.5",
     "MIN_RISK_PCT": "0.25",
     "MAX_RISK_PCT": "0.75",
-    "MAX_OPEN_TRADES": "6",
-    # Owner decision 2026-07-12: 300% (was 200%) so the notional cap stops
-    # binding at ~4-5 positions and all 6 slots can fill -> more coins open at
-    # once. TRADE-OFF: higher total notional exposure = larger correlated
-    # drawdown if every long moves together; ~6 positions all-stopping is
-    # ~9% (near the 10% daily kill switch). Per-trade risk is unchanged.
-    "MAX_PORTFOLIO_EXPOSURE_PCT": "300",
+    # AGGRESSIVE operating point (owner decision 2026-07-20): 8 slots, the
+    # growth edge of the survivable frontier (JOINT_OPERATING_POINT.md). Slots
+    # 6 → 8 recovers ~900 +EV trades that slot starvation was dropping; at the
+    # low 0.5% per-trade risk this is the *diversification* lever, not more risk
+    # (aggregate 8×0.5% = 4%, still well under the deployed-was 9%). Modelled
+    # CAGR ~23% / MaxDD ~35% / ruin ~6% — the highest survivable-growth cell.
+    # Going more aggressive means MORE SLOTS at low risk, never higher per-trade
+    # risk: past ~1% the model shows a ruin cliff (that is gambling, not edge).
+    "MAX_OPEN_TRADES": "8",
+    # 400% so the notional cap does not bind before all 8 slots can fill (300%
+    # was tuned for 6). TRADE-OFF: more concurrent notional = larger correlated
+    # drawdown if every long moves together — bounded by the -10% daily kill and
+    # the per-trade 0.5% risk (8 all-stopping ≈ 4%, under the kill).
+    "MAX_PORTFOLIO_EXPOSURE_PCT": "400",
     "MAX_LEVERAGE": "10",
     "UNIVERSE_SIZE": "17",
     "UNIVERSE_INCLUDE": U17,

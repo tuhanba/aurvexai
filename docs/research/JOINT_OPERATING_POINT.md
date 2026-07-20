@@ -71,16 +71,23 @@ not a promise — the honest balance is "most days quiet, a minority carry the b
 
 ## Settled operating point (applied)
 
-| dimension | was | **settled** | why |
+Owner chose the **AGGRESSIVE** corner of the survivable frontier (2026-07-20):
+
+| dimension | was | **settled (aggressive)** | why |
 |---|---|---|---|
-| per-trade risk | 1.5% | **0.5%** (band 0.25–0.75) | aggregate 9% → 3%; +MAR, ~½ DD |
-| slots (trade count) | 6 | **6** | already capturing fuel; 8 is the next step once the account funds more concurrent min-notionals |
+| per-trade risk | 1.5% | **0.5%** (band 0.25–0.75) | aggregate 9% → 4%; +MAR, ~½ DD |
+| slots (trade count) | 6 | **8** | growth edge: recovers ~900 slot-starved +EV trades; CAGR ~23% |
 | daily target | adaptive 8→10 + giveback | **unchanged** | settled earlier |
 | leverage | efficient | **efficient** | return-neutral |
 | live canary | — | **0.25% → ramp to 0.5%** | first live trades half-size, ramp as live expectancy confirms |
 
-Applied in `apply_fast_paper_env.py` (RISK_PCT 0.5, band 0.25–0.75, slots 6) and
-`arm_live_env.py` (`--canary-risk-pct` default 0.25). Config-only, parity-safe,
-reversible. **More aggression is available on the frontier** — 0.5%×8 (CAGR ~23%,
-DD ~35%) or 0.75%×6 — at an explicit, quantified drawdown cost; dial it there
-deliberately, not by leaving the over-concentrated 1.5%×6 corner in place.
+Applied in `apply_fast_paper_env.py` (RISK_PCT 0.5, band 0.25–0.75, **slots 8**,
+exposure cap 400% so all 8 fill) and `arm_live_env.py` (`--canary-risk-pct`
+default 0.25). Config-only, parity-safe, reversible.
+
+**Why not "more aggressive" than this?** Aggression here means MORE SLOTS at low
+per-trade risk, NOT higher per-trade risk. 0.5%×8 (CAGR ~23%, DD ~35%, ruin ~6%)
+is the highest survivable-growth cell on the grid; every cell with per-trade risk
+≥1% collapses to 85–100% modelled ruin. Past this point you are not buying
+growth, you are buying a ruin cliff — so the aggressive setting maxes the slot
+lever and holds per-trade risk at the frontier-efficient 0.5%.
