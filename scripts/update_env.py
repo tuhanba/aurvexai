@@ -70,6 +70,9 @@ ALLOWED_KEYS = (
     "DAILY_PROFIT_FLATTEN",
     "DAILY_PROFIT_ADAPTIVE",
     "DAILY_PROFIT_PCT_CEILING",
+    "DAILY_GIVEBACK_GUARD_ENABLED",
+    "DAILY_GIVEBACK_ARM_PCT",
+    "DAILY_GIVEBACK_FRAC",
     "REGIME_EDGE_WEIGHT_ENABLED",
     "DAY_BOUNDARY_OFFSET_HOURS",
 )
@@ -144,6 +147,20 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--profit-ceiling-pct", type=float, default=None,
                    help="DAILY_PROFIT_PCT_CEILING — the target %% used in a "
                         "strong trend when adaptive is on (e.g. 10).")
+    p.add_argument("--giveback-guard", dest="giveback_guard",
+                   action="store_const", const=True, default=None,
+                   help="DAILY_GIVEBACK_GUARD_ENABLED=true — intraday equity "
+                        "trailing lock: once the day's peak gain arms, bank + "
+                        "lock the day if it gives back too much of that peak.")
+    p.add_argument("--no-giveback-guard", dest="giveback_guard",
+                   action="store_const", const=False,
+                   help="DAILY_GIVEBACK_GUARD_ENABLED=false — no give-back lock.")
+    p.add_argument("--giveback-arm-pct", type=float, default=None,
+                   help="DAILY_GIVEBACK_ARM_PCT — min intraday peak gain %% of "
+                        "day-open equity before the give-back guard arms (e.g. 4).")
+    p.add_argument("--giveback-frac", type=float, default=None,
+                   help="DAILY_GIVEBACK_FRAC — fraction of the armed peak that, "
+                        "once given back, banks the day (0-1, e.g. 0.33).")
     p.add_argument("--regime-edge-weight", dest="regime_edge",
                    action="store_const", const=True, default=None,
                    help="REGIME_EDGE_WEIGHT_ENABLED=true — tilt per-entry risk "
@@ -191,6 +208,13 @@ def collect_changes(args: argparse.Namespace) -> Dict[str, str]:
         changes["DAILY_PROFIT_ADAPTIVE"] = "true" if args.profit_adaptive else "false"
     if args.profit_ceiling_pct is not None:
         changes["DAILY_PROFIT_PCT_CEILING"] = _fmt_num(args.profit_ceiling_pct)
+    if args.giveback_guard is not None:
+        changes["DAILY_GIVEBACK_GUARD_ENABLED"] = ("true" if args.giveback_guard
+                                                   else "false")
+    if args.giveback_arm_pct is not None:
+        changes["DAILY_GIVEBACK_ARM_PCT"] = _fmt_num(args.giveback_arm_pct)
+    if args.giveback_frac is not None:
+        changes["DAILY_GIVEBACK_FRAC"] = _fmt_num(args.giveback_frac)
     if args.regime_edge is not None:
         changes["REGIME_EDGE_WEIGHT_ENABLED"] = ("true" if args.regime_edge
                                                  else "false")
@@ -249,6 +273,14 @@ def validate_changes(changes: Dict[str, str]) -> List[str]:
         v = float(changes["DAILY_PROFIT_PCT_CEILING"])
         if not (0 < v <= 100):
             errors.append(f"DAILY_PROFIT_PCT_CEILING={v} out of range (0, 100]")
+    if "DAILY_GIVEBACK_ARM_PCT" in changes:
+        v = float(changes["DAILY_GIVEBACK_ARM_PCT"])
+        if not (0 <= v <= 100):
+            errors.append(f"DAILY_GIVEBACK_ARM_PCT={v} out of range [0, 100]")
+    if "DAILY_GIVEBACK_FRAC" in changes:
+        v = float(changes["DAILY_GIVEBACK_FRAC"])
+        if not (0 < v < 1):
+            errors.append(f"DAILY_GIVEBACK_FRAC={v} out of range (0, 1)")
     return errors
 
 

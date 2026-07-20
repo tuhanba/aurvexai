@@ -322,6 +322,20 @@ class BaseNotifier:
             critical=True,
         )
 
+    def daily_giveback_hit(self, peak: float, gain: float,
+                           symbols, balance: float) -> None:
+        """Intraday give-back guard fired — a faded winner banked and entries
+        locked for the day (critical: pierces quiet hours)."""
+        syms = ", ".join(symbols) if symbols else "—"
+        self.send(
+            f"🛟 <b>Geri-verme koruması devrede</b>"
+            f"\ngün tepesi +{peak:.2f} USDT → anlık +{gain:.2f} USDT"
+            f"\nsolan kâr bankalandı · TÜM pozisyonlar kapatıldı"
+            f"\nkapatılanlar: {_esc(syms)} · bakiye {balance:.2f} USDT"
+            f"\nyeni giriş yok — gün sonuna (00:00 TR) kadar kilitli",
+            critical=True,
+        )
+
     def daily_profit_lock_activated(self, daily_pnl: float, target: float) -> None:
         """Task 5: fired once per activation (edge-triggered in the engine)."""
         self.send(

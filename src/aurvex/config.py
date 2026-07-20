@@ -262,6 +262,24 @@ class Config:
         default_factory=lambda: _bool("DAILY_PROFIT_ADAPTIVE", False))
     daily_profit_pct_ceiling: float = field(
         default_factory=lambda: _float("DAILY_PROFIT_PCT_CEILING", 10.0))
+    # Daily GIVEBACK guard (intraday equity trailing lock). Independent of the
+    # fixed/adaptive profit TARGET: the target only fires AT the target, so a
+    # day that peaks BELOW it (e.g. +8% then fades to +1% or negative) is not
+    # protected. This guard tracks the intraday high-water gain and, once that
+    # peak has ARMED (>= arm_pct % of day-open equity), flattens + locks the day
+    # the moment the live gain gives back more than `frac` of that peak — banking
+    # a faded winner instead of letting it bleed out. It NEVER caps a true runner
+    # (a running day keeps making new peaks, so it never triggers); it only bites
+    # when the day tops and reverses. Measured (docs/research/DAILY_GIVEBACK_GUARD.md)
+    # expectancy-positive + lower drawdown even on the closed-R proxy that
+    # UNDERSTATES the benefit. Uses the same MTM flatten primitive as the target
+    # (parity-safe); requires daily_profit_flatten on. OFF by default.
+    daily_giveback_guard_enabled: bool = field(
+        default_factory=lambda: _bool("DAILY_GIVEBACK_GUARD_ENABLED", False))
+    daily_giveback_arm_pct: float = field(
+        default_factory=lambda: _float("DAILY_GIVEBACK_ARM_PCT", 4.0))
+    daily_giveback_frac: float = field(
+        default_factory=lambda: _float("DAILY_GIVEBACK_FRAC", 0.33))
     regime_symbol: str = field(
         default_factory=lambda: _str("REGIME_SYMBOL", "BTC/USDT:USDT"))
     regime_tf: str = field(default_factory=lambda: _str("REGIME_TF", "4h"))
@@ -765,6 +783,12 @@ class Config:
         assert self.min_risk_pct <= self.risk_pct <= self.max_risk_pct <= 5, (
             f"require min_risk_pct ({self.min_risk_pct}) <= risk_pct "
             f"({self.risk_pct}) <= max_risk_pct ({self.max_risk_pct}) <= 5"
+        )
+        assert 0.0 < self.daily_giveback_frac < 1.0, (
+            "DAILY_GIVEBACK_FRAC must be in (0, 1)"
+        )
+        assert self.daily_giveback_arm_pct >= 0.0, (
+            "DAILY_GIVEBACK_ARM_PCT must be >= 0"
         )
         assert self.mode in {"paper", "live"}, "AX_MODE must be 'paper' or 'live'"
         assert -12.0 <= self.day_boundary_offset_hours <= 14.0, (

@@ -1518,6 +1518,40 @@ class Engine:
             return equity_now
         return float(meta.get("equity_open", equity_now))
 
+    def _flatten_all_now(self, opens, marks, reason: str):
+        """Close every open position at market NOW through the parity-safe
+        executor primitive (paper + live; armed live also flattens the exchange
+        position reduce-only). Returns the list of base-symbols closed."""
+        closed_syms = []
+        for t in opens:
+            px = marks.get(t.symbol) or t.entry
+            try:
+                ev = self.executor.force_close(t, float(px), reason=reason)
+                self.journal.record_fills(t, [ev])
+                fl = getattr(self.executor, "flatten_live", None)
+                if callable(fl):
+                    fl(t)
+                self.notifier.trade_closed(t)
+                self.coins.on_trade_closed(
+                    t.symbol, win=t.realized_pnl >= 0,
+                    r_multiple=(t.realized_pnl_pct / 100.0
+                                if t.realized_pnl_pct else 0.0))
+                closed_syms.append(t.symbol.split("/")[0])
+            except Exception as exc:
+                log.warning("%s flatten failed %s: %s", reason, t.symbol, exc)
+        return closed_syms
+
+    def _profit_day_peak(self, gain: float, day: int) -> float:
+        """Intraday high-water mark of today's gain (equity − day-open baseline),
+        persisted in DB meta (survives restarts). Resets at the day rollover."""
+        meta = self.db.get_meta("profit_day_peak")
+        if not isinstance(meta, dict) or meta.get("day") != day:
+            peak = max(0.0, gain)
+        else:
+            peak = max(float(meta.get("peak", 0.0)), gain)
+        self.db.set_meta("profit_day_peak", {"day": day, "peak": round(peak, 6)})
+        return peak
+
     def _daily_profit_target_guard(self, snapshots, marks) -> None:
         """When DAILY_PROFIT_FLATTEN is on: if today's TOTAL intraday equity
         gain (realized today + current unrealized) reaches
@@ -1525,7 +1559,14 @@ class Engine:
         position at market NOW (reason PROFIT_TARGET) and lock new entries
         for the rest of the logical day. Parity-safe: the close goes through
         executor.force_close (paper + live); armed live also flattens the
-        exchange position reduce-only."""
+        exchange position reduce-only.
+
+        Also runs the GIVEBACK guard (when enabled): once today's intraday peak
+        gain has ARMED (>= daily_giveback_arm_pct %% of day-open equity), if the
+        current gain gives back more than daily_giveback_frac of that peak, bank
+        the faded winner — flatten + lock the day the same way (reason
+        DAILY_GIVEBACK). The target fires AT the target; the giveback guard
+        protects a peak that formed BELOW it and then reversed."""
         cfg = self.cfg
         if not (cfg.daily_profit_lock_enabled and cfg.daily_profit_flatten
                 and cfg.daily_profit_lock_pct > 0):
@@ -1544,42 +1585,45 @@ class Engine:
             equity = cash + unreal
             base = self._profit_day_baseline(equity, day)
             target = base * (self._effective_profit_pct() / 100.0)
+            gain = equity - base
+            peak = self._profit_day_peak(gain, day)
             already = self.db.get_meta("profit_target_hit_day")
             if already == day:
                 return                      # already flattened + locked today
-            if target <= 0 or (equity - base) < target:
-                return
-            # --- target hit: flatten everything now ---
-            closed_syms = []
-            for t in opens:
-                px = marks.get(t.symbol) or t.entry
+            # --- 1) fixed/adaptive profit TARGET ---
+            if target > 0 and gain >= target:
+                closed_syms = self._flatten_all_now(opens, marks, "PROFIT_TARGET")
+                self.db.set_meta("profit_target_hit_day", day)
                 try:
-                    ev = self.executor.force_close(t, float(px),
-                                                   reason="PROFIT_TARGET")
-                    self.journal.record_fills(t, [ev])
-                    # Armed live: flatten the real exchange position too.
-                    fl = getattr(self.executor, "flatten_live", None)
-                    if callable(fl):
-                        fl(t)
-                    self.notifier.trade_closed(t)
-                    self.coins.on_trade_closed(
-                        t.symbol, win=t.realized_pnl >= 0,
-                        r_multiple=(t.realized_pnl_pct / 100.0
-                                    if t.realized_pnl_pct else 0.0))
-                    closed_syms.append(t.symbol.split("/")[0])
+                    self.notifier.daily_profit_target_hit(
+                        round(gain, 2), round(target, 2), closed_syms,
+                        round(self.db.get_balance(), 2))
                 except Exception as exc:
-                    log.warning("profit-target flatten failed %s: %s",
-                                t.symbol, exc)
+                    log.debug("profit-target notify error: %s", exc)
+                log.warning("DAILY PROFIT TARGET hit (+%.2f >= +%.2f) — flattened "
+                            "%d position(s), entries locked for the day",
+                            gain, target, len(closed_syms))
+                return
+            # --- 2) GIVEBACK guard (peak armed, then reversed) ---
+            if not cfg.daily_giveback_guard_enabled:
+                return
+            arm = base * (cfg.daily_giveback_arm_pct / 100.0)
+            if arm <= 0 or peak < arm:
+                return                      # not armed — no meaningful peak yet
+            floor = peak * (1.0 - cfg.daily_giveback_frac)
+            if gain > floor:
+                return                      # still holding enough of the peak
+            closed_syms = self._flatten_all_now(opens, marks, "DAILY_GIVEBACK")
             self.db.set_meta("profit_target_hit_day", day)
             try:
-                self.notifier.daily_profit_target_hit(
-                    round(equity - base, 2), round(target, 2), closed_syms,
+                self.notifier.daily_giveback_hit(
+                    round(peak, 2), round(gain, 2), closed_syms,
                     round(self.db.get_balance(), 2))
             except Exception as exc:
-                log.debug("profit-target notify error: %s", exc)
-            log.warning("DAILY PROFIT TARGET hit (+%.2f >= +%.2f) — flattened "
-                        "%d position(s), entries locked for the day",
-                        equity - base, target, len(closed_syms))
+                log.debug("giveback notify error: %s", exc)
+            log.warning("DAILY GIVEBACK guard fired (peak +%.2f, now +%.2f <= "
+                        "+%.2f) — flattened %d position(s), entries locked",
+                        peak, gain, floor, len(closed_syms))
         except Exception as exc:
             log.debug("daily profit target guard error: %s", exc)
 

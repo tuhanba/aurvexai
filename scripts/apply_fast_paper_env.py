@@ -125,6 +125,18 @@ BLOCK = {
     # fast in chop. Never changes per-trade risk; only when we take the day.
     "DAILY_PROFIT_ADAPTIVE": "true",
     "DAILY_PROFIT_PCT_CEILING": "10",
+    # Give-back guard (2026-07-20): the profit target only fires AT the target,
+    # so a day that peaks BELOW it (e.g. +6% then fades to +1% / negative) is
+    # unprotected. This intraday equity trailing lock arms once the day's peak
+    # gain clears +4% of day-open equity and banks + locks the day if it gives
+    # back >33% of that peak — banking a faded winner. It NEVER caps a running
+    # day (which keeps making new peaks). Measured expectancy-positive + lower
+    # drawdown even on the closed-R proxy that UNDERSTATES the benefit
+    # (docs/research/DAILY_GIVEBACK_GUARD.md). Parity-safe; tunable via
+    # scripts/update_env.py --giveback-arm-pct / --giveback-frac / --no-giveback-guard.
+    "DAILY_GIVEBACK_GUARD_ENABLED": "true",
+    "DAILY_GIVEBACK_ARM_PCT": "4",
+    "DAILY_GIVEBACK_FRAC": "0.33",
     # Regime + edge weighted risk sizing (holdout-validated: H2 book Sharpe
     # 1.35 -> 1.83). Tilts per-entry risk UP in a strong BTC-4h trend and on
     # the higher-Sharpe legs (ichimoku, squeeze@4h), DOWN in chop and on the
