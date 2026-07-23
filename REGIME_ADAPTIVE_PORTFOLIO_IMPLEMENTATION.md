@@ -2,26 +2,56 @@
 
 **Regime-Adaptive Multi-Edge Portfolio Engine — implementation plan for Claude Code**
 
-Author: system owner review · Date: 2026-07-20 · Status: **Phase 1 IMPLEMENTED
-(observational, flag-gated OFF)**; Phases 2–8 pending. This file is the single
-source of truth for the build. Read it top to bottom before touching code.
+Author: system owner review · Date: 2026-07-20 · Status: **ALL 8 PHASES
+IMPLEMENTED — code complete, every decision-changing lever flag-gated OFF.** The
+code is done; *arming* each lever still requires its acceptance evidence
+(backtest gate + paper confirmation), which is data/time-bound, not code-bound.
+This file is the single source of truth. Read it top to bottom before touching
+code.
 
-## Build progress
+## Build progress — all phases implemented (flag-gated OFF by default)
 
-- **Phase 1 — DONE (this PR).** Observational multi-dimensional regime ensemble.
-  New: `src/aurvex/regime.py` (`RegimeEnsemble`, `RegimeState`, dimensions
-  trend/vol/breadth/corr/liq, confidence, persistence, transition risk,
-  hysteresis, PANIC override, fail-safe). Additive DB migrations
-  (`regime_history`, `policy_versions`, trades audit columns). Config flags
-  (all default OFF/neutral). Engine wiring: `_evaluate_regime()` stores a
-  `RegimeState` per cycle and stamps observational context onto decisions/
-  trades; **`_market_regime()` and `decide()` are untouched** so sizing is
-  byte-identical. Read-only `/api/regime` surface. Tests: `test_regime_ensemble`
-  (14), `test_regime_parity` (5), `test_regime_dashboard` (3). Full suite
-  **846 passed**. Nothing changes a decision until `REGIME_ENSEMBLE_ENABLED` is
-  turned on, and even then Phase 1 only observes.
-- **Phases 2–8 — pending**, per §26. Each decision-changing phase must pass its
-  §18 acceptance gate (backtest) then paper confirmation before it arms.
+**Master safety invariant (proven by `test_regime_parity`): with every new flag
+OFF (the shipped default), decisions, sizing, and decision metadata are
+byte-identical to the pre-regime engine.** Every dynamic control either flows
+through the sanctioned `decide(risk_multiplier=…)` channel or is enforced at the
+engine/allocation layer and can only ever *tighten* below the static caps —
+`DecisionEngine.decide()` and the shared `RiskManager` core are never mutated by
+a regime signal.
+
+- **Phase 1 — Observational regime ensemble.** `regime.py` (`RegimeEnsemble`,
+  `RegimeState`; trend/vol/breadth/corr/liq; confidence, persistence, transition
+  risk, hysteresis, PANIC override, fail-safe). DB: `regime_history`,
+  `policy_versions`, trades audit columns. `_evaluate_regime()` stores state +
+  stamps trades; `_market_regime()`/`decide()` untouched. `/api/regime`.
+- **Phase 2 — Strategy×regime matrix.** `regime_matrix.py` (Bayesian shrinkage to
+  global prior; unmeasured seed == legacy static weight), `data/regime_matrix.json`
+  seed, `scripts/regime_matrix.py` harness.
+- **Phase 3 — Regime-conditioned risk.** Matrix weight + confidence + transition
+  de-risking folded into the risk multiplier (`REGIME_MATRIX_ENABLED`,
+  `REGIME_DYNAMIC_RISK_ENABLED`). Sizing only, `[0.5,1.5]` clamp.
+- **Phase 4 — Correlation + dynamic slots/exposure.** `correlation.py`
+  (live cluster map, same-side down-weight, net-directional cap), `portfolio.py`
+  (opportunity score, tightening-only slot/exposure plan); wired into the pass-2
+  allocator; `apply_caps` extended additively.
+- **Phase 5 — Leverage/margin.** Tier-aware maintenance margin + funding-in-sizing
+  in `RiskManager` (`MM_TIERS_*`, `FUNDING_IN_SIZING_*`); default-off identical.
+- **Phase 6 — Drift + counterfactual.** `drift.py` (advisory ACTIVE→REDUCED→
+  SHADOW_ONLY→REVIEW state machine), `counterfactuals` table + recorder,
+  `shadow_ab.policy_variant`. Advisory only.
+- **Phase 7 — Surfaces.** `/api/regime` enriched (flags, matrix, drift,
+  counterfactuals); `telegram.regime_change()` alert on confirmed change
+  (`REGIME_ALERTS_ENABLED`).
+- **Phase 8 — Validation.** `scripts/regime_backtest.py` staged runner;
+  `.env.example` documents every flag OFF; the paper/counterfactual harness is
+  the authority for the portfolio-level levers (which the per-symbol backtester
+  cannot see — documented in the runner).
+
+**What remains (owner/data-bound, not code):** fill `data/regime_matrix.json`
+with real measured cells (`scripts/regime_matrix.py` on the archive cache);
+run the §17 staged backtests and the paper window; then arm one flag per phase
+only after its §18 gate passes. The five-gate live lock and base 1.5% risk are
+untouched throughout.
 
 > **Prime directive.** This is an *additive support layer*, not a rewrite.
 > `DecisionEngine.decide()` stays byte-identical (paper/live/backtest parity is
