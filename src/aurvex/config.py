@@ -364,6 +364,27 @@ class Config:
     # OFF by default. Requires regime_ensemble_enabled to have any effect.
     regime_dynamic_risk_enabled: bool = field(
         default_factory=lambda: _bool("REGIME_DYNAMIC_RISK_ENABLED", False))
+
+    # -- Phase 4: correlation controller + dynamic slots/exposure ----------
+    # All default OFF → the engine uses the static caps and no correlation
+    # down-weight, byte-identical to today. Every dynamic cap can only TIGHTEN
+    # below the static config value; correlation only sizes/admits, never gates
+    # decide().
+    correlation_controller_enabled: bool = field(
+        default_factory=lambda: _bool("CORRELATION_CONTROLLER_ENABLED", False))
+    corr_cluster_threshold: float = field(
+        default_factory=lambda: _float("CORR_CLUSTER_THRESHOLD", 0.70))
+    corr_penalty: float = field(
+        default_factory=lambda: _float("CORR_PENALTY", 0.5))
+    # |long − short| notional cap as % of equity (0 = disabled).
+    max_net_directional_pct: float = field(
+        default_factory=lambda: _float("MAX_NET_DIRECTIONAL_PCT", 0.0))
+    opportunity_score_enabled: bool = field(
+        default_factory=lambda: _bool("OPPORTUNITY_SCORE_ENABLED", False))
+    regime_dynamic_slots_enabled: bool = field(
+        default_factory=lambda: _bool("REGIME_DYNAMIC_SLOTS_ENABLED", False))
+    regime_dynamic_exposure_enabled: bool = field(
+        default_factory=lambda: _bool("REGIME_DYNAMIC_EXPOSURE_ENABLED", False))
     # Day-boundary offset in hours from UTC for ALL daily counters (kill
     # switch, profit lock, daily PnL window, daily-summary/report dedup).
     # 0 = UTC midnight (default, unchanged). 3 = Türkiye saati (UTC+3): the

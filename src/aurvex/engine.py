@@ -178,6 +178,13 @@ class Engine:
         # regime_matrix_enabled (Phase 3), which itself requires
         # regime_edge_weight_enabled. Default OFF → legacy static weights.
         self.regime_matrix = load_matrix(cfg)
+        # Phase 4: correlation controller (live cluster map + same-side down-weight)
+        # and the per-cycle portfolio plan (opportunity score + tightened caps).
+        # Both fail-safe to static behaviour; off by default.
+        from .correlation import CorrelationController
+        self.correlation = CorrelationController(cfg)
+        self._corr_view = None
+        self._portfolio_plan = None
         self._regime_state = None
         self._regime_next_ms: int = 0
         self._kill_switch_fired_day: int = -1
@@ -801,6 +808,11 @@ class Engine:
                 universe_liquidity=uni_liq, universe_spreads=uni_spr,
                 prev_state=self._regime_state, ts=now))
             self._regime_state = state
+            # Phase 4: refresh the live correlation view on the same cadence /
+            # universe sample (fail-safe to the static cluster map when off/thin).
+            if getattr(cfg, "correlation_controller_enabled", False):
+                self._corr_view = self.correlation.build(
+                    uni_bars, window=int(getattr(cfg, "regime_corr_window", 30)))
             self.db.record_regime(state.to_dict())
             log.info("regime: %s conf=%.2f trans=%.2f dims=[%s]%s",
                      state.label, state.confidence, state.transition_risk,
@@ -902,13 +914,15 @@ class Engine:
         regime_factor = 1.0 + self.cfg.regime_tilt * (2 * score - 1)
         return ew * regime_factor
 
-    def _risk_modulation(self, signal, buckets):
+    def _risk_modulation(self, signal, buckets, m_corr: float = 1.0):
         """Support-side risk multiplier for a candidate (Buğra primary gate).
 
         Returns (risk_multiplier, m_shadow, m_score, m_regime). Each factor is
         1.0 unless its own flag is on:
           * shadow×score modulation — risk_modulation_enabled (MEASURED edge)
           * regime+edge weighting    — regime_edge_weight_enabled (holdout-valid)
+          * m_corr (Phase 4)         — correlation_controller_enabled (passed in;
+            down-weights a candidate piling into a correlated same-side cluster)
         Combined multiplier is clamped to [0.5, 1.5]; RiskManager re-clamps to
         the risk band. It only SIZES — never gates a trade.
         """
@@ -927,7 +941,7 @@ class Engine:
             m_conf = 0.7 + 0.3 * max(0.0, min(1.0, st.confidence))
             m_trans = 1.0 - 0.4 * max(0.0, min(1.0, st.transition_risk))
             m_regime *= m_conf * m_trans
-        rm = max(0.5, min(1.5, m_shadow * m_score * m_regime))
+        rm = max(0.5, min(1.5, m_shadow * m_score * m_regime * m_corr))
         return rm, m_shadow, m_score, m_regime
 
     def _attach_quality(self, d: Decision, signal, snap) -> None:
@@ -1081,6 +1095,27 @@ class Engine:
                 for t in self.db.get_open_trades(mode=self.cfg.mode):
                     _open_sides[t.side] = _open_sides.get(t.side, 0) + 1
 
+            # Phase 4: per-cycle portfolio plan + correlation view. Every dynamic
+            # value here can ONLY tighten below the static cfg cap (parity-safe:
+            # with the flags off, slot_cap == cfg.max_open_trades, expo cap is
+            # None, cluster map is the static one, correlation factor is 1.0).
+            from .portfolio import plan_cycle
+            _plan = plan_cycle(self.cfg, self._regime_state,
+                               signal_availability=min(1.0, len(ranked_candidates) / 6.0))
+            self._portfolio_plan = _plan
+            _slot_cap = (min(self.cfg.max_open_trades, _plan.max_open)
+                         if self.cfg.regime_dynamic_slots_enabled
+                         else self.cfg.max_open_trades)
+            _expo_cap_notional = (pf.balance * _plan.exposure_cap_pct / 100.0
+                                  if self.cfg.regime_dynamic_exposure_enabled else None)
+            _corr_on = (self.cfg.correlation_controller_enabled
+                        and self._corr_view is not None
+                        and self._corr_view.data_ok)
+            _cluster_of = (self._corr_view.cluster if _corr_on else cluster_for)
+            _open_snapshot = (self.db.get_open_trades(mode=self.cfg.mode)
+                              if (_corr_on or self.cfg.max_net_directional_pct > 0)
+                              else [])
+
             _opened_ranks: List[float] = []
             _rejected_ranks: List[float] = []
 
@@ -1092,8 +1127,11 @@ class Engine:
                 pf.open_symbols = list(live_open_symbols)
                 pf.open_notional = open_notional
                 pf.open_margin = open_margin
+                _m_corr = (self.correlation.m_correlation(
+                    self._corr_view, sym, cand.signal.side, _open_snapshot)
+                    if _corr_on else 1.0)
                 rm, m_shadow, m_score, m_regime = self._risk_modulation(
-                    cand.signal, cycle_buckets)
+                    cand.signal, cycle_buckets, m_corr=_m_corr)
                 d = self._decide(cand.signal, cand.snap, pf, risk_multiplier=rm)
                 # Slot-selection support layer: record why this candidate won
                 # (or lost) its slot race. Set before persistence so signal_events
@@ -1125,7 +1163,7 @@ class Engine:
                     continue
                 if sym in live_open_symbols:
                     continue
-                if open_count >= self.cfg.max_open_trades:
+                if open_count >= _slot_cap:
                     _rejected_ranks.append(cand.rank)
                     funnel.mark_ranked_out("ranked_out:slots_full")
                     # Observe-only: a tradeable candidate we had no slot for. Stamp
@@ -1135,9 +1173,9 @@ class Engine:
                         self.db.set_shadow_reject_reason(cand_sid, "max_open_trades")
                     continue
                 if self.cfg.max_per_cluster > 0:
-                    cl = cluster_for(sym)
+                    cl = _cluster_of(sym)
                     if cl and (sum(1 for s in live_open_symbols
-                                   if cluster_for(s) == cl) >= self.cfg.max_per_cluster):
+                                   if _cluster_of(s) == cl) >= self.cfg.max_per_cluster):
                         _rejected_ranks.append(cand.rank)
                         funnel.mark_ranked_out("ranked_out:cluster_cap")
                         if cand_sid:
@@ -1150,6 +1188,23 @@ class Engine:
                         if cand_sid:
                             self.db.set_shadow_reject_reason(cand_sid, "ranked_out:same_side_cap")
                         continue
+                # Phase 4: regime-tightened exposure budget (only ever tighter than
+                # the static cap RiskManager already enforced) + net-directional cap.
+                if (_expo_cap_notional is not None
+                        and open_notional + d.position_size > _expo_cap_notional):
+                    _rejected_ranks.append(cand.rank)
+                    funnel.mark_ranked_out("ranked_out:regime_exposure")
+                    if cand_sid:
+                        self.db.set_shadow_reject_reason(cand_sid, "ranked_out:regime_exposure")
+                    continue
+                if self.cfg.max_net_directional_pct > 0 and not \
+                        self.correlation.net_directional_ok(
+                            _open_snapshot, cand.signal.side, d.position_size, pf.balance):
+                    _rejected_ranks.append(cand.rank)
+                    funnel.mark_ranked_out("ranked_out:net_directional")
+                    if cand_sid:
+                        self.db.set_shadow_reject_reason(cand_sid, "ranked_out:net_directional")
+                    continue
 
                 trade = self.executor.open(d)
                 if trade is None:
