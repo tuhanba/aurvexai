@@ -385,6 +385,23 @@ class Config:
         default_factory=lambda: _bool("REGIME_DYNAMIC_SLOTS_ENABLED", False))
     regime_dynamic_exposure_enabled: bool = field(
         default_factory=lambda: _bool("REGIME_DYNAMIC_EXPOSURE_ENABLED", False))
+
+    # -- Phase 5: leverage / margin solver upgrades ------------------------
+    # Tier-aware maintenance margin. MM_TIERS_SPEC is 'maxNotional:rate,...'
+    # ascending (e.g. '50000:0.004,250000:0.005,1000000:0.01'); larger positions
+    # land in higher-rate brackets → lower liquidation-safe leverage → safer.
+    # Off/empty → the flat MAINT_MARGIN_RATE (byte-identical to before).
+    mm_tiers_enabled: bool = field(
+        default_factory=lambda: _bool("MM_TIERS_ENABLED", False))
+    mm_tiers_spec: str = field(
+        default_factory=lambda: _str("MM_TIERS_SPEC", ""))
+    # Fold expected funding into the sizing cost for multi-settlement holds.
+    # Added cost = |FUNDING_RATE_8H| × FUNDING_SIZING_SETTLEMENTS. With the flag
+    # off, or funding 0, this adds nothing (parity-safe).
+    funding_in_sizing_enabled: bool = field(
+        default_factory=lambda: _bool("FUNDING_IN_SIZING_ENABLED", False))
+    funding_sizing_settlements: float = field(
+        default_factory=lambda: _float("FUNDING_SIZING_SETTLEMENTS", 0.0))
     # Day-boundary offset in hours from UTC for ALL daily counters (kill
     # switch, profit lock, daily PnL window, daily-summary/report dedup).
     # 0 = UTC midnight (default, unchanged). 3 = Türkiye saati (UTC+3): the
