@@ -402,6 +402,25 @@ class Config:
         default_factory=lambda: _bool("FUNDING_IN_SIZING_ENABLED", False))
     funding_sizing_settlements: float = field(
         default_factory=lambda: _float("FUNDING_SIZING_SETTLEMENTS", 0.0))
+
+    # -- Phase 6: drift monitor + counterfactual (advisory) ---------------
+    # DriftMonitor compares realised vs expected per-leg edge and recommends a
+    # safe state (ACTIVE→REDUCED_RISK→SHADOW_ONLY→REVIEW). Advisory only — it
+    # never flips a live flag. Off by default (nothing computed / logged).
+    drift_monitor_enabled: bool = field(
+        default_factory=lambda: _bool("DRIFT_MONITOR_ENABLED", False))
+    drift_tolerance_r: float = field(
+        default_factory=lambda: _float("DRIFT_TOLERANCE_R", 0.10))
+    drift_breach_streak: int = field(
+        default_factory=lambda: _int("DRIFT_BREACH_STREAK", 3))
+    drift_recover_streak: int = field(
+        default_factory=lambda: _int("DRIFT_RECOVER_STREAK", 3))
+    drift_min_sample: int = field(
+        default_factory=lambda: _int("DRIFT_MIN_SAMPLE", 30))
+    # Counterfactual policy engine: record what named policy variants WOULD have
+    # earned on each resolved shadow, without touching the live position.
+    counterfactual_policies_enabled: bool = field(
+        default_factory=lambda: _bool("COUNTERFACTUAL_POLICIES_ENABLED", False))
     # Day-boundary offset in hours from UTC for ALL daily counters (kill
     # switch, profit lock, daily PnL window, daily-summary/report dedup).
     # 0 = UTC midnight (default, unchanged). 3 = Türkiye saati (UTC+3): the
