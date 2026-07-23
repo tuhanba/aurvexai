@@ -185,7 +185,12 @@ def build_real(cfg, min_n, out):
     cells = {}
     print("\nmeasuring per-leg × regime edge (real backtest, cost-inclusive)...")
     for key, profile, ltf, htf, universe, opts in LEGS:
-        lcfg = _dc.replace(cfg, strategy_profile=profile, ltf=ltf, htf=htf, **opts)
+        # A long LTF snapshot window is REQUIRED for squeeze (SMA200 filter +
+        # BBW-500 percentile); the deployed config uses 525. Without it the
+        # squeeze detector can never fire (measured n=0). Harmless for the other
+        # legs (they only read recent bars).
+        lcfg = _dc.replace(cfg, strategy_profile=profile, ltf=ltf, htf=htf,
+                           ltf_limit=max(600, cfg.ltf_limit), **opts)
         data = {s: coins[s] for s in universe if s in coins}
         if not data:
             continue
