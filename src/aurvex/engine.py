@@ -818,6 +818,15 @@ class Engine:
                      state.label, state.confidence, state.transition_risk,
                      ",".join(state.features_used),
                      "" if state.data_ok else " DATA_INCOMPLETE")
+            # Phase 7: alert on a CONFIRMED regime change (rare, hysteresis-gated).
+            if (getattr(cfg, "regime_alerts_enabled", False) and state.data_ok
+                    and state.prev_label and state.label != state.prev_label):
+                try:
+                    self.notifier.regime_change(
+                        state.prev_label, state.label, state.confidence,
+                        state.transition_risk, state.sub_labels, state.reason)
+                except Exception as exc:
+                    log.debug("regime alert error: %s", exc)
         except Exception as exc:
             log.debug("regime ensemble eval error: %s", exc)
 

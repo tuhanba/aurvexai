@@ -421,6 +421,10 @@ class Config:
     # earned on each resolved shadow, without touching the live position.
     counterfactual_policies_enabled: bool = field(
         default_factory=lambda: _bool("COUNTERFACTUAL_POLICIES_ENABLED", False))
+    # Phase 7: send a Telegram alert on a CONFIRMED regime change (rare,
+    # hysteresis-gated). Off by default.
+    regime_alerts_enabled: bool = field(
+        default_factory=lambda: _bool("REGIME_ALERTS_ENABLED", False))
     # Day-boundary offset in hours from UTC for ALL daily counters (kill
     # switch, profit lock, daily PnL window, daily-summary/report dedup).
     # 0 = UTC midnight (default, unchanged). 3 = Türkiye saati (UTC+3): the

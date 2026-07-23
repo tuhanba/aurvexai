@@ -53,3 +53,19 @@ def test_regime_endpoint_disabled_flag(tmp_path):
     client = create_app(cfg).test_client()
     data = client.get("/api/regime").get_json()
     assert data["enabled"] is False
+
+
+def test_regime_endpoint_phase7_surfaces(tmp_path):
+    """Matrix summary, flags, drift state and counterfactual uplift are exposed."""
+    from aurvex.dashboard.app import create_app
+    cfg = _cfg(tmp_path)
+    db = Storage(cfg.db_path)
+    db.ensure_epoch(cfg.epoch_label)
+    db.set_drift_state({"donchian_trend:CHOP": {"state": "SHADOW_ONLY"}})
+    db.record_counterfactual("s1", "risk_plus_1band", "ichimoku_trend",
+                             "STRONG_TREND", 0.1, 0.2)
+    data = create_app(cfg).test_client().get("/api/regime").get_json()
+    assert "flags" in data and "matrix" in data
+    assert data["matrix"]["global"]["ichimoku_trend"] == 2.17
+    assert data["drift_state"]["donchian_trend:CHOP"]["state"] == "SHADOW_ONLY"
+    assert data["counterfactuals"][0]["variant"] == "risk_plus_1band"

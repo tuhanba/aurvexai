@@ -271,6 +271,19 @@ class BaseNotifier:
             critical=True,
         )
 
+    def regime_change(self, prev: str, new: str, confidence: float,
+                      transition_risk: float, sub_labels: dict,
+                      reason: str = "") -> None:
+        """Regime-adaptive Phase 7: a CONFIRMED regime change (hysteresis-gated,
+        so rare). Short but explanatory. Not critical (respects quiet hours)."""
+        dims = " · ".join(f"{k}:{v}" for k, v in (sub_labels or {}).items())
+        self.send(
+            f"🧠 <b>REGIME CHANGE</b>  {_esc(prev or '—')} → {_esc(new)}"
+            f"\nConfidence: {confidence * 100:.0f}% · transition risk "
+            f"{transition_risk * 100:.0f}%"
+            + (f"\n{_esc(dims)}" if dims else "")
+            + (f"\n{_esc(reason)}" if reason else ""))
+
     def stop_approach(self, t, room_pct: float, upnl: float) -> None:
         """One-shot warning: a position has consumed most of its stop
         distance (critical — delivers through quiet hours)."""
