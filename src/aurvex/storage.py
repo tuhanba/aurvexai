@@ -438,7 +438,8 @@ class Storage:
         """)
         # Regime-adaptive portfolio, Phase 1 (OBSERVATIONAL). Additive-only.
         # regime_history: one row per regime recompute (dashboard/history/research).
-        # policy_versions: the audit trail of allocation-policy versions (§H).
+        # The per-trade regime/policy audit lives in trades.metadata JSON (stamped
+        # by executors.build_trade) — no dedicated columns are needed.
         self.conn.executescript("""
             CREATE TABLE IF NOT EXISTS regime_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -456,29 +457,7 @@ class Storage:
                 reason TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_regime_ts ON regime_history(ts);
-            CREATE TABLE IF NOT EXISTS policy_versions (
-                version TEXT PRIMARY KEY,
-                created_ts INTEGER,
-                regime_model TEXT,
-                risk_allocator TEXT,
-                universe_policy TEXT,
-                margin_solver TEXT,
-                config_snapshot_json TEXT
-            );
         """)
-        # Regime audit columns on trades (additive; populated from the decision
-        # metadata at open time — empty/0 for pre-Phase-1 and flags-OFF rows).
-        if "policy_version" not in cols:
-            self.conn.execute(
-                "ALTER TABLE trades ADD COLUMN policy_version TEXT DEFAULT ''")
-        if "regime_label" not in cols:
-            self.conn.execute(
-                "ALTER TABLE trades ADD COLUMN regime_label TEXT DEFAULT ''")
-        if "regime_confidence" not in cols:
-            self.conn.execute(
-                "ALTER TABLE trades ADD COLUMN regime_confidence REAL DEFAULT 0")
-        self.conn.commit()
-
         # Phase 6: named-policy-variant column on the counterfactual A/B table +
         # a standalone counterfactual ledger. Additive only.
         ab_cols = {r["name"] for r in
@@ -660,14 +639,20 @@ class Storage:
             pass
 
     def latest_regime(self) -> Optional[Dict[str, Any]]:
-        row = self.conn.execute(
-            "SELECT * FROM regime_history ORDER BY ts DESC LIMIT 1").fetchone()
+        try:
+            row = self.conn.execute(
+                "SELECT * FROM regime_history ORDER BY ts DESC LIMIT 1").fetchone()
+        except sqlite3.Error:
+            return None            # table absent on a read-only/pre-migration DB
         return dict(row) if row else None
 
     def recent_regimes(self, limit: int = 100) -> List[Dict[str, Any]]:
-        rows = self.conn.execute(
-            "SELECT * FROM regime_history ORDER BY ts DESC LIMIT ?",
-            (limit,)).fetchall()
+        try:
+            rows = self.conn.execute(
+                "SELECT * FROM regime_history ORDER BY ts DESC LIMIT ?",
+                (limit,)).fetchall()
+        except sqlite3.Error:
+            return []
         return [dict(r) for r in rows]
 
     # -- counterfactuals (Phase 6, observational) --------------------------
@@ -691,10 +676,13 @@ class Storage:
 
     def counterfactual_summary(self) -> List[Dict[str, Any]]:
         """Per-variant aggregate delta-R (mean uplift vs actual) for the report."""
-        rows = self.conn.execute(
-            "SELECT variant, COUNT(*) AS n, AVG(delta_r) AS mean_delta_r, "
-            "SUM(delta_r) AS total_delta_r FROM counterfactuals "
-            "GROUP BY variant ORDER BY total_delta_r DESC").fetchall()
+        try:
+            rows = self.conn.execute(
+                "SELECT variant, COUNT(*) AS n, AVG(delta_r) AS mean_delta_r, "
+                "SUM(delta_r) AS total_delta_r FROM counterfactuals "
+                "GROUP BY variant ORDER BY total_delta_r DESC").fetchall()
+        except sqlite3.Error:
+            return []
         return [dict(r) for r in rows]
 
     def drift_state(self) -> Dict[str, Any]:

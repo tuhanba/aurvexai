@@ -42,7 +42,7 @@ from .models import (ALLOW, LONG, OPEN, REJECT, Decision, MarketSnapshot,
 from .quality import grade as quality_grade
 from .reconcile import ReconcileEnforcer
 from .regime import RegimeEnsemble, RegimeInputs
-from .regime_matrix import load_matrix
+from .regime_matrix import _GLOBAL_PRIOR_SHARPE, load_matrix
 from .scanner import UniverseScanner
 from .setups import SetupDetector, build_context
 from .shadow import ShadowLearner, build_coin_library
@@ -57,17 +57,11 @@ log = logging.getLogger("aurvex.engine")
 
 _DAY_MS = 86_400_000
 
-# Per-leg validated daily-Sharpe (PORTFOLIO_FRONTIER_REPORT.md, 6y, 12 coins)
-# — the edge-weight prior for regime+edge risk sizing. Keyed by the deployed
-# setup_type (the disambiguated leg key). Unknown setups weight 1.0.
-_LEG_EDGE_SHARPE = {
-    "ichimoku_trend": 2.17,
-    "squeeze_breakout@4h": 1.95,
-    "donchian_trend": 1.06,
-    "band_walk": 0.94,
-    "squeeze_breakout@2h": 0.90,   # 2h leg — DSR 2.44, alive in 2025+ (t 2.03)
-    "squeeze_breakout": 0.62,      # the retired 1h leg (unused once removed)
-}
+# Per-leg validated daily-Sharpe (PORTFOLIO_FRONTIER_REPORT.md, 6y, 12 coins) —
+# the edge-weight prior for regime+edge risk sizing. Single source of truth lives
+# in regime_matrix (the global-prior fallback the matrix shrinks toward); aliased
+# here so _edge_weight and the matrix can never drift apart.
+_LEG_EDGE_SHARPE = _GLOBAL_PRIOR_SHARPE
 
 
 def _utc_day_start_ms(ts_ms: Optional[int] = None,

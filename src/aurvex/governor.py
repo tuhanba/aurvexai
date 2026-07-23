@@ -93,6 +93,41 @@ def _risk_and_margin(db: Storage, cfg: Config) -> Dict[str, Any]:
     }
 
 
+def _regime_advisory(db: Storage, cfg: Config) -> Dict[str, Any]:
+    """Unify the regime-adaptive ADVISORY layers (regime ensemble, drift monitor,
+    counterfactual policy engine) into the one read-only governor surface —
+    alongside shadow. Report-only, exactly like shadow and the CEO panel: it
+    surfaces state and recommendations, never a veto (CLAUDE.md #5). Empty when
+    the ensemble is off."""
+    latest = db.latest_regime() or {}
+    drift = db.drift_state() or {}
+    # A leg in REDUCED_RISK / SHADOW_ONLY / REVIEW_REQUIRED is a recommendation
+    # the owner acts on — surface those explicitly (never auto-applied).
+    drift_flags = {k: v.get("state") for k, v in drift.items()
+                   if isinstance(v, dict) and v.get("state") not in (None, "ACTIVE")}
+    return {
+        "enabled": bool(getattr(cfg, "regime_ensemble_enabled", False)),
+        "flags": {
+            "matrix": bool(getattr(cfg, "regime_matrix_enabled", False)),
+            "dynamic_risk": bool(getattr(cfg, "regime_dynamic_risk_enabled", False)),
+            "correlation": bool(getattr(cfg, "correlation_controller_enabled", False)),
+            "dynamic_slots": bool(getattr(cfg, "regime_dynamic_slots_enabled", False)),
+            "dynamic_exposure": bool(getattr(cfg, "regime_dynamic_exposure_enabled", False)),
+            "mm_tiers": bool(getattr(cfg, "mm_tiers_enabled", False)),
+            "drift_monitor": bool(getattr(cfg, "drift_monitor_enabled", False)),
+        },
+        "current_regime": {
+            "label": latest.get("label"),
+            "confidence": latest.get("confidence"),
+            "transition_risk": latest.get("transition_risk"),
+            "data_ok": bool(latest.get("data_ok")) if latest else None,
+        },
+        "drift_recommendations": drift_flags,   # {} = all legs ACTIVE
+        "counterfactual_uplift": db.counterfactual_summary()[:8],
+        "note": "advisory only — report-only, never a veto or auto-apply",
+    }
+
+
 def _quality_layer_summary(db: Storage, cfg: Config) -> Dict[str, Any]:
     import json
     order = ["A", "B", "C", "D"]
@@ -380,6 +415,7 @@ def build_report(cfg: Config, db: Storage, shadow: ShadowLearner) -> Dict[str, A
                 "basis": shadow_stats.get("basis", "")}),
         },
         "SHADOW_READINESS": readiness,
+        "REGIME_ADVISORY": _regime_advisory(db, cfg),
         "MISSED_OPPORTUNITIES": missed,
         "SETUP_HEALTH": health_rows,
         "LOSS_DIAGNOSIS": loss_diagnosis,
