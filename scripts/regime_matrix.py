@@ -84,15 +84,140 @@ def build_synthetic(cfg, min_n):
             "cells": {}}
 
 
+import bisect
+import csv as _csv
+import dataclasses as _dc
+from collections import Counter, defaultdict
+
+CACHE = os.environ.get("KLINES_CACHE",
+                       os.path.join(os.path.dirname(__file__), "..", "data",
+                                    "research_klines"))
+ALL12 = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT",
+         "ADAUSDT", "AVAXUSDT", "LINKUSDT", "TONUSDT", "TRXUSDT", "DOTUSDT"]
+ICH11 = [s for s in ALL12 if s != "TONUSDT"]     # ichimoku validated 11
+MAJORS5 = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+
+# Deployed legs (setup_type key, profile, ltf/htf, universe, per-leg overrides).
+LEGS = [
+    ("donchian_trend", "donchian_trend", "4h", "1d", ALL12,
+     {"don_entry_bars": 10}),
+    ("squeeze_breakout@4h", "squeeze_breakout", "4h", "1d", ALL12,
+     {"time_stop_bars": 24, "sqz_pctile": 20}),
+    ("ichimoku_trend", "ichimoku_trend", "4h", "1d", ICH11, {}),
+    ("band_walk", "band_walk", "4h", "1d", MAJORS5, {"time_stop_bars": 12}),
+]
+
+
+def _load_candles(symbol: str, tf: str):
+    from aurvex.models import Candle
+    path = os.path.join(CACHE, f"{symbol}_{tf}.csv")
+    if not os.path.exists(path):
+        return []
+    out = []
+    with open(path) as fh:
+        for row in _csv.reader(fh):
+            if len(row) < 6:
+                continue
+            ts, o, h, l, c, v = row[:6]
+            out.append(Candle(ts=int(ts), open=float(o), high=float(h),
+                              low=float(l), close=float(c), volume=float(v)))
+    out.sort(key=lambda c: c.ts)
+    return out
+
+
+def _regime_timeline(cfg, coins, min_n):
+    """Label every BTC-4h bar with the ensemble regime (all dims, no lookahead).
+
+    Returns (sorted_ts, labels) parallel lists. Leader/universe are sliced to a
+    trailing window per bar so each eval is O(window), not O(history)."""
+    from aurvex.regime import RegimeEnsemble, RegimeInputs
+    leader = coins["BTCUSDT"]
+    ens = RegimeEnsemble(cfg)
+    win = int(getattr(cfg, "regime_vol_lookback", 180)) + 60
+    ts_list, labels = [], []
+    prev = None
+    warm = 60
+    for i in range(warm, len(leader)):
+        ts = leader[i].ts
+        lb = leader[max(0, i - win):i + 1]
+        ub = {}
+        for sym, cands in coins.items():
+            j = bisect.bisect_right([c.ts for c in cands], ts)
+            if j >= 30:
+                ub[sym] = cands[max(0, j - win):j]
+        st = ens.evaluate(RegimeInputs(
+            leader_bars=lb, universe_bars=ub,
+            universe_liquidity={s: 1e9 for s in ub},
+            universe_spreads={s: 0.02 for s in ub},
+            prev_state=prev, ts=ts))
+        prev = st
+        ts_list.append(ts)
+        labels.append(st.label)
+    return ts_list, labels
+
+
+def _label_at(ts_list, labels, when):
+    """Regime label of the bar at/just-before ``when`` (no lookahead)."""
+    if not ts_list:
+        return "UNCERTAIN"
+    k = bisect.bisect_right(ts_list, when) - 1
+    return labels[max(0, k)] if k >= 0 else labels[0]
+
+
 def build_real(cfg, min_n, out):
-    """Real measurement path (needs the archive klines cache). Left as the
-    documented production entry point — imports the research harness lazily so
-    the smoke path never requires numpy / the klines cache."""
-    raise SystemExit(
-        "real measurement requires the archive klines cache ($KLINES_CACHE / "
-        "data/research_klines) and the campaign harness. Run --synthetic for a "
-        "schema smoke test, or wire this to scripts/portfolio_frontier.py's data "
-        "loaders on a machine with the cache. See the module docstring.")
+    """Measure the (leg×regime) matrix on real archived 4h klines."""
+    from aurvex.backtest import Backtester
+    coins = {s: _load_candles(s, "4h") for s in ALL12}
+    coins = {s: c for s, c in coins.items() if len(c) > 300}
+    if "BTCUSDT" not in coins:
+        raise SystemExit(f"no BTCUSDT 4h klines in {CACHE} — run the fetch first")
+    print(f"loaded {len(coins)} coins @4h "
+          f"({min(len(c) for c in coins.values())}..{max(len(c) for c in coins.values())} bars)")
+
+    print("building regime timeline over BTC 4h history...")
+    ts_list, labels = _regime_timeline(cfg, coins, min_n)
+    dist = Counter(labels)
+    total = len(labels)
+    print(f"regime distribution over {total} bars ({total * 4 / 24 / 365:.1f}y):")
+    for lbl, n in dist.most_common():
+        print(f"  {lbl:24} {n:6} bars  {n / total * 100:5.1f}%")
+
+    cells = {}
+    print("\nmeasuring per-leg × regime edge (real backtest, cost-inclusive)...")
+    for key, profile, ltf, htf, universe, opts in LEGS:
+        lcfg = _dc.replace(cfg, strategy_profile=profile, ltf=ltf, htf=htf, **opts)
+        data = {s: coins[s] for s in universe if s in coins}
+        if not data:
+            continue
+        bt = Backtester(lcfg)
+        bt.run(data)
+        trades = getattr(bt, "_last_closed", []) or []
+        buckets = defaultdict(list)
+        for t in trades:
+            lbl = _label_at(ts_list, labels, t.open_time)
+            buckets[lbl].append(t.realized_pnl_pct or 0.0)
+        cells[key] = {}
+        line = [f"{key} (n={len(trades)}):"]
+        for lbl, rs in sorted(buckets.items(), key=lambda kv: -len(kv[1])):
+            n = len(rs)
+            exp_r = sum(rs) / n if n else 0.0
+            sh = _sharpe(rs)
+            st = _status(exp_r, n, min_n)
+            cells[key][lbl] = {"n": n, "exp_r": round(exp_r, 4),
+                               "sharpe": round(sh, 3), "status": st}
+            if n >= max(5, min_n // 6):
+                line.append(f"{lbl}:n={n},expR={exp_r:+.3f},{st}")
+        print("  " + "  ".join(line))
+
+    return {"version": f"measured-real-{_today()}",
+            "global": {k: {"sharpe": v} for k, v in _GLOBAL_PRIOR_SHARPE.items()},
+            "cells": cells,
+            "_regime_distribution": {k: v for k, v in dist.items()}}
+
+
+def _today():
+    import datetime as _dt
+    return _dt.date.today().isoformat()
 
 
 def main(argv=None):

@@ -1,0 +1,13 @@
+{
+  "version": "seed-prior-only-2026-07-20",
+  "_note": "SEED ONLY. Global per-leg Sharpe from PORTFOLIO_FRONTIER_REPORT.md (6y, 12 coins). The 'cells' map is intentionally EMPTY: no per-(leg×regime) cell has been measured yet, so the runtime shrinks every lookup fully to the global prior — i.e. this reproduces the legacy static _edge_weight exactly. Fill 'cells' with real measured cells via scripts/regime_matrix.py before enabling any regime-matrix-driven sizing (Phase 3). Never hand-write measured numbers here.",
+  "global": {
+    "ichimoku_trend": {"sharpe": 2.17},
+    "squeeze_breakout@4h": {"sharpe": 1.95},
+    "donchian_trend": {"sharpe": 1.06},
+    "band_walk": {"sharpe": 0.94},
+    "squeeze_breakout@2h": {"sharpe": 0.90},
+    "squeeze_breakout": {"sharpe": 0.62}
+  },
+  "cells": {}
+}
