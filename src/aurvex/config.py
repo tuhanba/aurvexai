@@ -345,6 +345,25 @@ class Config:
     # phase arms.
     policy_version: str = field(
         default_factory=lambda: _str("POLICY_VERSION", "RAPB-v0-baseline"))
+
+    # -- Strategy×regime matrix (Phase 2 load / Phase 3 apply) -------------
+    # Path to the measured (leg×regime) edge table. Absent/empty cells shrink to
+    # the global prior, so an unmeasured matrix reproduces the legacy static
+    # per-leg weight. Phase 2 loads it OBSERVATIONALLY; it drives sizing only
+    # when regime_matrix_enabled is on (Phase 3), which itself requires
+    # regime_edge_weight_enabled. Off by default.
+    regime_matrix_enabled: bool = field(
+        default_factory=lambda: _bool("REGIME_MATRIX_ENABLED", False))
+    regime_matrix_path: str = field(
+        default_factory=lambda: _str("REGIME_MATRIX_PATH", "data/regime_matrix.json"))
+    regime_matrix_min_n: int = field(
+        default_factory=lambda: _int("REGIME_MATRIX_MIN_N", 150))
+    # Phase 3: additionally scale per-entry risk by regime CONFIDENCE (low → down)
+    # and TRANSITION risk (high → down), folded into the regime multiplier. Sizing
+    # only, never a gate; composed inside the [0.5,1.5] clamp then the risk band.
+    # OFF by default. Requires regime_ensemble_enabled to have any effect.
+    regime_dynamic_risk_enabled: bool = field(
+        default_factory=lambda: _bool("REGIME_DYNAMIC_RISK_ENABLED", False))
     # Day-boundary offset in hours from UTC for ALL daily counters (kill
     # switch, profit lock, daily PnL window, daily-summary/report dedup).
     # 0 = UTC midnight (default, unchanged). 3 = Türkiye saati (UTC+3): the

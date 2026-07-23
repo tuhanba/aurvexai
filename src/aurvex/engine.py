@@ -42,6 +42,7 @@ from .models import (ALLOW, LONG, OPEN, REJECT, Decision, MarketSnapshot,
 from .quality import grade as quality_grade
 from .reconcile import ReconcileEnforcer
 from .regime import RegimeEnsemble, RegimeInputs
+from .regime_matrix import load_matrix
 from .scanner import UniverseScanner
 from .setups import SetupDetector, build_context
 from .shadow import ShadowLearner, build_coin_library
@@ -172,6 +173,11 @@ class Engine:
         # owns the risk multiplier / profit target, so parity is untouched. Off
         # unless REGIME_ENSEMBLE_ENABLED.
         self.regime_ensemble = RegimeEnsemble(cfg)
+        # Phase 2/3: the measured (leg×regime) edge matrix. Loaded always (cheap,
+        # fail-safe to global priors); consulted for sizing only when
+        # regime_matrix_enabled (Phase 3), which itself requires
+        # regime_edge_weight_enabled. Default OFF → legacy static weights.
+        self.regime_matrix = load_matrix(cfg)
         self._regime_state = None
         self._regime_next_ms: int = 0
         self._kill_switch_fired_day: int = -1
@@ -878,7 +884,19 @@ class Engine:
         weak leg tilt down. Holdout-validated; sizing only, never a gate."""
         if not self.cfg.regime_edge_weight_enabled:
             return 1.0
-        ew = self._edge_weight(setup_type)
+        # Phase 3: use the measured (leg×regime) matrix weight when enabled and a
+        # regime state is available; otherwise the legacy static prior. With the
+        # shipped all-empty-cells matrix + confidence 1.0 the matrix weight EQUALS
+        # the legacy weight, so enabling the matrix on an unmeasured table is a
+        # no-op; measured cells and lower confidence move it (toward the measured
+        # edge / toward neutral respectively).
+        st = self._regime_state
+        if (self.cfg.regime_matrix_enabled and st is not None and st.data_ok):
+            ew = self.regime_matrix.edge_weight(
+                setup_type, st.label, self.cfg.edge_weight_strength,
+                self.cfg.regime_matrix_min_n, confidence=st.confidence)
+        else:
+            ew = self._edge_weight(setup_type)
         score = self._market_regime().get("score")
         score = 0.5 if score is None else float(score)   # 0.0 is a valid chop
         regime_factor = 1.0 + self.cfg.regime_tilt * (2 * score - 1)
@@ -900,6 +918,15 @@ class Engine:
             m_shadow = self.shadow.risk_multiplier(signal.setup_type)
             m_score = score_risk_multiplier(self.cfg, signal, buckets)
         m_regime = self._regime_edge_multiplier(signal.setup_type)
+        # Phase 3: confidence + transition de-risking, folded into m_regime so the
+        # 4-tuple signature (and every call site) is unchanged. Low regime
+        # confidence or high transition risk shrink risk toward safety. Gated on
+        # regime_dynamic_risk_enabled → default OFF is byte-identical.
+        if self.cfg.regime_dynamic_risk_enabled and self._regime_state is not None:
+            st = self._regime_state
+            m_conf = 0.7 + 0.3 * max(0.0, min(1.0, st.confidence))
+            m_trans = 1.0 - 0.4 * max(0.0, min(1.0, st.transition_risk))
+            m_regime *= m_conf * m_trans
         rm = max(0.5, min(1.5, m_shadow * m_score * m_regime))
         return rm, m_shadow, m_score, m_regime
 
