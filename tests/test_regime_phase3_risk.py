@@ -38,18 +38,35 @@ def test_default_off_regime_multiplier_is_one(tmp_path):
     assert e._regime_edge_multiplier("ichimoku_trend") == 1.0
 
 
-def test_matrix_enabled_on_seed_equals_legacy_weight(tmp_path):
-    """Enabling the matrix on the all-empty-cells seed must equal the legacy
-    static edge weight (parity seed guarantee), at full confidence."""
+def test_matrix_enabled_on_empty_matrix_equals_legacy_weight(tmp_path):
+    """Enabling the matrix on an all-empty-cells matrix must equal the legacy
+    static edge weight (the parity-seed guarantee), at full confidence. (The
+    SHIPPED matrix now carries real measured cells, so this injects an empty
+    matrix to isolate the property.)"""
+    from aurvex.regime_matrix import RegimeMatrix, _GLOBAL_PRIOR_SHARPE
     base = _engine(tmp_path, regime_edge_weight_enabled=True)
     base._regime_state = _state(conf=1.0)
-    # legacy path (matrix off)
     legacy = base._regime_edge_multiplier("ichimoku_trend")
-    # matrix path (matrix on) — same regime state, full confidence
     matx = _engine(tmp_path, regime_edge_weight_enabled=True,
                    regime_ensemble_enabled=True, regime_matrix_enabled=True)
+    matx.regime_matrix = RegimeMatrix(dict(_GLOBAL_PRIOR_SHARPE), {})  # empty cells
     matx._regime_state = _state(conf=1.0)
     assert abs(matx._regime_edge_multiplier("ichimoku_trend") - legacy) < 1e-9
+
+
+def test_matrix_measured_cell_moves_weight_vs_legacy(tmp_path):
+    """With the SHIPPED measured matrix, a leg's weight in a regime where it has
+    a strong measured cell should differ from the legacy static weight."""
+    base = _engine(tmp_path, regime_edge_weight_enabled=True)
+    base._regime_state = _state(label="VOL_COMPRESSION", conf=1.0)
+    legacy = base._regime_edge_multiplier("ichimoku_trend")
+    matx = _engine(tmp_path, regime_edge_weight_enabled=True,
+                   regime_ensemble_enabled=True, regime_matrix_enabled=True)
+    matx._regime_state = _state(label="VOL_COMPRESSION", conf=1.0)
+    # ichimoku measured +0.81R / sharpe 2.70 in VOL_COMPRESSION (n=177) → its
+    # weight is pulled toward that strong measured edge, away from the prior.
+    measured = matx._regime_edge_multiplier("ichimoku_trend")
+    assert measured != legacy
 
 
 def test_low_confidence_pulls_matrix_weight_toward_neutral(tmp_path):

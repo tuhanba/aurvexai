@@ -1,13 +1,198 @@
 {
-  "version": "seed-prior-only-2026-07-20",
-  "_note": "SEED ONLY. Global per-leg Sharpe from PORTFOLIO_FRONTIER_REPORT.md (6y, 12 coins). The 'cells' map is intentionally EMPTY: no per-(leg×regime) cell has been measured yet, so the runtime shrinks every lookup fully to the global prior — i.e. this reproduces the legacy static _edge_weight exactly. Fill 'cells' with real measured cells via scripts/regime_matrix.py before enabling any regime-matrix-driven sizing (Phase 3). Never hand-write measured numbers here.",
+  "version": "measured-real-2026-07-23",
   "global": {
-    "ichimoku_trend": {"sharpe": 2.17},
-    "squeeze_breakout@4h": {"sharpe": 1.95},
-    "donchian_trend": {"sharpe": 1.06},
-    "band_walk": {"sharpe": 0.94},
-    "squeeze_breakout@2h": {"sharpe": 0.90},
-    "squeeze_breakout": {"sharpe": 0.62}
+    "ichimoku_trend": {
+      "sharpe": 2.17
+    },
+    "squeeze_breakout@4h": {
+      "sharpe": 1.95
+    },
+    "donchian_trend": {
+      "sharpe": 1.06
+    },
+    "band_walk": {
+      "sharpe": 0.94
+    },
+    "squeeze_breakout@2h": {
+      "sharpe": 0.9
+    },
+    "squeeze_breakout": {
+      "sharpe": 0.62
+    }
   },
-  "cells": {}
+  "cells": {
+    "donchian_trend": {
+      "CHOP": {
+        "n": 436,
+        "exp_r": 0.2182,
+        "sharpe": 1.053,
+        "status": "active"
+      },
+      "VOL_COMPRESSION": {
+        "n": 242,
+        "exp_r": 0.1786,
+        "sharpe": 1.074,
+        "status": "active"
+      },
+      "WEAK_TREND": {
+        "n": 237,
+        "exp_r": 0.812,
+        "sharpe": 2.773,
+        "status": "active"
+      },
+      "TREND_WITH_CORR_RISK": {
+        "n": 44,
+        "exp_r": 0.0571,
+        "sharpe": 0.241,
+        "status": "active"
+      },
+      "STRONG_TREND": {
+        "n": 40,
+        "exp_r": -0.0056,
+        "sharpe": -0.021,
+        "status": "passive"
+      },
+      "VOL_EXPANSION": {
+        "n": 17,
+        "exp_r": -0.3609,
+        "sharpe": -1.292,
+        "status": "passive"
+      },
+      "PANIC": {
+        "n": 10,
+        "exp_r": 1.6317,
+        "sharpe": 1.677,
+        "status": "passive"
+      }
+    },
+    "squeeze_breakout@4h": {
+      "VOL_COMPRESSION": {
+        "n": 206,
+        "exp_r": 0.1239,
+        "sharpe": 1.368,
+        "status": "active"
+      },
+      "CHOP": {
+        "n": 172,
+        "exp_r": 0.1155,
+        "sharpe": 1.469,
+        "status": "active"
+      },
+      "WEAK_TREND": {
+        "n": 135,
+        "exp_r": 0.3069,
+        "sharpe": 2.649,
+        "status": "active"
+      },
+      "STRONG_TREND": {
+        "n": 44,
+        "exp_r": 0.1637,
+        "sharpe": 0.784,
+        "status": "active"
+      },
+      "TREND_WITH_CORR_RISK": {
+        "n": 15,
+        "exp_r": 0.0878,
+        "sharpe": 0.507,
+        "status": "passive"
+      }
+    },
+    "ichimoku_trend": {
+      "CHOP": {
+        "n": 387,
+        "exp_r": 0.2769,
+        "sharpe": 2.207,
+        "status": "active"
+      },
+      "VOL_COMPRESSION": {
+        "n": 177,
+        "exp_r": 0.8081,
+        "sharpe": 2.704,
+        "status": "active"
+      },
+      "WEAK_TREND": {
+        "n": 161,
+        "exp_r": 0.0054,
+        "sharpe": 0.034,
+        "status": "passive"
+      },
+      "STRONG_TREND": {
+        "n": 43,
+        "exp_r": 0.4145,
+        "sharpe": 1.527,
+        "status": "active"
+      },
+      "TREND_WITH_CORR_RISK": {
+        "n": 42,
+        "exp_r": 0.0527,
+        "sharpe": 0.279,
+        "status": "active"
+      },
+      "VOL_EXPANSION": {
+        "n": 15,
+        "exp_r": 0.7015,
+        "sharpe": 1.074,
+        "status": "passive"
+      },
+      "PANIC": {
+        "n": 12,
+        "exp_r": 2.8637,
+        "sharpe": 2.878,
+        "status": "passive"
+      }
+    },
+    "band_walk": {
+      "CHOP": {
+        "n": 452,
+        "exp_r": 0.0871,
+        "sharpe": 1.494,
+        "status": "active"
+      },
+      "VOL_COMPRESSION": {
+        "n": 216,
+        "exp_r": 0.122,
+        "sharpe": 1.328,
+        "status": "active"
+      },
+      "WEAK_TREND": {
+        "n": 213,
+        "exp_r": 0.0498,
+        "sharpe": 0.592,
+        "status": "active"
+      },
+      "STRONG_TREND": {
+        "n": 93,
+        "exp_r": 0.2155,
+        "sharpe": 1.272,
+        "status": "active"
+      },
+      "TREND_WITH_CORR_RISK": {
+        "n": 73,
+        "exp_r": -0.078,
+        "sharpe": -0.658,
+        "status": "shadow"
+      },
+      "PANIC": {
+        "n": 20,
+        "exp_r": 0.3891,
+        "sharpe": 1.089,
+        "status": "passive"
+      },
+      "VOL_EXPANSION": {
+        "n": 13,
+        "exp_r": 0.5375,
+        "sharpe": 1.738,
+        "status": "passive"
+      }
+    }
+  },
+  "_regime_distribution": {
+    "CHOP": 4315,
+    "WEAK_TREND": 2932,
+    "VOL_COMPRESSION": 1820,
+    "STRONG_TREND": 1329,
+    "TREND_WITH_CORR_RISK": 1089,
+    "PANIC": 251,
+    "VOL_EXPANSION": 246
+  }
 }

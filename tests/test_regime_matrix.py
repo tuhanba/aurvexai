@@ -29,12 +29,24 @@ def test_missing_file_is_prior_only():
 
 def test_unmeasured_matrix_reproduces_legacy_weight():
     """An all-empty-cells matrix must give the SAME weight as the legacy static
-    _edge_weight (confidence=1) — the parity seed guarantee."""
-    m = RegimeMatrix.load("data/regime_matrix.json")  # shipped seed (no cells)
+    _edge_weight (confidence=1) — the parity seed guarantee. (The SHIPPED matrix
+    now carries real measured cells, so this tests the property on a constructed
+    empty matrix, not the shipped file.)"""
+    m = RegimeMatrix(dict(_GLOBAL_PRIOR_SHARPE), {}, version="test-empty")
     for setup in _GLOBAL_PRIOR_SHARPE:
-        w = m.edge_weight(setup, STRONG := "STRONG_TREND", strength=0.35,
+        w = m.edge_weight(setup, "STRONG_TREND", strength=0.35,
                           min_n=150, confidence=1.0)
         assert abs(w - _legacy_edge_weight(setup)) < 1e-9
+
+
+def test_shipped_matrix_has_real_measured_cells():
+    """The shipped matrix is now measured on real data — sanity-check it loads
+    with measured cells and the global priors intact."""
+    m = RegimeMatrix.load("data/regime_matrix.json")
+    assert m.prior("ichimoku_trend") == 2.17
+    # at least the large-n legs carry measured cells
+    assert m.cell("donchian_trend", "CHOP") is not None
+    assert m.cell("donchian_trend", "CHOP").n > 100
 
 
 def test_shrinkage_pulls_thin_cell_toward_prior(tmp_path):
