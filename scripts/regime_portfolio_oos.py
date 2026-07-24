@@ -189,6 +189,41 @@ def main():
     print("\nReading: if 'regime'/'regime+shadow' Sharpe > 'flat' on H2 (unseen),")
     print("the matrix lever is a real, out-of-sample improvement — not curve-fit.")
 
+    # --- robustness: expanding walk-forward across several split points ------
+    print("\n=== ROBUSTNESS: expanding walk-forward (fit<split, test in window) ===")
+    tmin, tmax = trades[0][0], trades[-1][0]
+    span = tmax - tmin
+    wins = []
+    for frac0 in (0.40, 0.50, 0.60, 0.70, 0.80):
+        s0 = tmin + int(span * frac0)
+        s1 = tmin + int(span * (frac0 + 0.20))
+        fit = [t for t in trades if t[0] < s0]
+        test = [t for t in trades if s0 <= t[0] < s1]
+        if len(fit) < 200 or len(test) < 100:
+            continue
+        fm = _fit_matrix(fit, min_n)
+        mtx = RegimeMatrix(dict(_GLOBAL_PRIOR_SHARPE), {}, version="wf")
+        mtx.cells = {leg: {lbl: Cell(n=c.n, exp_r=c.exp_r, sharpe=c.sharpe,
+                                     status=c.status) for lbl, c in regs.items()}
+                     for leg, regs in fm.items()}
+
+        def wf_shadow(leg, lbl, _m=mtx):
+            if _m.status(leg, lbl) == SHADOW:
+                return None
+            return max(0.5, min(1.5, _m.edge_weight(leg, lbl, strength, min_n, 1.0)))
+
+        mf = _metrics(_daily_series(test, w_flat))
+        mr = _metrics(_daily_series(test, wf_shadow))
+        wins.append((mr["sharpe"], mf["sharpe"]))
+        print(f"  fit<{frac0:.0%} test[{frac0:.0%}-{frac0+0.2:.0%}]  "
+              f"flat {mf['sharpe']:>5}  regime+shadow {mr['sharpe']:>5}  "
+              f"(Δ {mr['sharpe']-mf['sharpe']:+.2f})  test_trades {len(test)}")
+    if wins:
+        beat = sum(1 for r, f in wins if r > f)
+        avg_d = sum(r - f for r, f in wins) / len(wins)
+        print(f"\n  regime+shadow beat flat in {beat}/{len(wins)} folds · "
+              f"mean ΔSharpe {avg_d:+.2f}")
+
 
 if __name__ == "__main__":
     main()
