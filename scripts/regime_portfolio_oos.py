@@ -44,8 +44,21 @@ from regime_matrix import (ALL12, LEGS, _label_at, _load_candles,
 DAY = 86_400_000
 
 
+_TRADE_CACHE = os.environ.get(
+    "OOS_TRADE_CACHE",
+    "/tmp/claude-0/-home-user-aurvexai/c185b399-61c7-5464-a17b-e719a4a3a84f/scratchpad/oos_trades.json")
+
+
 def _collect_trades(cfg):
-    """Backtest every leg → list of (open_time_ms, R, leg_key)."""
+    """Backtest every leg → list of (open_time_ms, R, leg_key, regime_label).
+
+    Deterministic given the data, so cached to JSON — lets the weighting analysis
+    iterate instantly without re-running the (slow) backtests."""
+    import json
+    if os.path.exists(_TRADE_CACHE):
+        with open(_TRADE_CACHE) as fh:
+            print(f"loaded cached trades from {_TRADE_CACHE}")
+            return [tuple(x) for x in json.load(fh)]
     coins = {s: _load_candles(s, "4h") for s in ALL12}
     coins = {s: c for s, c in coins.items() if len(c) > 300}
     if "BTCUSDT" not in coins:
@@ -64,6 +77,10 @@ def _collect_trades(cfg):
             lbl = _label_at(ts_list, labels, t.open_time)
             trades.append((t.open_time, t.realized_pnl_pct or 0.0, key, lbl))
         print(f"  {key}: {sum(1 for x in trades if x[2]==key)} trades")
+    import json
+    with open(_TRADE_CACHE, "w") as fh:
+        json.dump(trades, fh)
+    print(f"cached trades to {_TRADE_CACHE}")
     return trades
 
 
@@ -144,16 +161,24 @@ def main():
     strength = cfg.edge_weight_strength
     min_n = cfg.regime_matrix_min_n
 
+    def _clamped(leg, lbl):
+        # EXACTLY the engine's sizing: edge_weight then the [0.5,1.5] risk-band
+        # clamp (engine._risk_modulation). Without this clamp a single extreme
+        # fitted cell would size a trade many-x — which is not what the engine
+        # ever does.
+        return max(0.5, min(1.5, matrix.edge_weight(leg, lbl, strength, min_n,
+                                                    confidence=1.0)))
+
     def w_flat(leg, lbl):
         return 1.0
 
     def w_regime(leg, lbl):
-        return matrix.edge_weight(leg, lbl, strength, min_n, confidence=1.0)
+        return _clamped(leg, lbl)
 
     def w_regime_shadow(leg, lbl):
         if matrix.status(leg, lbl) == SHADOW:
             return None          # drop measured-negative regime cells
-        return matrix.edge_weight(leg, lbl, strength, min_n, confidence=1.0)
+        return _clamped(leg, lbl)
 
     print("\n=== H2 (OUT-OF-SAMPLE) portfolio comparison ===")
     for name, fn in [("flat", w_flat), ("regime", w_regime),
