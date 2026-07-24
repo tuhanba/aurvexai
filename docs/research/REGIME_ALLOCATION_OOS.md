@@ -74,3 +74,44 @@ tuning the existing four.
 
 Reproduce: `python scripts/regime_portfolio_oos.py` (caches trades to
 `$OOS_TRADE_CACHE` so re-runs are instant).
+
+## Adjacent "earn more" probes (same session) — two honest dead-ends
+
+Two further levers were tested on the same real data to see if they add profit.
+Both are NO for this book — recorded so they are not re-tried blindly.
+
+### Regime-gated mean-reversion — NO-GO (`scripts/regime_mr_probe.py`)
+Mean-reversion is a documented unconditional NO-GO. The one cut never measured:
+does it turn positive in the CHOP / VOL_COMPRESSION macro regimes? Result:
+`reversion_v1 @4h` = **−0.177R overall**, and **net-negative in every regime**,
+including its least-bad ones (CHOP −0.099 n=131, VOL_COMPRESSION −0.107 n=69;
+trend regimes −0.31…−0.42). The regime signal correctly finds where reversion is
+*least bad*, but after the ~0.13% round-trip cost even that is negative — the
+structural cost>edge finding, now confirmed through the regime lens. It IS nicely
+uncorrelated with the trend book (daily-R corr **−0.26**), so the diversification
+property is real — but negative expectancy kills it. **Do not add reversion.**
+
+### Volatility-targeted sizing — not a Sharpe win (portfolio vol-target overlay)
+A causal vol-target overlay (scale the book by target/trailing-vol, clamped
+[0.5,1.5], no lookahead) on the H2 daily-R:
+
+| book | Sharpe | +volTarget Sharpe | +volTarget MaxDD |
+|---|---|---|---|
+| flat | 1.79 | 1.60 | 73.1 |
+| regime | 1.93 | 1.72 | 72.3 |
+| regime+shadow | 1.96 | 1.76 | 67.7 |
+
+Vol-targeting **lowers Sharpe (~−0.2)** while reducing drawdown (~−5R). Expected:
+this trend-heavy book earns most when volatility EXPANDS, so scaling down in high
+vol removes its best trades. It is a **risk-reduction tool, not an earn-more
+lever**. (The regime lift persists under the overlay — +0.16 Sharpe either way —
+so the regime lever is robust to it.)
+
+## Net conclusion for "earn more"
+
+Of the levers testable on archived data this session: **regime allocation is the
+one validated win** (+6–10% risk-adjusted, lower drawdown, robust OOS). Mean-
+reversion and vol-targeting are dead-ends for this book. The remaining
+step-change lever is a genuinely uncorrelated new stream — **carry**
+(funding-harvest: research-validated +4–8%/yr, ~0 correlation, not yet built) —
+which is engineering, not archived-data research.

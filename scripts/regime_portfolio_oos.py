@@ -118,6 +118,34 @@ def _daily_series(trades, weight_fn):
     return [by_day[d] for d in sorted(by_day)]
 
 
+def _voltarget(daily, lookback=20, clamp=(0.5, 1.5)):
+    """Causal volatility-targeting overlay on a day-ordered R series.
+
+    Scale day i by target/trailing_std(prev `lookback` days), clamped to the
+    engine's [0.5,1.5] band. target = median trailing std so the average scale is
+    ~1 (it reallocates size across time, never grows aggregate risk). Uses only
+    PAST days (no lookahead)."""
+    import statistics
+    if len(daily) <= lookback + 1:
+        return list(daily)
+    stds = []
+    for i in range(len(daily)):
+        if i < lookback:
+            stds.append(None)
+            continue
+        window = daily[i - lookback:i]
+        s = statistics.pstdev(window)
+        stds.append(s if s > 1e-9 else None)
+    valid = [s for s in stds if s]
+    target = statistics.median(valid) if valid else 1.0
+    out = []
+    for i, r in enumerate(daily):
+        s = stds[i]
+        f = 1.0 if not s else max(clamp[0], min(clamp[1], target / s))
+        out.append(r * f)
+    return out
+
+
 def _metrics(daily):
     if not daily:
         return {"days": 0}
@@ -183,9 +211,12 @@ def main():
     print("\n=== H2 (OUT-OF-SAMPLE) portfolio comparison ===")
     for name, fn in [("flat", w_flat), ("regime", w_regime),
                      ("regime+shadow", w_regime_shadow)]:
-        m = _metrics(_daily_series(h2, fn))
+        daily = _daily_series(h2, fn)
+        m = _metrics(daily)
+        mv = _metrics(_voltarget(daily))
         print(f"  {name:16} Sharpe {m['sharpe']:>5}  total_R {m['total_R']:>7}  "
-              f"R/day {m['R_per_day']:>6}  maxDD_R {m['maxDD_R']:>6}  days {m['days']}")
+              f"R/day {m['R_per_day']:>6}  maxDD_R {m['maxDD_R']:>6}  days {m['days']}"
+              f"   | +volTarget Sharpe {mv['sharpe']:>5} maxDD_R {mv['maxDD_R']:>6}")
     print("\nReading: if 'regime'/'regime+shadow' Sharpe > 'flat' on H2 (unseen),")
     print("the matrix lever is a real, out-of-sample improvement — not curve-fit.")
 
