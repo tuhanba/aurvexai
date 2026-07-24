@@ -1,0 +1,260 @@
+#!/usr/bin/env python3
+"""
+scripts/regime_portfolio_oos.py — does regime-weighted allocation EARN MORE, OOS?
+
+The make-or-break test for the regime-adaptive lever. The matrix cells shipped in
+data/regime_matrix.json are DESCRIPTIVE (measured on the same history they weight).
+This script does the honest out-of-sample version:
+
+  1. Build the ensemble regime timeline over BTC-4h history (no lookahead).
+  2. Backtest every deployed leg on real 4h data → per-trade (open_time, R).
+  3. Split trades in time: H1 (first half) = FIT, H2 (second half) = TEST.
+  4. Fit the (leg×regime) edge-weight matrix on H1 ONLY.
+  5. On H2, build two daily-R streams:
+       flat     — every trade weighted 1.0 (today's book)
+       regime   — every trade weighted by its H1-fitted regime×leg edge weight,
+                  exactly as the engine sizes (clamped [0.5,1.5])
+     plus a 'regime+shadow' variant that DROPS trades whose H1 cell is shadow
+     (measured-negative in that regime).
+  6. Compare H2 annualised Sharpe, total R, MaxDD.
+
+If regime/regime+shadow beats flat on H2 (unseen data), the lever is a real
+improvement — not curve-fit. If not, it stays off. Either way it is decisive.
+
+Real data: data/research_klines/*_4h.csv (fetch first). Changes no engine
+behaviour — pure research.
+"""
+from __future__ import annotations
+
+import dataclasses as _dc
+import math
+import os
+import sys
+from collections import defaultdict
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+sys.path.insert(0, os.path.dirname(__file__))
+
+from aurvex.config import Config
+from aurvex.backtest import Backtester
+from aurvex.regime_matrix import RegimeMatrix, _GLOBAL_PRIOR_SHARPE, SHADOW
+from regime_matrix import (ALL12, LEGS, _label_at, _load_candles,
+                           _regime_timeline, _sharpe as sharpe_of, _status)
+
+DAY = 86_400_000
+
+
+_TRADE_CACHE = os.environ.get(
+    "OOS_TRADE_CACHE",
+    "/tmp/claude-0/-home-user-aurvexai/c185b399-61c7-5464-a17b-e719a4a3a84f/scratchpad/oos_trades.json")
+
+
+def _collect_trades(cfg):
+    """Backtest every leg → list of (open_time_ms, R, leg_key, regime_label).
+
+    Deterministic given the data, so cached to JSON — lets the weighting analysis
+    iterate instantly without re-running the (slow) backtests."""
+    import json
+    if os.path.exists(_TRADE_CACHE):
+        with open(_TRADE_CACHE) as fh:
+            print(f"loaded cached trades from {_TRADE_CACHE}")
+            return [tuple(x) for x in json.load(fh)]
+    coins = {s: _load_candles(s, "4h") for s in ALL12}
+    coins = {s: c for s, c in coins.items() if len(c) > 300}
+    if "BTCUSDT" not in coins:
+        raise SystemExit("no BTCUSDT 4h klines — run scripts/fetch_archive_klines first")
+    print(f"loaded {len(coins)} coins @4h")
+    print("building regime timeline...")
+    ts_list, labels = _regime_timeline(cfg, coins, cfg.regime_matrix_min_n)
+    trades = []
+    for key, profile, ltf, htf, universe, opts in LEGS:
+        lcfg = _dc.replace(cfg, strategy_profile=profile, ltf=ltf, htf=htf,
+                           ltf_limit=max(600, cfg.ltf_limit), **opts)
+        data = {s: coins[s] for s in universe if s in coins}
+        bt = Backtester(lcfg)
+        bt.run(data)
+        for t in getattr(bt, "_last_closed", []) or []:
+            lbl = _label_at(ts_list, labels, t.open_time)
+            trades.append((t.open_time, t.realized_pnl_pct or 0.0, key, lbl))
+        print(f"  {key}: {sum(1 for x in trades if x[2]==key)} trades")
+    import json
+    with open(_TRADE_CACHE, "w") as fh:
+        json.dump(trades, fh)
+    print(f"cached trades to {_TRADE_CACHE}")
+    return trades
+
+
+def _fit_matrix(h1_trades, min_n):
+    """Build a RegimeMatrix from H1 trades only (the OOS fit)."""
+    cells = defaultdict(lambda: defaultdict(list))
+    for _ts, r, leg, lbl in h1_trades:
+        cells[leg][lbl].append(r)
+    out = {}
+    for leg, regimes in cells.items():
+        out[leg] = {}
+        for lbl, rs in regimes.items():
+            n = len(rs)
+            exp_r = sum(rs) / n
+            out[leg][lbl] = _MatrixCell(n, exp_r, sharpe_of(rs),
+                                        _status(exp_r, n, min_n))
+    return out
+
+
+class _MatrixCell:
+    __slots__ = ("n", "exp_r", "sharpe", "status")
+
+    def __init__(self, n, exp_r, sharpe, status):
+        self.n, self.exp_r, self.sharpe, self.status = n, exp_r, sharpe, status
+
+
+def _daily_series(trades, weight_fn):
+    """Aggregate weighted R by calendar day → sorted list of daily-R."""
+    by_day = defaultdict(float)
+    for ts, r, leg, lbl in trades:
+        w = weight_fn(leg, lbl)
+        if w is None:            # dropped (shadow filter)
+            continue
+        by_day[ts // DAY] += r * w
+    return [by_day[d] for d in sorted(by_day)]
+
+
+def _voltarget(daily, lookback=20, clamp=(0.5, 1.5)):
+    """Causal volatility-targeting overlay on a day-ordered R series.
+
+    Scale day i by target/trailing_std(prev `lookback` days), clamped to the
+    engine's [0.5,1.5] band. target = median trailing std so the average scale is
+    ~1 (it reallocates size across time, never grows aggregate risk). Uses only
+    PAST days (no lookahead)."""
+    import statistics
+    if len(daily) <= lookback + 1:
+        return list(daily)
+    stds = []
+    for i in range(len(daily)):
+        if i < lookback:
+            stds.append(None)
+            continue
+        window = daily[i - lookback:i]
+        s = statistics.pstdev(window)
+        stds.append(s if s > 1e-9 else None)
+    valid = [s for s in stds if s]
+    target = statistics.median(valid) if valid else 1.0
+    out = []
+    for i, r in enumerate(daily):
+        s = stds[i]
+        f = 1.0 if not s else max(clamp[0], min(clamp[1], target / s))
+        out.append(r * f)
+    return out
+
+
+def _metrics(daily):
+    if not daily:
+        return {"days": 0}
+    n = len(daily)
+    mean = sum(daily) / n
+    var = sum((x - mean) ** 2 for x in daily) / (n - 1) if n > 1 else 0.0
+    sd = math.sqrt(var)
+    sharpe = (mean / sd * math.sqrt(365)) if sd > 0 else 0.0
+    # max drawdown of the cumulative R curve
+    cum = 0.0
+    peak = 0.0
+    maxdd = 0.0
+    for x in daily:
+        cum += x
+        peak = max(peak, cum)
+        maxdd = max(maxdd, peak - cum)
+    return {"days": n, "total_R": round(sum(daily), 1),
+            "R_per_day": round(mean, 3), "sharpe": round(sharpe, 2),
+            "maxDD_R": round(maxdd, 1)}
+
+
+def main():
+    cfg = Config()
+    trades = _collect_trades(cfg)
+    trades.sort(key=lambda x: x[0])
+    if not trades:
+        raise SystemExit("no trades")
+    split = trades[len(trades) // 2][0]
+    h1 = [t for t in trades if t[0] < split]
+    h2 = [t for t in trades if t[0] >= split]
+    print(f"\ntotal {len(trades)} trades · H1 {len(h1)} (fit) · H2 {len(h2)} (test)")
+
+    from aurvex.regime_matrix import Cell
+    fit_cells = _fit_matrix(h1, cfg.regime_matrix_min_n)
+    matrix = RegimeMatrix(dict(_GLOBAL_PRIOR_SHARPE), {}, version="H1-fit")
+    matrix.cells = {leg: {lbl: Cell(n=c.n, exp_r=c.exp_r, sharpe=c.sharpe,
+                                    status=c.status)
+                          for lbl, c in regs.items()}
+                    for leg, regs in fit_cells.items()}
+
+    strength = cfg.edge_weight_strength
+    min_n = cfg.regime_matrix_min_n
+
+    def _clamped(leg, lbl):
+        # EXACTLY the engine's sizing: edge_weight then the [0.5,1.5] risk-band
+        # clamp (engine._risk_modulation). Without this clamp a single extreme
+        # fitted cell would size a trade many-x — which is not what the engine
+        # ever does.
+        return max(0.5, min(1.5, matrix.edge_weight(leg, lbl, strength, min_n,
+                                                    confidence=1.0)))
+
+    def w_flat(leg, lbl):
+        return 1.0
+
+    def w_regime(leg, lbl):
+        return _clamped(leg, lbl)
+
+    def w_regime_shadow(leg, lbl):
+        if matrix.status(leg, lbl) == SHADOW:
+            return None          # drop measured-negative regime cells
+        return _clamped(leg, lbl)
+
+    print("\n=== H2 (OUT-OF-SAMPLE) portfolio comparison ===")
+    for name, fn in [("flat", w_flat), ("regime", w_regime),
+                     ("regime+shadow", w_regime_shadow)]:
+        daily = _daily_series(h2, fn)
+        m = _metrics(daily)
+        mv = _metrics(_voltarget(daily))
+        print(f"  {name:16} Sharpe {m['sharpe']:>5}  total_R {m['total_R']:>7}  "
+              f"R/day {m['R_per_day']:>6}  maxDD_R {m['maxDD_R']:>6}  days {m['days']}"
+              f"   | +volTarget Sharpe {mv['sharpe']:>5} maxDD_R {mv['maxDD_R']:>6}")
+    print("\nReading: if 'regime'/'regime+shadow' Sharpe > 'flat' on H2 (unseen),")
+    print("the matrix lever is a real, out-of-sample improvement — not curve-fit.")
+
+    # --- robustness: expanding walk-forward across several split points ------
+    print("\n=== ROBUSTNESS: expanding walk-forward (fit<split, test in window) ===")
+    tmin, tmax = trades[0][0], trades[-1][0]
+    span = tmax - tmin
+    wins = []
+    for frac0 in (0.40, 0.50, 0.60, 0.70, 0.80):
+        s0 = tmin + int(span * frac0)
+        s1 = tmin + int(span * (frac0 + 0.20))
+        fit = [t for t in trades if t[0] < s0]
+        test = [t for t in trades if s0 <= t[0] < s1]
+        if len(fit) < 200 or len(test) < 100:
+            continue
+        fm = _fit_matrix(fit, min_n)
+        mtx = RegimeMatrix(dict(_GLOBAL_PRIOR_SHARPE), {}, version="wf")
+        mtx.cells = {leg: {lbl: Cell(n=c.n, exp_r=c.exp_r, sharpe=c.sharpe,
+                                     status=c.status) for lbl, c in regs.items()}
+                     for leg, regs in fm.items()}
+
+        def wf_shadow(leg, lbl, _m=mtx):
+            if _m.status(leg, lbl) == SHADOW:
+                return None
+            return max(0.5, min(1.5, _m.edge_weight(leg, lbl, strength, min_n, 1.0)))
+
+        mf = _metrics(_daily_series(test, w_flat))
+        mr = _metrics(_daily_series(test, wf_shadow))
+        wins.append((mr["sharpe"], mf["sharpe"]))
+        print(f"  fit<{frac0:.0%} test[{frac0:.0%}-{frac0+0.2:.0%}]  "
+              f"flat {mf['sharpe']:>5}  regime+shadow {mr['sharpe']:>5}  "
+              f"(Δ {mr['sharpe']-mf['sharpe']:+.2f})  test_trades {len(test)}")
+    if wins:
+        beat = sum(1 for r, f in wins if r > f)
+        avg_d = sum(r - f for r, f in wins) / len(wins)
+        print(f"\n  regime+shadow beat flat in {beat}/{len(wins)} folds · "
+              f"mean ΔSharpe {avg_d:+.2f}")
+
+
+if __name__ == "__main__":
+    main()

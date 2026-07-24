@@ -41,6 +41,8 @@ from .models import (ALLOW, LONG, OPEN, REJECT, Decision, MarketSnapshot,
                      interval_to_ms, now_ms, profile_of)
 from .quality import grade as quality_grade
 from .reconcile import ReconcileEnforcer
+from .regime import RegimeEnsemble, RegimeInputs
+from .regime_matrix import _GLOBAL_PRIOR_SHARPE, load_matrix
 from .scanner import UniverseScanner
 from .setups import SetupDetector, build_context
 from .shadow import ShadowLearner, build_coin_library
@@ -55,17 +57,11 @@ log = logging.getLogger("aurvex.engine")
 
 _DAY_MS = 86_400_000
 
-# Per-leg validated daily-Sharpe (PORTFOLIO_FRONTIER_REPORT.md, 6y, 12 coins)
-# — the edge-weight prior for regime+edge risk sizing. Keyed by the deployed
-# setup_type (the disambiguated leg key). Unknown setups weight 1.0.
-_LEG_EDGE_SHARPE = {
-    "ichimoku_trend": 2.17,
-    "squeeze_breakout@4h": 1.95,
-    "donchian_trend": 1.06,
-    "band_walk": 0.94,
-    "squeeze_breakout@2h": 0.90,   # 2h leg — DSR 2.44, alive in 2025+ (t 2.03)
-    "squeeze_breakout": 0.62,      # the retired 1h leg (unused once removed)
-}
+# Per-leg validated daily-Sharpe (PORTFOLIO_FRONTIER_REPORT.md, 6y, 12 coins) —
+# the edge-weight prior for regime+edge risk sizing. Single source of truth lives
+# in regime_matrix (the global-prior fallback the matrix shrinks toward); aliased
+# here so _edge_weight and the matrix can never drift apart.
+_LEG_EDGE_SHARPE = _GLOBAL_PRIOR_SHARPE
 
 
 def _utc_day_start_ms(ts_ms: Optional[int] = None,
@@ -165,6 +161,26 @@ class Engine:
         self._loss_alerts_fired: set = set()
         self._weekly_report_sent: tuple = ()
         self._regime_cache: dict = {}
+        # Regime-adaptive portfolio, Phase 1 (OBSERVATIONAL). The multi-dim
+        # ensemble computes + stores a RegimeState for the dashboard/history; it
+        # does NOT drive sizing — the legacy _market_regime() trend score still
+        # owns the risk multiplier / profit target, so parity is untouched. Off
+        # unless REGIME_ENSEMBLE_ENABLED.
+        self.regime_ensemble = RegimeEnsemble(cfg)
+        # Phase 2/3: the measured (leg×regime) edge matrix. Loaded always (cheap,
+        # fail-safe to global priors); consulted for sizing only when
+        # regime_matrix_enabled (Phase 3), which itself requires
+        # regime_edge_weight_enabled. Default OFF → legacy static weights.
+        self.regime_matrix = load_matrix(cfg)
+        # Phase 4: correlation controller (live cluster map + same-side down-weight)
+        # and the per-cycle portfolio plan (opportunity score + tightened caps).
+        # Both fail-safe to static behaviour; off by default.
+        from .correlation import CorrelationController
+        self.correlation = CorrelationController(cfg)
+        self._corr_view = None
+        self._portfolio_plan = None
+        self._regime_state = None
+        self._regime_next_ms: int = 0
         self._kill_switch_fired_day: int = -1
         self._profit_lock_fired_day: int = -1
         self._last_error: str = ""
@@ -231,6 +247,17 @@ class Engine:
         exit_meta = self._exit_by_setup.get(signal.setup_type)
         if exit_meta:
             d.metadata.update(exit_meta)
+        # Regime-adaptive Phase 1: stamp the OBSERVATIONAL regime context onto the
+        # decision so it lands in signal_events / trade metadata for later
+        # attribution. Gated on the ensemble flag → when OFF, decision metadata is
+        # byte-identical to the pre-Phase-1 engine (parity guarantee).
+        if getattr(self.cfg, "regime_ensemble_enabled", False):
+            d.metadata["policy_version"] = self.cfg.policy_version
+            st = self._regime_state
+            if st is not None:
+                d.metadata["regime_label"] = st.label
+                d.metadata["regime_confidence"] = round(st.confidence, 3)
+                d.metadata["regime_transition_risk"] = round(st.transition_risk, 3)
         return d
 
     def _signal_ltf(self, setup_type: str) -> str:
@@ -728,6 +755,75 @@ class Engine:
         # keep last good value; else a neutral (chop) reading
         return cache or {"ts": now, "score": 0.0, "adx": None}
 
+    def _evaluate_regime(self, snapshots: Dict[str, MarketSnapshot]) -> None:
+        """OBSERVATIONAL (Phase 1): compute + store the multi-dimensional
+        RegimeState. It changes NOTHING about sizing or the decision — the
+        legacy ``_market_regime()`` trend score still drives the risk multiplier
+        and adaptive profit target, so paper/live/backtest parity is fully
+        preserved. Off unless ``regime_ensemble_enabled`` (default), in which
+        case this is a zero-cost no-op.
+
+        Refreshed at most every ``regime_refresh_sec`` (regime is a slow
+        variable). Fail-soft: any error keeps the last state and never disturbs
+        the cycle. Universe dims (breadth/correlation/liquidity) read the
+        already-fetched cycle snapshots — no extra network in the hot path.
+        """
+        cfg = self.cfg
+        if not getattr(cfg, "regime_ensemble_enabled", False):
+            return
+        now = now_ms()
+        if now < self._regime_next_ms:
+            return
+        self._regime_next_ms = now + int(cfg.regime_refresh_sec * 1000)
+        try:
+            leader = snapshots.get(cfg.regime_symbol)
+            if leader is not None:
+                leader_bars = leader.closed_ltf(cfg.regime_tf)
+            else:
+                snap = self.provider.get_snapshot(cfg.regime_symbol, [cfg.regime_tf])
+                leader_bars = snap.closed_ltf(cfg.regime_tf) if snap else []
+            uni_bars: Dict[str, list] = {}
+            uni_liq: Dict[str, float] = {}
+            uni_spr: Dict[str, float] = {}
+            cap = cfg.regime_universe_sample or len(snapshots)
+            for i, (sym, s) in enumerate(snapshots.items()):
+                if i >= cap:
+                    break
+                bars = s.closed_ltf(cfg.regime_tf)
+                if bars:
+                    uni_bars[sym] = bars
+                if s.quote_volume_24h:
+                    uni_liq[sym] = s.quote_volume_24h
+                ob = s.orderbook
+                if ob is not None and ob.spread_pct is not None:
+                    uni_spr[sym] = ob.spread_pct
+            state = self.regime_ensemble.evaluate(RegimeInputs(
+                leader_bars=leader_bars, universe_bars=uni_bars,
+                universe_liquidity=uni_liq, universe_spreads=uni_spr,
+                prev_state=self._regime_state, ts=now))
+            self._regime_state = state
+            # Phase 4: refresh the live correlation view on the same cadence /
+            # universe sample (fail-safe to the static cluster map when off/thin).
+            if getattr(cfg, "correlation_controller_enabled", False):
+                self._corr_view = self.correlation.build(
+                    uni_bars, window=int(getattr(cfg, "regime_corr_window", 30)))
+            self.db.record_regime(state.to_dict())
+            log.info("regime: %s conf=%.2f trans=%.2f dims=[%s]%s",
+                     state.label, state.confidence, state.transition_risk,
+                     ",".join(state.features_used),
+                     "" if state.data_ok else " DATA_INCOMPLETE")
+            # Phase 7: alert on a CONFIRMED regime change (rare, hysteresis-gated).
+            if (getattr(cfg, "regime_alerts_enabled", False) and state.data_ok
+                    and state.prev_label and state.label != state.prev_label):
+                try:
+                    self.notifier.regime_change(
+                        state.prev_label, state.label, state.confidence,
+                        state.transition_risk, state.sub_labels, state.reason)
+                except Exception as exc:
+                    log.debug("regime alert error: %s", exc)
+        except Exception as exc:
+            log.debug("regime ensemble eval error: %s", exc)
+
     def _effective_profit_pct(self) -> float:
         """Daily profit-target %%: flat daily_profit_lock_pct, or — when
         DAILY_PROFIT_ADAPTIVE is on — scaled by the trend regime between that
@@ -803,19 +899,33 @@ class Engine:
         weak leg tilt down. Holdout-validated; sizing only, never a gate."""
         if not self.cfg.regime_edge_weight_enabled:
             return 1.0
-        ew = self._edge_weight(setup_type)
+        # Phase 3: use the measured (leg×regime) matrix weight when enabled and a
+        # regime state is available; otherwise the legacy static prior. With the
+        # shipped all-empty-cells matrix + confidence 1.0 the matrix weight EQUALS
+        # the legacy weight, so enabling the matrix on an unmeasured table is a
+        # no-op; measured cells and lower confidence move it (toward the measured
+        # edge / toward neutral respectively).
+        st = self._regime_state
+        if (self.cfg.regime_matrix_enabled and st is not None and st.data_ok):
+            ew = self.regime_matrix.edge_weight(
+                setup_type, st.label, self.cfg.edge_weight_strength,
+                self.cfg.regime_matrix_min_n, confidence=st.confidence)
+        else:
+            ew = self._edge_weight(setup_type)
         score = self._market_regime().get("score")
         score = 0.5 if score is None else float(score)   # 0.0 is a valid chop
         regime_factor = 1.0 + self.cfg.regime_tilt * (2 * score - 1)
         return ew * regime_factor
 
-    def _risk_modulation(self, signal, buckets):
+    def _risk_modulation(self, signal, buckets, m_corr: float = 1.0):
         """Support-side risk multiplier for a candidate (Buğra primary gate).
 
         Returns (risk_multiplier, m_shadow, m_score, m_regime). Each factor is
         1.0 unless its own flag is on:
           * shadow×score modulation — risk_modulation_enabled (MEASURED edge)
           * regime+edge weighting    — regime_edge_weight_enabled (holdout-valid)
+          * m_corr (Phase 4)         — correlation_controller_enabled (passed in;
+            down-weights a candidate piling into a correlated same-side cluster)
         Combined multiplier is clamped to [0.5, 1.5]; RiskManager re-clamps to
         the risk band. It only SIZES — never gates a trade.
         """
@@ -825,7 +935,16 @@ class Engine:
             m_shadow = self.shadow.risk_multiplier(signal.setup_type)
             m_score = score_risk_multiplier(self.cfg, signal, buckets)
         m_regime = self._regime_edge_multiplier(signal.setup_type)
-        rm = max(0.5, min(1.5, m_shadow * m_score * m_regime))
+        # Phase 3: confidence + transition de-risking, folded into m_regime so the
+        # 4-tuple signature (and every call site) is unchanged. Low regime
+        # confidence or high transition risk shrink risk toward safety. Gated on
+        # regime_dynamic_risk_enabled → default OFF is byte-identical.
+        if self.cfg.regime_dynamic_risk_enabled and self._regime_state is not None:
+            st = self._regime_state
+            m_conf = 0.7 + 0.3 * max(0.0, min(1.0, st.confidence))
+            m_trans = 1.0 - 0.4 * max(0.0, min(1.0, st.transition_risk))
+            m_regime *= m_conf * m_trans
+        rm = max(0.5, min(1.5, m_shadow * m_score * m_regime * m_corr))
         return rm, m_shadow, m_score, m_regime
 
     def _attach_quality(self, d: Decision, signal, snap) -> None:
@@ -979,6 +1098,27 @@ class Engine:
                 for t in self.db.get_open_trades(mode=self.cfg.mode):
                     _open_sides[t.side] = _open_sides.get(t.side, 0) + 1
 
+            # Phase 4: per-cycle portfolio plan + correlation view. Every dynamic
+            # value here can ONLY tighten below the static cfg cap (parity-safe:
+            # with the flags off, slot_cap == cfg.max_open_trades, expo cap is
+            # None, cluster map is the static one, correlation factor is 1.0).
+            from .portfolio import plan_cycle
+            _plan = plan_cycle(self.cfg, self._regime_state,
+                               signal_availability=min(1.0, len(ranked_candidates) / 6.0))
+            self._portfolio_plan = _plan
+            _slot_cap = (min(self.cfg.max_open_trades, _plan.max_open)
+                         if self.cfg.regime_dynamic_slots_enabled
+                         else self.cfg.max_open_trades)
+            _expo_cap_notional = (pf.balance * _plan.exposure_cap_pct / 100.0
+                                  if self.cfg.regime_dynamic_exposure_enabled else None)
+            _corr_on = (self.cfg.correlation_controller_enabled
+                        and self._corr_view is not None
+                        and self._corr_view.data_ok)
+            _cluster_of = (self._corr_view.cluster if _corr_on else cluster_for)
+            _open_snapshot = (self.db.get_open_trades(mode=self.cfg.mode)
+                              if (_corr_on or self.cfg.max_net_directional_pct > 0)
+                              else [])
+
             _opened_ranks: List[float] = []
             _rejected_ranks: List[float] = []
 
@@ -990,8 +1130,11 @@ class Engine:
                 pf.open_symbols = list(live_open_symbols)
                 pf.open_notional = open_notional
                 pf.open_margin = open_margin
+                _m_corr = (self.correlation.m_correlation(
+                    self._corr_view, sym, cand.signal.side, _open_snapshot)
+                    if _corr_on else 1.0)
                 rm, m_shadow, m_score, m_regime = self._risk_modulation(
-                    cand.signal, cycle_buckets)
+                    cand.signal, cycle_buckets, m_corr=_m_corr)
                 d = self._decide(cand.signal, cand.snap, pf, risk_multiplier=rm)
                 # Slot-selection support layer: record why this candidate won
                 # (or lost) its slot race. Set before persistence so signal_events
@@ -1023,7 +1166,7 @@ class Engine:
                     continue
                 if sym in live_open_symbols:
                     continue
-                if open_count >= self.cfg.max_open_trades:
+                if open_count >= _slot_cap:
                     _rejected_ranks.append(cand.rank)
                     funnel.mark_ranked_out("ranked_out:slots_full")
                     # Observe-only: a tradeable candidate we had no slot for. Stamp
@@ -1033,9 +1176,9 @@ class Engine:
                         self.db.set_shadow_reject_reason(cand_sid, "max_open_trades")
                     continue
                 if self.cfg.max_per_cluster > 0:
-                    cl = cluster_for(sym)
+                    cl = _cluster_of(sym)
                     if cl and (sum(1 for s in live_open_symbols
-                                   if cluster_for(s) == cl) >= self.cfg.max_per_cluster):
+                                   if _cluster_of(s) == cl) >= self.cfg.max_per_cluster):
                         _rejected_ranks.append(cand.rank)
                         funnel.mark_ranked_out("ranked_out:cluster_cap")
                         if cand_sid:
@@ -1048,6 +1191,23 @@ class Engine:
                         if cand_sid:
                             self.db.set_shadow_reject_reason(cand_sid, "ranked_out:same_side_cap")
                         continue
+                # Phase 4: regime-tightened exposure budget (only ever tighter than
+                # the static cap RiskManager already enforced) + net-directional cap.
+                if (_expo_cap_notional is not None
+                        and open_notional + d.position_size > _expo_cap_notional):
+                    _rejected_ranks.append(cand.rank)
+                    funnel.mark_ranked_out("ranked_out:regime_exposure")
+                    if cand_sid:
+                        self.db.set_shadow_reject_reason(cand_sid, "ranked_out:regime_exposure")
+                    continue
+                if self.cfg.max_net_directional_pct > 0 and not \
+                        self.correlation.net_directional_ok(
+                            _open_snapshot, cand.signal.side, d.position_size, pf.balance):
+                    _rejected_ranks.append(cand.rank)
+                    funnel.mark_ranked_out("ranked_out:net_directional")
+                    if cand_sid:
+                        self.db.set_shadow_reject_reason(cand_sid, "ranked_out:net_directional")
+                    continue
 
                 trade = self.executor.open(d)
                 if trade is None:
@@ -1265,6 +1425,11 @@ class Engine:
         lev_ceiling = (self.cfg.max_account_leverage_alert
                        or self.cfg.max_portfolio_exposure_pct / 100.0)
         self._maybe_leverage_alert(effective_leverage, lev_ceiling)
+
+        # Regime-adaptive Phase 1 (OBSERVATIONAL): compute + store the
+        # multi-dimensional regime read from this cycle's snapshots. No-op unless
+        # regime_ensemble_enabled; never influences the decisions above.
+        self._evaluate_regime(snapshots)
 
         # Persist funnel.
         last_times = self.db.last_trade_times()

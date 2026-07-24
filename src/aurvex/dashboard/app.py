@@ -463,6 +463,43 @@ def create_app(cfg=None) -> Flask:
     def balance():
         return jsonify({"balance": db.get_balance(), "ledger": db.get_ledger(limit=100)})
 
+    @app.route("/api/regime")
+    def regime():
+        """Regime-adaptive Phase 1 (OBSERVATIONAL): the latest multi-dimensional
+        regime read + recent history. Empty when the ensemble is disabled — it
+        never affects decisions, it is a monitoring surface only."""
+        import json as _json
+        latest = db.latest_regime()
+        if latest and latest.get("sub_scores_json"):
+            try:
+                latest["sub_scores"] = _json.loads(latest["sub_scores_json"])
+            except (ValueError, TypeError):
+                latest["sub_scores"] = {}
+        history = db.recent_regimes(limit=200)
+        # Phase 7: matrix summary + drift state + counterfactual uplift, all
+        # read-only observational surfaces.
+        matrix = {}
+        try:
+            from aurvex.regime_matrix import load_matrix
+            matrix = load_matrix(cfg).to_summary()
+        except Exception:
+            matrix = {}
+        return jsonify({
+            "latest": latest, "history": history,
+            "enabled": bool(getattr(cfg, "regime_ensemble_enabled", False)),
+            "flags": {
+                "matrix": bool(getattr(cfg, "regime_matrix_enabled", False)),
+                "dynamic_risk": bool(getattr(cfg, "regime_dynamic_risk_enabled", False)),
+                "correlation": bool(getattr(cfg, "correlation_controller_enabled", False)),
+                "dynamic_slots": bool(getattr(cfg, "regime_dynamic_slots_enabled", False)),
+                "dynamic_exposure": bool(getattr(cfg, "regime_dynamic_exposure_enabled", False)),
+                "drift": bool(getattr(cfg, "drift_monitor_enabled", False)),
+            },
+            "matrix": matrix,
+            "drift_state": db.drift_state(),
+            "counterfactuals": db.counterfactual_summary(),
+        })
+
     @app.route("/api/accounting")
     def accounting():
         marks_meta = db.get_meta("marks") or {}

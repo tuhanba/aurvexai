@@ -106,6 +106,12 @@ class BaseExecutor:
                       "risk_multiplier": decision.metadata.get("risk_multiplier", 1.0),
                       "m_shadow": decision.metadata.get("m_shadow", 1.0),
                       "m_score": decision.metadata.get("m_score", 1.0),
+                      # Regime-adaptive Phase 1 (OBSERVATIONAL): the regime
+                      # context at decision time, for later per-trade attribution.
+                      # Empty/neutral when the ensemble is off (default).
+                      "policy_version": decision.metadata.get("policy_version", ""),
+                      "regime_label": decision.metadata.get("regime_label", ""),
+                      "regime_confidence": decision.metadata.get("regime_confidence", 0.0),
                       # Slot-selection support layer: why this trade won its slot.
                       "rank": decision.rank,
                       "rank_basis": decision.rank_basis,

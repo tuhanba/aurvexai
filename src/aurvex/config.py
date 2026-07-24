@@ -182,6 +182,20 @@ class Config:
     htf_limit: int = field(default_factory=lambda: _int("HTF_LIMIT", 60))
     orderbook_depth: int = field(default_factory=lambda: _int("ORDERBOOK_DEPTH", 20))
 
+    # -- Data-fetch resilience (network robustness) ------------------------
+    # A slow/flaky connection was dropping snapshots: one failed fetch_order_book
+    # returned None → the whole symbol was skipped → no trade. These make the
+    # public-data fetches RESILIENT (they get fresher data, so the stale-entry
+    # guard fires LESS, not more — safety is unchanged / improved).
+    # HTTP timeout per ccxt request (ms). ccxt's own default is 10000.
+    fetch_timeout_ms: int = field(default_factory=lambda: _int("FETCH_TIMEOUT_MS", 15000))
+    # Retries on a failed public fetch (klines / order book / tickers). Total
+    # attempts = fetch_retries + 1. 0 = the old single-attempt behaviour.
+    fetch_retries: int = field(default_factory=lambda: _int("FETCH_RETRIES", 2))
+    # Base backoff between retries (ms); grows linearly per attempt.
+    fetch_retry_backoff_ms: int = field(
+        default_factory=lambda: _int("FETCH_RETRY_BACKOFF_MS", 400))
+
     # Data provider: "ccxt" (real Binance public data) or "synthetic" (offline
     # deterministic generator for tests / local demo with no network).
     data_provider: str = field(default_factory=lambda: _str("DATA_PROVIDER", "ccxt"))
@@ -303,6 +317,128 @@ class Config:
         default_factory=lambda: _float("REGIME_TILT", 0.35))
     edge_weight_strength: float = field(
         default_factory=lambda: _float("EDGE_WEIGHT_STRENGTH", 0.35))
+
+    # -- Regime ensemble (REGIME_ADAPTIVE_PORTFOLIO_IMPLEMENTATION.md, Phase 1) --
+    # Multi-dimensional, confidence-scored, hysteresis-stable market-regime read.
+    # PHASE 1 IS OBSERVATIONAL: when enabled the engine computes and STORES a
+    # RegimeState (dashboard/history/research) but the number that drives sizing
+    # stays the SAME legacy trend score, so behaviour is byte-identical. OFF by
+    # default → the legacy 1-D BTC-ADX path runs unchanged.
+    regime_ensemble_enabled: bool = field(
+        default_factory=lambda: _bool("REGIME_ENSEMBLE_ENABLED", False))
+    # Which dimensions to compute (comma-separated subset of
+    # trend,vol,breadth,corr,liq). "trend" is the required anchor.
+    regime_dims: List[str] = field(
+        default_factory=lambda: _list("REGIME_DIMS",
+                                      ["trend", "vol", "breadth", "corr", "liq"]))
+    # Hysteresis: a new raw label must persist this many evaluations before it
+    # becomes the effective label (PANIC may override). Prevents whipsaw.
+    regime_confirm_bars: int = field(
+        default_factory=lambda: _int("REGIME_CONFIRM_BARS", 2))
+    # Below this confidence the effective label collapses to UNCERTAIN.
+    regime_conf_min: float = field(
+        default_factory=lambda: _float("REGIME_CONF_MIN", 0.35))
+    # Persistence (in evaluations) at which the confidence persist-factor saturates.
+    regime_conf_persist_bars: int = field(
+        default_factory=lambda: _int("REGIME_CONF_PERSIST_BARS", 3))
+    # PANIC bypasses the confirmation delay (react immediately to a crash).
+    regime_panic_immediate: bool = field(
+        default_factory=lambda: _bool("REGIME_PANIC_IMMEDIATE", True))
+    # Trailing window (bars) for the volatility percentile dimension.
+    regime_vol_lookback: int = field(
+        default_factory=lambda: _int("REGIME_VOL_LOOKBACK", 180))
+    # Rolling window (bars) for the cross-sectional correlation dimension.
+    regime_corr_window: int = field(
+        default_factory=lambda: _int("REGIME_CORR_WINDOW", 30))
+    # How many universe symbols to sample for breadth/correlation dims (0 = all
+    # of the working universe). Kept small so the extra fetch stays cheap.
+    regime_universe_sample: int = field(
+        default_factory=lambda: _int("REGIME_UNIVERSE_SAMPLE", 12))
+    # Policy version stamped on every trade for the audit trail (§H). Phase 1
+    # default is the baseline sentinel; it changes only when a decision-changing
+    # phase arms.
+    policy_version: str = field(
+        default_factory=lambda: _str("POLICY_VERSION", "RAPB-v0-baseline"))
+
+    # -- Strategy×regime matrix (Phase 2 load / Phase 3 apply) -------------
+    # Path to the measured (leg×regime) edge table. Absent/empty cells shrink to
+    # the global prior, so an unmeasured matrix reproduces the legacy static
+    # per-leg weight. Phase 2 loads it OBSERVATIONALLY; it drives sizing only
+    # when regime_matrix_enabled is on (Phase 3), which itself requires
+    # regime_edge_weight_enabled. Off by default.
+    regime_matrix_enabled: bool = field(
+        default_factory=lambda: _bool("REGIME_MATRIX_ENABLED", False))
+    regime_matrix_path: str = field(
+        default_factory=lambda: _str("REGIME_MATRIX_PATH", "data/regime_matrix.json"))
+    regime_matrix_min_n: int = field(
+        default_factory=lambda: _int("REGIME_MATRIX_MIN_N", 150))
+    # Phase 3: additionally scale per-entry risk by regime CONFIDENCE (low → down)
+    # and TRANSITION risk (high → down), folded into the regime multiplier. Sizing
+    # only, never a gate; composed inside the [0.5,1.5] clamp then the risk band.
+    # OFF by default. Requires regime_ensemble_enabled to have any effect.
+    regime_dynamic_risk_enabled: bool = field(
+        default_factory=lambda: _bool("REGIME_DYNAMIC_RISK_ENABLED", False))
+
+    # -- Phase 4: correlation controller + dynamic slots/exposure ----------
+    # All default OFF → the engine uses the static caps and no correlation
+    # down-weight, byte-identical to today. Every dynamic cap can only TIGHTEN
+    # below the static config value; correlation only sizes/admits, never gates
+    # decide().
+    correlation_controller_enabled: bool = field(
+        default_factory=lambda: _bool("CORRELATION_CONTROLLER_ENABLED", False))
+    corr_cluster_threshold: float = field(
+        default_factory=lambda: _float("CORR_CLUSTER_THRESHOLD", 0.70))
+    corr_penalty: float = field(
+        default_factory=lambda: _float("CORR_PENALTY", 0.5))
+    # |long − short| notional cap as % of equity (0 = disabled).
+    max_net_directional_pct: float = field(
+        default_factory=lambda: _float("MAX_NET_DIRECTIONAL_PCT", 0.0))
+    opportunity_score_enabled: bool = field(
+        default_factory=lambda: _bool("OPPORTUNITY_SCORE_ENABLED", False))
+    regime_dynamic_slots_enabled: bool = field(
+        default_factory=lambda: _bool("REGIME_DYNAMIC_SLOTS_ENABLED", False))
+    regime_dynamic_exposure_enabled: bool = field(
+        default_factory=lambda: _bool("REGIME_DYNAMIC_EXPOSURE_ENABLED", False))
+
+    # -- Phase 5: leverage / margin solver upgrades ------------------------
+    # Tier-aware maintenance margin. MM_TIERS_SPEC is 'maxNotional:rate,...'
+    # ascending (e.g. '50000:0.004,250000:0.005,1000000:0.01'); larger positions
+    # land in higher-rate brackets → lower liquidation-safe leverage → safer.
+    # Off/empty → the flat MAINT_MARGIN_RATE (byte-identical to before).
+    mm_tiers_enabled: bool = field(
+        default_factory=lambda: _bool("MM_TIERS_ENABLED", False))
+    mm_tiers_spec: str = field(
+        default_factory=lambda: _str("MM_TIERS_SPEC", ""))
+    # Fold expected funding into the sizing cost for multi-settlement holds.
+    # Added cost = |FUNDING_RATE_8H| × FUNDING_SIZING_SETTLEMENTS. With the flag
+    # off, or funding 0, this adds nothing (parity-safe).
+    funding_in_sizing_enabled: bool = field(
+        default_factory=lambda: _bool("FUNDING_IN_SIZING_ENABLED", False))
+    funding_sizing_settlements: float = field(
+        default_factory=lambda: _float("FUNDING_SIZING_SETTLEMENTS", 0.0))
+
+    # -- Phase 6: drift monitor + counterfactual (advisory) ---------------
+    # DriftMonitor compares realised vs expected per-leg edge and recommends a
+    # safe state (ACTIVE→REDUCED_RISK→SHADOW_ONLY→REVIEW). Advisory only — it
+    # never flips a live flag. Off by default (nothing computed / logged).
+    drift_monitor_enabled: bool = field(
+        default_factory=lambda: _bool("DRIFT_MONITOR_ENABLED", False))
+    drift_tolerance_r: float = field(
+        default_factory=lambda: _float("DRIFT_TOLERANCE_R", 0.10))
+    drift_breach_streak: int = field(
+        default_factory=lambda: _int("DRIFT_BREACH_STREAK", 3))
+    drift_recover_streak: int = field(
+        default_factory=lambda: _int("DRIFT_RECOVER_STREAK", 3))
+    drift_min_sample: int = field(
+        default_factory=lambda: _int("DRIFT_MIN_SAMPLE", 30))
+    # Counterfactual policy engine: record what named policy variants WOULD have
+    # earned on each resolved shadow, without touching the live position.
+    counterfactual_policies_enabled: bool = field(
+        default_factory=lambda: _bool("COUNTERFACTUAL_POLICIES_ENABLED", False))
+    # Phase 7: send a Telegram alert on a CONFIRMED regime change (rare,
+    # hysteresis-gated). Off by default.
+    regime_alerts_enabled: bool = field(
+        default_factory=lambda: _bool("REGIME_ALERTS_ENABLED", False))
     # Day-boundary offset in hours from UTC for ALL daily counters (kill
     # switch, profit lock, daily PnL window, daily-summary/report dedup).
     # 0 = UTC midnight (default, unchanged). 3 = Türkiye saati (UTC+3): the

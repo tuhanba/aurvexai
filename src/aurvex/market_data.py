@@ -45,6 +45,7 @@ class FetchStats:
     bars_fetched: int = 0
     orderbook_fetches: int = 0
     errors: int = 0
+    retries: int = 0
     last_error: str = ""
     latency_ms: float = 0.0
     # newest CLOSED bar close-time per tf seen this cycle (feeds the watchdog)
@@ -76,6 +77,7 @@ class FetchStats:
             "bars_fetched": self.bars_fetched,
             "orderbook_fetches": self.orderbook_fetches,
             "errors": self.errors,
+            "retries": self.retries,
             "last_error": self.last_error,
             "latency_ms": round(self.latency_ms, 1),
         }
@@ -140,19 +142,45 @@ class CCXTProvider(MarketDataProvider):
             klass = getattr(ccxt, self.cfg.exchange_id)
             self._ex = klass({
                 "enableRateLimit": True,
+                # Explicit HTTP timeout so a slow connection fails fast enough to
+                # retry within the cycle instead of hanging (ccxt default 10s).
+                "timeout": int(getattr(self.cfg, "fetch_timeout_ms", 15000)),
                 "options": {"defaultType": "future"},
             })
             self._markets = self._ex.load_markets()
         return self._ex
+
+    def _with_retries(self, fn, label: str):
+        """Call a public-data fetch with bounded retry + linear backoff.
+
+        A transient network blip (timeout / connection reset) no longer discards
+        the whole snapshot on the first failure — it retries a few times before
+        giving up. Deterministic and safety-neutral: it only re-attempts to GET
+        FRESH data; on total failure the caller's existing cache/skip fallback
+        runs exactly as before. Returns (value, None) on success or
+        (None, last_exc) after exhausting retries."""
+        import time as _t
+        attempts = max(0, int(getattr(self.cfg, "fetch_retries", 0))) + 1
+        backoff = max(0, int(getattr(self.cfg, "fetch_retry_backoff_ms", 0)))
+        last = None
+        for i in range(attempts):
+            try:
+                return fn(), None
+            except Exception as exc:            # noqa: BLE001 (ccxt raises broadly)
+                last = exc
+                if i < attempts - 1:
+                    self.stats.retries += 1
+                    if backoff:
+                        _t.sleep(backoff * (i + 1) / 1000.0)
+        return None, last
 
     def load_universe(self) -> List[str]:
         if (self.cfg.universe_refresh_sec > 0 and self._universe_cache
                 and now_ms() < self._universe_next_ms):
             return list(self._universe_cache)
         ex = self.exchange
-        try:
-            tickers = ex.fetch_tickers()
-        except Exception as exc:
+        tickers, exc = self._with_retries(ex.fetch_tickers, "fetch_tickers")
+        if exc is not None:
             self.stats.record_error("fetch_tickers", exc)
             _log.warning("fetch_tickers failed (%s); volume ranking degraded", exc)
             if self._universe_cache:      # keep the last good ranking
@@ -198,9 +226,10 @@ class CCXTProvider(MarketDataProvider):
             self.stats.note_bars(tf, cached)
             return cached
         t0 = time.monotonic()
-        try:
-            raw = self.exchange.fetch_ohlcv(symbol, tf, limit=limit)
-        except Exception as exc:
+        raw, exc = self._with_retries(
+            lambda: self.exchange.fetch_ohlcv(symbol, tf, limit=limit),
+            f"fetch_ohlcv {symbol} {tf}")
+        if exc is not None:
             # P0.2: NEVER fail silent. The pre-incident code logged this at
             # DEBUG (invisible at LOG_LEVEL=INFO) and served the stale cache —
             # the exact mechanism of the 2026-07-16 blind-engine incident.
@@ -243,9 +272,14 @@ class CCXTProvider(MarketDataProvider):
                 return None
             candles[tf] = rows
         t0 = time.monotonic()
-        try:
-            ob = ex.fetch_order_book(symbol, limit=self.cfg.orderbook_depth)
-        except Exception as exc:
+        # The order book is the one LIVE fetch per snapshot — the most exposed to
+        # a slow/flaky link. A single failure used to discard the WHOLE snapshot
+        # (→ symbol skipped → no trade). Retry a few times before giving up so a
+        # transient blip no longer costs the cycle.
+        ob, exc = self._with_retries(
+            lambda: ex.fetch_order_book(symbol, limit=self.cfg.orderbook_depth),
+            f"fetch_order_book {symbol}")
+        if exc is not None:
             # P0.2: loud, counted failure (was DEBUG → invisible in production).
             self.stats.record_error(f"fetch_order_book {symbol}", exc)
             return None
