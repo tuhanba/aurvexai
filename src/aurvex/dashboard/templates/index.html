@@ -721,6 +721,19 @@ tr:last-child td{border-bottom:none}
     </div>
   </div>
 
+  <!-- Regime (regime-adaptive portfolio; observational unless flags on) -->
+  <div class="card">
+    <div class="card-title">Regime</div>
+    <div class="grid g2" style="gap:0 28px">
+      <div class="row"><span class="row-label">current</span><span id="rgLabel" class="row-val">—</span></div>
+      <div class="row"><span class="row-label">confidence</span><span id="rgConf" class="row-val">—</span></div>
+      <div class="row"><span class="row-label">transition risk</span><span id="rgTrans" class="row-val">—</span></div>
+      <div class="row"><span class="row-label">data</span><span id="rgData" class="row-val">—</span></div>
+      <div class="row"><span class="row-label">active levers</span><span id="rgFlags" class="row-val">—</span></div>
+      <div class="row"><span class="row-label">drift alerts</span><span id="rgDrift" class="row-val">—</span></div>
+    </div>
+  </div>
+
 </main>
 
 <script>
@@ -731,7 +744,7 @@ async function getJSON(u){const r=await fetch(u);return r.json();}
 
 async function refresh(){
   try{
-    const [st,fn,me,op,cl,sg,sh,ac,tg,pm,sv,ss,qp,mo,shl,dg,bn,eq,lr,hi] = await Promise.all([
+    const [st,fn,me,op,cl,sg,sh,ac,tg,pm,sv,ss,qp,mo,shl,dg,bn,eq,lr,hi,rg] = await Promise.all([
       getJSON('/api/status'), getJSON('/api/funnel'), getJSON('/api/metrics'),
       getJSON('/api/trades/open'), getJSON('/api/trades/closed'),
       getJSON('/api/signals'), getJSON('/api/shadow'),
@@ -741,7 +754,7 @@ async function refresh(){
       getJSON('/api/missed_opportunity'), getJSON('/api/setup_health'),
       getJSON('/api/diagnosis'), getJSON('/api/binance'),
       getJSON('/api/equity_curve'), getJSON('/api/live_readiness'),
-      getJSON('/api/history')
+      getJSON('/api/history'), getJSON('/api/regime')
     ]);
 
     // ── Mode banner (Task 4): PAPER / DRY_RUN / TESTNET / LIVE ──
@@ -1375,6 +1388,33 @@ async function refresh(){
     document.getElementById('tgHealthy').className = 'row-val '+(tg.healthy?'pos':tg.healthy===false?'neg':'neu');
     document.getElementById('tgBot').textContent = tg.bot_username?('@'+tg.bot_username):'—';
     document.getElementById('tgSends').textContent = (tg.sends_ok||0)+' ok / '+(tg.sends_failed||0)+' fail';
+
+    // ── Regime (observational unless the levers are enabled) ──
+    (function(){
+      const L=rg&&rg.latest, F=(rg&&rg.flags)||{};
+      const lbl=document.getElementById('rgLabel');
+      if(!rg||!rg.enabled){ lbl.textContent='disabled'; lbl.className='row-val neu';
+        document.getElementById('rgConf').textContent='—';
+        document.getElementById('rgTrans').textContent='—';
+        document.getElementById('rgData').textContent='—';
+        document.getElementById('rgFlags').textContent='ensemble off';
+        document.getElementById('rgDrift').textContent='—'; return; }
+      lbl.textContent=L?L.label:'—';
+      lbl.className='row-val '+(L&&L.label&&L.label.indexOf('TREND')>=0?'pos':L&&L.label==='PANIC'?'neg':'neu');
+      document.getElementById('rgConf').textContent=L?Math.round((L.confidence||0)*100)+'%':'—';
+      const tr=L?(L.transition_risk||0):0;
+      const trEl=document.getElementById('rgTrans');
+      trEl.textContent=L?Math.round(tr*100)+'%':'—'; trEl.className='row-val '+(tr>0.5?'neg':tr>0.3?'neu':'pos');
+      const dEl=document.getElementById('rgData');
+      dEl.textContent=L?(L.data_ok?'ok':'incomplete'):'—'; dEl.className='row-val '+(L&&L.data_ok?'pos':'neg');
+      const on=Object.keys(F).filter(k=>F[k]);
+      document.getElementById('rgFlags').textContent=on.length?on.join(', '):'observe-only';
+      const dr=(rg&&rg.drift_state)||{};
+      const alerts=Object.entries(dr).filter(([k,v])=>v&&v.state&&v.state!=='ACTIVE');
+      const drEl=document.getElementById('rgDrift');
+      drEl.textContent=alerts.length?alerts.map(([k,v])=>k.split(':').pop()+' '+v.state).join(', '):'none';
+      drEl.className='row-val '+(alerts.length?'neg':'pos');
+    })();
 
     // ── System State ──
     const row = (k,v)=>`<div><span class="row-label">${k} </span><span class="row-val">${v}</span></div>`;

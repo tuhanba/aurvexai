@@ -46,6 +46,19 @@ def test_regime_endpoint_reflects_recorded_state(tmp_path):
     assert len(data["history"]) == 1
 
 
+def test_index_page_has_visible_regime_card(tmp_path):
+    """The rendered dashboard page shows a Regime card wired to /api/regime —
+    not just the API. (The gap this closes: the UI previously had no regime panel.)"""
+    from aurvex.dashboard.app import create_app
+    cfg = _cfg(tmp_path)
+    Storage(cfg.db_path).ensure_epoch(cfg.epoch_label)
+    html = create_app(cfg).test_client().get("/").get_data(as_text=True)
+    assert ">Regime<" in html
+    for el in ("rgLabel", "rgConf", "rgTrans", "rgData", "rgFlags", "rgDrift"):
+        assert el in html
+    assert "/api/regime')" in html          # the page actually fetches it
+
+
 def test_regime_endpoint_disabled_flag(tmp_path):
     from aurvex.dashboard.app import create_app
     cfg = _cfg(tmp_path, ensemble=False)
