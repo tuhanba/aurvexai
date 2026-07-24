@@ -182,6 +182,20 @@ class Config:
     htf_limit: int = field(default_factory=lambda: _int("HTF_LIMIT", 60))
     orderbook_depth: int = field(default_factory=lambda: _int("ORDERBOOK_DEPTH", 20))
 
+    # -- Data-fetch resilience (network robustness) ------------------------
+    # A slow/flaky connection was dropping snapshots: one failed fetch_order_book
+    # returned None → the whole symbol was skipped → no trade. These make the
+    # public-data fetches RESILIENT (they get fresher data, so the stale-entry
+    # guard fires LESS, not more — safety is unchanged / improved).
+    # HTTP timeout per ccxt request (ms). ccxt's own default is 10000.
+    fetch_timeout_ms: int = field(default_factory=lambda: _int("FETCH_TIMEOUT_MS", 15000))
+    # Retries on a failed public fetch (klines / order book / tickers). Total
+    # attempts = fetch_retries + 1. 0 = the old single-attempt behaviour.
+    fetch_retries: int = field(default_factory=lambda: _int("FETCH_RETRIES", 2))
+    # Base backoff between retries (ms); grows linearly per attempt.
+    fetch_retry_backoff_ms: int = field(
+        default_factory=lambda: _int("FETCH_RETRY_BACKOFF_MS", 400))
+
     # Data provider: "ccxt" (real Binance public data) or "synthetic" (offline
     # deterministic generator for tests / local demo with no network).
     data_provider: str = field(default_factory=lambda: _str("DATA_PROVIDER", "ccxt"))
