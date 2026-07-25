@@ -57,21 +57,37 @@ def _fit_groups(trades, keyfn):
     return {k: (len(v), sum(v) / len(v), _sharpe_of(v)) for k, v in g.items()}
 
 
-def _weight(stats, key, prior_mean, strength, min_n):
-    """Bayesian-shrunk weight in [1-strength, 1+strength] from measured mean-R.
+def _weight(stats, key, prior_sharpe, strength, min_n, lo_hi):
+    """Weight from the group's SHRUNK Sharpe, using the SAME math as the
+    validated RegimeMatrix.edge_weight so every axis is compared on equal terms.
 
-    Shrinks the group's mean R toward the global prior mean by pseudo-count
-    min_n, then maps the shrunk value through a bounded linear tilt. Unknown key
-    -> neutral 1.0 (never a guess)."""
+    (An earlier version of this harness used a different mean-R-based formula;
+    it scored the regime axis at -0.166 while the validated path scores +0.308 on
+    the same data — i.e. the formula, not the axis, was the variable. Always
+    reproduce the validated math when comparing against it.)
+
+    shrunk = (n*group_sharpe + k0*prior_sharpe) / (n + k0),  k0 = min_n
+    z      = position of shrunk within the [lo, hi] range across groups
+    weight = 1 + strength * (2z - 1)
+    """
     st = stats.get(key)
     if st is None:
         return 1.0
-    n, mean_r, _sh = st
+    n, _mean_r, sh = st
     k0 = max(1, min_n)
-    shrunk = (n * mean_r + k0 * prior_mean) / (n + k0)
-    # scale: +/-0.25R around the prior maps to the full tilt band
-    z = max(-1.0, min(1.0, (shrunk - prior_mean) / 0.25))
-    return 1.0 + strength * z
+    shrunk = (n * sh + k0 * prior_sharpe) / (n + k0)
+    lo, hi = lo_hi
+    z = (shrunk - lo) / (hi - lo) if hi > lo else 0.5
+    return 1.0 + strength * (2 * z - 1)
+
+
+def _range_of(stats, prior_sharpe, min_n):
+    """[lo, hi] of the shrunk Sharpe across groups — the normalisation range."""
+    vals = []
+    for n, _m, sh in stats.values():
+        k0 = max(1, min_n)
+        vals.append((n * sh + k0 * prior_sharpe) / (n + k0))
+    return (min(vals), max(vals)) if vals else (0.0, 1.0)
 
 
 def _daily(trades, wfn):
@@ -128,13 +144,14 @@ def main():
     for name, keyfns in axes.items():
         dsh, dr, wins = [], [], 0
         for fit, test, _f0 in folds:
-            prior = sum(t[1] for t in fit) / len(fit)
+            prior = _sharpe_of([t[1] for t in fit])   # global prior Sharpe
             stats = [_fit_groups(fit, kf) for kf in keyfns]
+            ranges = [_range_of(s, prior, min_n) for s in stats]
 
-            def wfn(t, _stats=stats, _kf=keyfns, _p=prior):
+            def wfn(t, _stats=stats, _kf=keyfns, _p=prior, _rg=ranges):
                 w = 1.0
-                for st, kf in zip(_stats, _kf):
-                    w *= _weight(st, kf(t), _p, strength, min_n)
+                for st, kf, rg in zip(_stats, _kf, _rg):
+                    w *= _weight(st, kf(t), _p, strength, min_n, rg)
                 return max(0.5, min(1.5, w))
 
             flat = _metrics(_daily(test, lambda t: 1.0))
