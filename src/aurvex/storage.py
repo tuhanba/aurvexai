@@ -436,6 +436,45 @@ class Storage:
                 fetched_ts INTEGER
             );
         """)
+        # Regime-adaptive portfolio, Phase 1 (OBSERVATIONAL). Additive-only.
+        # regime_history: one row per regime recompute (dashboard/history/research).
+        # The per-trade regime/policy audit lives in trades.metadata JSON (stamped
+        # by executors.build_trade) — no dedicated columns are needed.
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS regime_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER,
+                label TEXT,
+                confidence REAL,
+                prev_label TEXT,
+                transition_risk REAL,
+                persistence_bars INTEGER,
+                data_ok INTEGER,
+                score REAL,
+                adx REAL,
+                opportunity_score REAL DEFAULT 0,
+                sub_scores_json TEXT,
+                reason TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_regime_ts ON regime_history(ts);
+        """)
+        # Phase 6: named-policy-variant column on the counterfactual A/B table +
+        # a standalone counterfactual ledger. Additive only.
+        ab_cols = {r["name"] for r in
+                   self.conn.execute("PRAGMA table_info(shadow_ab)").fetchall()}
+        if "policy_variant" not in ab_cols:
+            self.conn.execute(
+                "ALTER TABLE shadow_ab ADD COLUMN policy_variant TEXT DEFAULT 'legacy'")
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS counterfactuals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER, shadow_id TEXT, policy_version TEXT,
+                variant TEXT, setup_type TEXT, regime_label TEXT,
+                actual_net_r REAL, would_be_net_r REAL, delta_r REAL
+            );
+            CREATE INDEX IF NOT EXISTS idx_cf_variant ON counterfactuals(variant);
+        """)
+        self.conn.commit()
         # The unique index dedups new-epoch rows. Legacy rows have signal_bar_ts=0
         # but SQLite treats every NULL/0 group key independently only for NULLs;
         # to avoid a build failure on a contaminated legacy table we create the
@@ -570,6 +609,89 @@ class Storage:
         rows = self.conn.execute(
             "SELECT * FROM balance_ledger ORDER BY ts DESC LIMIT ?", (limit,)).fetchall()
         return [dict(r) for r in rows]
+
+    # -- regime history (observational) ------------------------------------
+    def record_regime(self, state: Dict[str, Any],
+                      opportunity_score: float = 0.0) -> None:
+        """Append one regime-ensemble evaluation. ``state`` is RegimeState.to_dict().
+
+        Observational only — nothing reads this back to make a decision. Never
+        raises into the cycle (best-effort persistence)."""
+        try:
+            self.conn.execute(
+                "INSERT INTO regime_history(ts,label,confidence,prev_label,"
+                "transition_risk,persistence_bars,data_ok,score,adx,"
+                "opportunity_score,sub_scores_json,reason) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (int(state.get("ts") or time.time() * 1000),
+                 state.get("label", ""), float(state.get("confidence", 0.0) or 0.0),
+                 state.get("prev_label", ""),
+                 float(state.get("transition_risk", 0.0) or 0.0),
+                 int(state.get("persistence_bars", 0) or 0),
+                 1 if state.get("data_ok") else 0,
+                 float(state.get("score", 0.0) or 0.0),
+                 state.get("adx"),
+                 float(opportunity_score or 0.0),
+                 json.dumps(state.get("sub_scores", {})),
+                 state.get("reason", "")))
+            self.conn.commit()
+        except sqlite3.Error:
+            pass
+
+    def latest_regime(self) -> Optional[Dict[str, Any]]:
+        try:
+            row = self.conn.execute(
+                "SELECT * FROM regime_history ORDER BY ts DESC LIMIT 1").fetchone()
+        except sqlite3.Error:
+            return None            # table absent on a read-only/pre-migration DB
+        return dict(row) if row else None
+
+    def recent_regimes(self, limit: int = 100) -> List[Dict[str, Any]]:
+        try:
+            rows = self.conn.execute(
+                "SELECT * FROM regime_history ORDER BY ts DESC LIMIT ?",
+                (limit,)).fetchall()
+        except sqlite3.Error:
+            return []
+        return [dict(r) for r in rows]
+
+    # -- counterfactuals (Phase 6, observational) --------------------------
+    def record_counterfactual(self, shadow_id: str, variant: str,
+                              setup_type: str, regime_label: str,
+                              actual_net_r: float, would_be_net_r: float,
+                              policy_version: str = "") -> None:
+        """Append one counterfactual row: what a named policy variant WOULD have
+        earned on a resolved shadow vs what actually happened. Best-effort."""
+        try:
+            self.conn.execute(
+                "INSERT INTO counterfactuals(ts,shadow_id,policy_version,variant,"
+                "setup_type,regime_label,actual_net_r,would_be_net_r,delta_r) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (int(time.time() * 1000), shadow_id, policy_version, variant,
+                 setup_type, regime_label, actual_net_r, would_be_net_r,
+                 would_be_net_r - actual_net_r))
+            self.conn.commit()
+        except sqlite3.Error:
+            pass
+
+    def counterfactual_summary(self) -> List[Dict[str, Any]]:
+        """Per-variant aggregate delta-R (mean uplift vs actual) for the report."""
+        try:
+            rows = self.conn.execute(
+                "SELECT variant, COUNT(*) AS n, AVG(delta_r) AS mean_delta_r, "
+                "SUM(delta_r) AS total_delta_r FROM counterfactuals "
+                "GROUP BY variant ORDER BY total_delta_r DESC").fetchall()
+        except sqlite3.Error:
+            return []
+        return [dict(r) for r in rows]
+
+    def drift_state(self) -> Dict[str, Any]:
+        """Persisted per-key DriftCounters (survives restarts). {} if unset."""
+        v = self.get_meta("drift_state")
+        return v if isinstance(v, dict) else {}
+
+    def set_drift_state(self, state: Dict[str, Any]) -> None:
+        self.set_meta("drift_state", state)
 
     # -- trades ------------------------------------------------------------
     def upsert_trade(self, t: Trade) -> None:

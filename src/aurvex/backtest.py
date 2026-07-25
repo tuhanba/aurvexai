@@ -77,13 +77,29 @@ def resample(candles: List[Candle], src_tf: str, dst_tf: str) -> List[Candle]:
     return out
 
 
+# Notional depth per synthetic book level. Depth must be expressed in NOTIONAL,
+# not units: the slippage guard walks the book by price*qty, so a fixed unit
+# count made the book price-dependent — at 50 units a $50k coin had $2.5M per
+# level but a $0.10 coin had $5, and every low-priced symbol was rejected as
+# "illiquid" (XRP/DOGE/ADA/TRX/TON produced ZERO backtest trades). That is a
+# harness artifact, not a market fact, and it silently shrank the measured
+# universe. This value keeps every level at least as deep as the old 50-unit
+# book for the traded price range.
+_SYNTH_LEVEL_NOTIONAL = 5_000_000.0
+
+
 def _synthetic_book(price: float) -> OrderBook:
-    """Tight, deep book so microstructure guards pass during backtest."""
+    """Tight, deep book so microstructure guards pass during backtest.
+
+    Depth is per-level NOTIONAL (price-independent) so the guards behave the
+    same for a $50,000 coin and a $0.10 coin — the backtest measures strategy
+    edge, not microstructure (validated in paper/live instead)."""
     spread = price * 0.0002
     bid = price - spread / 2
     ask = price + spread / 2
-    bids = [[bid - i * spread, 50.0] for i in range(10)]
-    asks = [[ask + i * spread, 50.0] for i in range(10)]
+    qty = _SYNTH_LEVEL_NOTIONAL / price if price > 0 else 50.0
+    bids = [[bid - i * spread, qty] for i in range(10)]
+    asks = [[ask + i * spread, qty] for i in range(10)]
     return OrderBook(bids=bids, asks=asks)
 
 

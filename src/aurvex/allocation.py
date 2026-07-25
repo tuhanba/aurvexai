@@ -147,6 +147,8 @@ def apply_caps(
     live_open_symbols: Set[str],
     open_count: int,
     open_sides: Dict[str, int],
+    max_open_override: Optional[int] = None,
+    cluster_of=None,
 ) -> List[CandidateSlot]:
     """Apply structural caps to a pre-sorted (rank desc) list of ALLOW candidates.
 
@@ -159,23 +161,33 @@ def apply_caps(
         live_open_symbols: symbols that already hold open slots this cycle.
         open_count: current number of open trades at cycle start.
         open_sides: {side: count} of currently open trades.
+        max_open_override: Phase 4 — a regime/opportunity-tightened slot cap. Only
+            ever ≤ cfg.max_open_trades (the engine clamps it). None = static cap.
+        cluster_of: Phase 4 — a callable(symbol) -> cluster label from the LIVE
+            correlation controller, replacing the static hand-map. None = static
+            ``cluster_for``. Only used when max_per_cluster > 0.
     """
     allocated: List[CandidateSlot] = []
     syms: Set[str] = set(live_open_symbols)
     count = open_count
     sides: Dict[str, int] = dict(open_sides)
+    # Effective slot cap: the tighter of the static cap and any override.
+    slot_cap = cfg.max_open_trades
+    if max_open_override is not None:
+        slot_cap = min(slot_cap, max(1, int(max_open_override)))
+    _cluster = cluster_of if callable(cluster_of) else cluster_for
 
     for cand in candidates:
         sym = cand.signal.symbol
 
         if sym in syms:
             continue
-        if count >= cfg.max_open_trades:
+        if count >= slot_cap:
             break
 
         if cfg.max_per_cluster > 0:
-            cl = cluster_for(sym)
-            if cl and sum(1 for s in syms if cluster_for(s) == cl) >= cfg.max_per_cluster:
+            cl = _cluster(sym)
+            if cl and sum(1 for s in syms if _cluster(s) == cl) >= cfg.max_per_cluster:
                 continue
 
         if cfg.max_same_side > 0:

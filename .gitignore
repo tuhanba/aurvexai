@@ -1,6 +1,7 @@
 # Secrets & data
 .env
-data/
+data/*
+!data/regime_matrix.json
 *.db
 *.db-wal
 *.db-shm

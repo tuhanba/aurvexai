@@ -149,9 +149,40 @@ def score_risk_multiplier(cfg: Config, signal: Signal, buckets) -> float:
     return round(max(0.8, min(1.2, 1.0 + avg_r * 0.2)), 3)
 
 
+def _parse_mm_tiers(spec: str):
+    """Parse an MM-tier spec 'notional:rate,notional:rate,...' (ascending by
+    notional) into a sorted list of (max_notional, rate). Empty/invalid → []."""
+    tiers = []
+    for part in (spec or "").replace(";", ",").split(","):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        try:
+            n, r = part.split(":", 1)
+            tiers.append((float(n), float(r)))
+        except (ValueError, TypeError):
+            continue
+    return sorted(tiers, key=lambda t: t[0])
+
+
+def mm_rate_for(cfg, tiers, notional: float) -> float:
+    """Maintenance-margin rate for ``notional``. With tiers off/empty → the flat
+    ``cfg.maint_margin_rate`` (byte-identical to the pre-Phase-5 model). With
+    tiers, the first bracket whose ceiling ≥ notional (larger positions land in
+    higher-rate tiers → lower liquidation-safe leverage → safer)."""
+    if not getattr(cfg, "mm_tiers_enabled", False) or not tiers:
+        return cfg.maint_margin_rate
+    for max_notional, rate in tiers:
+        if notional <= max_notional:
+            return max(rate, cfg.maint_margin_rate)
+    # Above the top bracket → use the highest tier rate.
+    return max(tiers[-1][1], cfg.maint_margin_rate)
+
+
 class RiskManager:
     def __init__(self, cfg: Config):
         self.cfg = cfg
+        self._mm_tiers = _parse_mm_tiers(getattr(cfg, "mm_tiers_spec", ""))
 
     def evaluate(self, signal: Signal, snap: MarketSnapshot,
                  balance: float, open_notional: float,
@@ -191,6 +222,12 @@ class RiskManager:
         #     So 1R is the configured net budget and a min-stop full stop reads
         #     -1.0R, not the old -1.43R. Leverage never grows this notional/risk.
         rt_cost_frac = (cfg.taker_fee_pct + cfg.slippage_assumption_pct) / 100.0 * 2.0
+        # Phase 5: optionally fold expected funding into the sizing cost so the
+        # swing legs (multi-settlement holds) are sized net of funding too. With
+        # the flag off, or funding_rate_8h 0, this adds nothing (parity-safe).
+        if getattr(cfg, "funding_in_sizing_enabled", False):
+            rt_cost_frac += abs(cfg.funding_rate_8h) * max(
+                0.0, float(getattr(cfg, "funding_sizing_settlements", 0.0)))
         position_notional = risk_amount / (stop_dist_frac + rt_cost_frac)
         target_notional = position_notional   # pre-cap, pure risk formula
 
@@ -222,9 +259,12 @@ class RiskManager:
             )
 
         # (3) Dynamic, controlled leverage. See _solve_leverage for the model.
+        # Phase 5: tier-aware maintenance-margin rate (larger notional → higher
+        # tier → lower liq-safe leverage → safer). Off/empty → flat rate.
+        mm_rate = mm_rate_for(cfg, self._mm_tiers, position_notional)
         pre_lev_notional = position_notional
         lev_result = self._solve_leverage(position_notional, balance, open_margin,
-                                          stop_dist_frac, open_count)
+                                          stop_dist_frac, open_count, mm_rate=mm_rate)
         if lev_result is None:
             return RiskResult(False,
                               f"no free margin within reserve (open margin "
@@ -244,7 +284,7 @@ class RiskManager:
 
         # (4) Estimated liquidation price (isolated-margin approximation) and the
         #     liquidation-safety invariant: the stop must trigger before it.
-        liq_dist_frac = max(0.0, 1.0 / leverage - cfg.maint_margin_rate)
+        liq_dist_frac = max(0.0, 1.0 / leverage - mm_rate)
         if signal.side == LONG:
             liq_price = entry * (1.0 - liq_dist_frac)
             stop_safe = stop > liq_price
@@ -291,7 +331,8 @@ class RiskManager:
         )
 
     def _solve_leverage(self, notional: float, balance: float, open_margin: float,
-                        stop_dist_frac: float, open_count: int):
+                        stop_dist_frac: float, open_count: int,
+                        mm_rate: Optional[float] = None):
         """
         Pick a CONTROLLED leverage for an already-sized ``notional``.
 
@@ -319,8 +360,11 @@ class RiskManager:
         if avail <= 0:
             return None
 
-        # Liquidation-safe ceiling (shared by both policies).
-        denom = cfg.liq_safety_buffer * stop_dist_frac + cfg.maint_margin_rate
+        # Liquidation-safe ceiling (shared by both policies). Phase 5: use the
+        # tier-aware mm_rate when supplied (defaults to the flat rate → unchanged).
+        if mm_rate is None:
+            mm_rate = cfg.maint_margin_rate
+        denom = cfg.liq_safety_buffer * stop_dist_frac + mm_rate
         lev_liq_ceiling = int(math.floor(1.0 / denom)) if denom > 0 else cfg.max_leverage
         lev_ceiling = max(1, min(cfg.max_leverage, lev_liq_ceiling))
 

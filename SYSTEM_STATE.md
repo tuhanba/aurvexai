@@ -1,11 +1,52 @@
 # SYSTEM_STATE.md — the single source of truth
 
-**Updated: 2026-07-09 (campaigns 5+6: liquidity-sweep multi-TF and ALL
-remaining data axes — NO-GO; the sub-1h search space is exhausted).**
-If any
-other document contradicts this file, this file wins. (README/ROADMAP/
-LIVE_READY_CHECKLIST were written at different stages of the project; they
-are aligned to this file as of this date.)
+**Updated: 2026-07-24 (regime-adaptive build + a full research sweep that closed
+every remaining direction; ONE retraction).**
+If any other document contradicts this file, this file wins.
+
+## 0. What changed on 2026-07-24 (read this first)
+
+**Built (all flag-gated OFF by default, parity proven by
+`tests/test_regime_parity.py`):** an 8-phase regime-adaptive portfolio layer —
+multi-dimensional regime ensemble, measured strategy×regime matrix, correlation
+controller, dynamic slots/exposure, tier-aware margin, drift monitor,
+counterfactual ledger, dashboard Regime card + Telegram regime alerts, unified
+into the read-only governor as `REGIME_ADVISORY`.
+
+**Fixed (two real defects):**
+1. `market_data`: no HTTP timeout and no retry — a single failed
+   `fetch_order_book` discarded the whole snapshot, so a flaky link silently
+   stopped trades opening. Now `FETCH_TIMEOUT_MS` + bounded retry/backoff.
+   Fresher data ⇒ the stale guard fires LESS. **This is the real fix for
+   "the engine never opens trades".**
+2. `backtest._synthetic_book`: depth was a fixed 50 UNITS, but the slippage
+   guard walks NOTIONAL. A $0.10 coin got $5/level and was rejected as
+   illiquid — **XRP/DOGE/ADA/TRX/TON produced ZERO backtest trades**, so every
+   measurement was silently on 7 of 12 coins. Depth is now price-independent.
+
+**RETRACTED — read `docs/research/REGIME_ALLOCATION_RETRACTION.md`:** the claim
+that regime-weighted allocation earns more (+10% Sharpe, then "+0.31 at tilt
+1.5") came from that 7-coin defect. Corrected on all 12 coins: **+0.01 mean
+ΔSharpe, 2/5 folds** — nothing. Cause: a regime cell's past edge does not
+predict its future edge (pooled correlation **−0.051**; cells mean-revert).
+**Do NOT enable `REGIME_MATRIX_ENABLED` / `REGIME_MATRIX_TILT` /
+`REGIME_DYNAMIC_RISK_ENABLED` as earn-more levers.**
+
+**Research sweep — every remaining direction closed by measurement:**
+
+| direction | result | evidence |
+|---|---|---|
+| regime/vol-conditioned SCALP | **NO-GO**, 222,490 trades, 30 cells, all net-negative | `REGIME_SCALP_WAVE.md` |
+| SLOWER than 4h (8h/12h/1d — never tested before) | per-trade edge rises but trade count falls faster; **total R peaks at 4h for all 4 legs** (1061 R vs 679 R at 8h) | `SLOWER_TF_WAVE.md` |
+| per-MARKET-ERA strategy selection (the owner's idea, tested at the right horizon) | differences are real, but the **winner does not repeat** across instances; **11 of 12 cells positive ⇒ run all legs always** | `MARKET_ERA_WAVE.md` |
+| Supertrend + 8 untested trend indicators | **all NO-GO** (Supertrend −0.005/−0.007) | `TREND_FAMILY_BATTERY.md` |
+| Keltner breakout | positive (+0.14R, t 4.08) but **82% redundant with donchian** — same bet, not a new leg | `TREND_FAMILY_BATTERY.md` |
+| regime-gated mean-reversion / vol-targeting | NO-GO / not a Sharpe win | `REGIME_ALLOCATION_OOS.md` |
+
+**Net:** there is currently **no validated earn-more lever** from archived data.
+4h with four diversified legs is the measured optimum — confirmed from below
+(scalp) and from above (slower TFs) — and the per-era test says running all legs
+in all conditions is the right design. Test floor: **903 passing.**
 
 ---
 
