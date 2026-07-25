@@ -907,8 +907,14 @@ class Engine:
         # edge / toward neutral respectively).
         st = self._regime_state
         if (self.cfg.regime_matrix_enabled and st is not None and st.data_ok):
+            # Matrix path uses its own measured tilt when set (see
+            # REGIME_MATRIX_TILT); <= 0 inherits the legacy shared strength so
+            # behaviour is unchanged unless the owner opts in.
+            tilt = getattr(self.cfg, "regime_matrix_tilt", 0.0)
+            if tilt <= 0:
+                tilt = self.cfg.edge_weight_strength
             ew = self.regime_matrix.edge_weight(
-                setup_type, st.label, self.cfg.edge_weight_strength,
+                setup_type, st.label, tilt,
                 self.cfg.regime_matrix_min_n, confidence=st.confidence)
         else:
             ew = self._edge_weight(setup_type)

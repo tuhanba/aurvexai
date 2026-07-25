@@ -111,3 +111,29 @@ def test_missing_regime_state_falls_back_to_legacy(tmp_path):
     # Must not crash; falls back to the static edge weight.
     v = e._regime_edge_multiplier("ichimoku_trend")
     assert 0.0 < v < 3.0
+
+
+def test_matrix_tilt_defaults_to_shared_strength(tmp_path):
+    """REGIME_MATRIX_TILT <= 0 must inherit EDGE_WEIGHT_STRENGTH — so adding the
+    knob changes nothing until the owner sets it."""
+    a = _engine(tmp_path, regime_edge_weight_enabled=True,
+                regime_ensemble_enabled=True, regime_matrix_enabled=True,
+                regime_matrix_tilt=0.0)
+    b = _engine(tmp_path, regime_edge_weight_enabled=True,
+                regime_ensemble_enabled=True, regime_matrix_enabled=True)
+    a._regime_state = b._regime_state = _state(label="CHOP", conf=1.0)
+    assert a._regime_edge_multiplier("donchian_trend") == b._regime_edge_multiplier("donchian_trend")
+
+
+def test_matrix_tilt_strengthens_measured_tilt(tmp_path):
+    """A higher matrix tilt pushes a measured-weak cell further DOWN and a
+    measured-strong cell further UP (still inside the [0.5,1.5] clamp)."""
+    weak = _engine(tmp_path, regime_edge_weight_enabled=True,
+                   regime_ensemble_enabled=True, regime_matrix_enabled=True,
+                   regime_matrix_tilt=0.35)
+    strong = _engine(tmp_path, regime_edge_weight_enabled=True,
+                     regime_ensemble_enabled=True, regime_matrix_enabled=True,
+                     regime_matrix_tilt=1.5)
+    # ichimoku is measured very strong in VOL_COMPRESSION (+0.81R, n=177)
+    weak._regime_state = strong._regime_state = _state(label="VOL_COMPRESSION", conf=1.0)
+    assert strong._regime_edge_multiplier("ichimoku_trend") > weak._regime_edge_multiplier("ichimoku_trend")

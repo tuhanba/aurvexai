@@ -23,6 +23,8 @@ H1, tested on the unseen H2) + a 5-fold walk-forward
 (`docs/research/REGIME_ALLOCATION_OOS.md`):
 
 - H2 Sharpe **1.79 → 1.96 (+10%)**, with **lower drawdown** (77.7 → 72.8 R).
+- With the measured tilt (`REGIME_MATRIX_TILT=1.5`) the walk-forward gain rises
+  from +0.11 to **+0.31 mean ΔSharpe, winning 5/5 folds** (tilt sweep below).
 - Walk-forward: regime+shadow beat flat in **4/5 folds**, mean ΔSharpe **+0.11**.
 - Free — it reallocates risk within the existing book and the `[0.5,1.5]` band;
   it never raises per-trade risk above the half-Kelly 1.5%.
@@ -34,6 +36,8 @@ order):
 REGIME_ENSEMBLE_ENABLED=true      # compute the multi-dim regime read
 REGIME_EDGE_WEIGHT_ENABLED=true   # (already deployed) regime×edge risk tilt
 REGIME_MATRIX_ENABLED=true        # use the measured (leg×regime) matrix weights
+REGIME_MATRIX_TILT=1.5            # MEASURED best tilt (5/5 folds, +0.31 Sharpe,
+                                  # lower DD in every fold). <=0 = old timid 0.35.
 REGIME_DYNAMIC_RISK_ENABLED=true  # + confidence/transition de-risking
 CORRELATION_CONTROLLER_ENABLED=true   # treat correlated same-side as one bet
 DRIFT_MONITOR_ENABLED=true        # advisory leg-health state machine

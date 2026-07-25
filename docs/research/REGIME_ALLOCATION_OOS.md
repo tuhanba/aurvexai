@@ -75,6 +75,42 @@ tuning the existing four.
 Reproduce: `python scripts/regime_portfolio_oos.py` (caches trades to
 `$OOS_TRADE_CACHE` so re-runs are instant).
 
+## Tilt-strength sweep — the lever was set too timid (measured improvement)
+
+`scripts/regime_tilt_sweep.py`. The measured cell spread is huge (donchian
+WEAK_TREND +0.81R vs VOL_EXPANSION −0.36R) but `EDGE_WEIGHT_STRENGTH=0.35` only
+expresses it as a 0.65–1.35 weight band. Sweeping the tilt (fit strictly before
+each test window; 5-fold expanding walk-forward; weights always through the real
+`[0.5,1.5]` clamp):
+
+| tilt | mean ΔSharpe | ΔtotalR | ΔmaxDD | folds won |
+|---|---|---|---|---|
+| 0.35 (current) | +0.114 | −7.4 | −4.2 | 4/5 |
+| **1.5 (recommended)** | **+0.308** | −4.8 | −8.5 | **5/5** |
+| 5.0 (saturated) | +0.390 | −3.1 | −11.3 | 5/5 |
+
+**Why it plateaus (not a peak to overfit):** at high strength the weights
+saturate against the `[0.5,1.5]` clamp — at 5.0 **100% of cells sit on the
+bounds** (14 at 0.5, 12 at 1.5), so the policy degenerates to a binary
+"half risk on measured-weak cells, max risk on measured-strong". Beyond that
+nothing changes: strength 5.0 and 50.0 give **identical** results (+0.402).
+That is a genuine plateau — the parameter choice is not knife-edge.
+
+**Recommended operating point: `REGIME_MATRIX_TILT=1.5`.** It captures ~80% of
+the available benefit, wins in **5/5 folds**, and lowers drawdown in every fold,
+while staying *partially proportional* rather than a pure bang-bang allocator —
+the safer behaviour if the matrix goes stale (a mildly-good cell should not get
+maximum risk). Full saturation (≥5) is the theoretical max but trusts the cell
+classification completely.
+
+Cost: ~2% less total R (−4.8 R on a ~150 R fold average) bought for ~3× the
+risk-adjusted improvement and materially lower drawdown.
+
+Implementation note: `REGIME_MATRIX_TILT` is a **separate** knob from the shared
+`EDGE_WEIGHT_STRENGTH` precisely so raising it cannot change the currently
+deployed legacy `_edge_weight` path. `<= 0` inherits the old value, so adding the
+knob is a no-op until the owner sets it.
+
 ## Adjacent "earn more" probes (same session) — two honest dead-ends
 
 Two further levers were tested on the same real data to see if they add profit.

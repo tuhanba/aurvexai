@@ -372,6 +372,20 @@ class Config:
         default_factory=lambda: _str("REGIME_MATRIX_PATH", "data/regime_matrix.json"))
     regime_matrix_min_n: int = field(
         default_factory=lambda: _int("REGIME_MATRIX_MIN_N", 150))
+    # Tilt strength for the MATRIX path only (kept separate from the shared
+    # EDGE_WEIGHT_STRENGTH so raising it cannot change the currently-deployed
+    # legacy _edge_weight behaviour). <= 0 means "inherit EDGE_WEIGHT_STRENGTH".
+    #
+    # MEASURED (docs/research/REGIME_ALLOCATION_OOS.md §tilt sweep, 5-fold
+    # walk-forward on real 4h data): 0.35 gives +0.114 mean ΔSharpe (4/5 folds);
+    # 1.5 gives +0.308 (5/5 folds, lower drawdown in every fold). The weight
+    # saturates against the [0.5,1.5] risk clamp at high strength, so the effect
+    # asymptotes (5.0 and 50.0 are identical) — a genuine plateau, not a peak.
+    # 1.5 is the recommended operating point: ~80% of the available benefit while
+    # staying PARTIALLY proportional (not a pure bang-bang allocator), which is
+    # the safer behaviour if the matrix goes stale.
+    regime_matrix_tilt: float = field(
+        default_factory=lambda: _float("REGIME_MATRIX_TILT", 0.0))
     # Phase 3: additionally scale per-entry risk by regime CONFIDENCE (low → down)
     # and TRANSITION risk (high → down), folded into the regime multiplier. Sizing
     # only, never a gate; composed inside the [0.5,1.5] clamp then the risk band.
