@@ -163,6 +163,14 @@ book. Earlier EXITS were measured separately (13 variants, 2026-07-08)
 and ALL destroy yield — exits stay as validated. Baseline (non-fast)
 variant: drop `:n=10` and `:q=30` from the STRATEGIES line.
 
+2026-07-25: the take-profit **level** was isolated and re-measured across
+all four deployed legs (`TP_TARGET_WAVE.md`). No TP clears the bar on any
+leg: portfolio total falls 1060.6 R → 353.5 R (−67%) at a 1R target while
+the win rate *rises* 40.0% → 51.9%. `DON_TP_R`/`SQZ_TP_R`/`ICH_TP_R`/
+`BW_TP_R` stay at 1000.0 (unreachable = no TP); `TP1_FRAC`/`TP2_FRAC`/
+`TP3_FRAC` remain dead for these legs, so there is no break-even move and
+no runner. A rising win rate is not evidence — ask for total R.
+
 2026-07-09 (later wave, owner decision): ichimoku promoted to ACTIVE
 (shadow-only removed — its +0.314R/DSR +4.14 is the strongest harness
 result in the book) and the newly walkforward-ACCEPTED **band_walk@4h**
