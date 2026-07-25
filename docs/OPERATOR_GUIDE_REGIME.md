@@ -16,37 +16,30 @@ operator reference. Companion to `SYSTEM_STATE.md` (source of truth),
 - **Live path clean + disarmed** — `python scripts/live_preflight.py` audits the
   five gates and prints exactly what is missing before any real order is possible.
 
-## 2. The one validated improvement — regime-adaptive allocation
+## 2. RETRACTED — regime allocation is NOT a validated earn-more lever
 
-Measured on real Binance 4h data (5.5y, 12 coins), out-of-sample (matrix fit on
-H1, tested on the unseen H2) + a 5-fold walk-forward
-(`docs/research/REGIME_ALLOCATION_OOS.md`):
+**See `docs/research/REGIME_ALLOCATION_RETRACTION.md`.** An earlier version of
+this guide claimed regime-weighted allocation was validated (+10% Sharpe) and
+recommended `REGIME_MATRIX_TILT=1.5`. That result was measured on a silently
+incomplete universe: a synthetic-order-book defect gave price-dependent depth, so
+XRP/DOGE/ADA/TRX/TON produced ZERO backtest trades and the "12-coin" study was
+really 7 coins.
 
-- H2 Sharpe **1.79 → 1.96 (+10%)**, with **lower drawdown** (77.7 → 72.8 R).
-- With the measured tilt (`REGIME_MATRIX_TILT=1.5`) the walk-forward gain rises
-  from +0.11 to **+0.31 mean ΔSharpe, winning 5/5 folds** (tilt sweep below).
-- Walk-forward: regime+shadow beat flat in **4/5 folds**, mean ΔSharpe **+0.11**.
-- Free — it reallocates risk within the existing book and the `[0.5,1.5]` band;
-  it never raises per-trade risk above the half-Kelly 1.5%.
+Corrected (all 12 coins, 4,834 trades):
 
-### How to enable it (owner decision; still paper, no live orders)
-Add to `.env` and restart. These change SIZING only (never a gate, never a live
-order):
-```
-REGIME_ENSEMBLE_ENABLED=true      # compute the multi-dim regime read
-REGIME_EDGE_WEIGHT_ENABLED=true   # (already deployed) regime×edge risk tilt
-REGIME_MATRIX_ENABLED=true        # use the measured (leg×regime) matrix weights
-REGIME_MATRIX_TILT=1.5            # MEASURED best tilt (5/5 folds, +0.31 Sharpe,
-                                  # lower DD in every fold). <=0 = old timid 0.35.
-REGIME_DYNAMIC_RISK_ENABLED=true  # + confidence/transition de-risking
-CORRELATION_CONTROLLER_ENABLED=true   # treat correlated same-side as one bet
-DRIFT_MONITOR_ENABLED=true        # advisory leg-health state machine
-REGIME_ALERTS_ENABLED=true        # Telegram on confirmed regime change
-```
-Optional (only ever TIGHTEN risk): `REGIME_DYNAMIC_SLOTS_ENABLED`,
-`REGIME_DYNAMIC_EXPOSURE_ENABLED`, `MAX_NET_DIRECTIONAL_PCT`, `MM_TIERS_ENABLED`.
-The measured matrix is `data/regime_matrix.json`; refresh it with
-`python scripts/regime_matrix.py` after new data.
+| | 7 coins (defective) | **12 coins (corrected)** |
+|---|---|---|
+| walk-forward ΔSharpe | +0.11 (4/5 folds) | **+0.01 (2/5 folds)** |
+| tilt 1.5 | +0.31 (5/5) | **−0.02 (2/5)** |
+
+Decisive reason: a regime cell's past edge does **not** predict its future edge
+(pooled correlation **−0.051**); the cells mean-revert — the best-in-fit cells
+regress DOWN in test. Per-regime differences are real descriptions of the past
+with no forward information.
+
+**Do NOT enable the matrix/tilt as an earn-more lever.** The regime stack stays
+as OBSERVATIONAL infrastructure (monitoring, attribution, drift, alerts), which
+is what it is good for.
 
 ## 3. Two measured dead-ends (do not re-chase)
 
@@ -93,8 +86,9 @@ core money-safety.
 
 ## 6. Bottom line
 
-Nothing is missing. The system is clean, tested, and ready. The single validated
-way to earn more from archived data is the regime lever above (+~10%
-risk-adjusted, lower drawdown), enabled by config when you choose. The safety
-gates that block bad trades stay in place — they are protecting the balance, not
-obstructing it.
+The system is clean, tested and ready — but there is currently **no validated
+earn-more lever** from archived data. Regime allocation was the candidate and it
+did not survive the corrected measurement (§2). What remains true: the book's
+existing edges are real, risk is correctly sized at half-Kelly, and the safety
+gates protect the balance. The regime stack earns its keep as observability, not
+as alpha.
