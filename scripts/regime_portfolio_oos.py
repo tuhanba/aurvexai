@@ -46,7 +46,7 @@ DAY = 86_400_000
 
 _TRADE_CACHE = os.environ.get(
     "OOS_TRADE_CACHE",
-    "/tmp/claude-0/-home-user-aurvexai/c185b399-61c7-5464-a17b-e719a4a3a84f/scratchpad/oos_trades.json")
+    "/tmp/claude-0/-home-user-aurvexai/c185b399-61c7-5464-a17b-e719a4a3a84f/scratchpad/oos_trades_v2.json")
 
 
 def _collect_trades(cfg):
@@ -75,7 +75,8 @@ def _collect_trades(cfg):
         bt.run(data)
         for t in getattr(bt, "_last_closed", []) or []:
             lbl = _label_at(ts_list, labels, t.open_time)
-            trades.append((t.open_time, t.realized_pnl_pct or 0.0, key, lbl))
+            trades.append((t.open_time, t.realized_pnl_pct or 0.0, key, lbl,
+                           t.symbol))
         print(f"  {key}: {sum(1 for x in trades if x[2]==key)} trades")
     import json
     with open(_TRADE_CACHE, "w") as fh:
@@ -87,7 +88,8 @@ def _collect_trades(cfg):
 def _fit_matrix(h1_trades, min_n):
     """Build a RegimeMatrix from H1 trades only (the OOS fit)."""
     cells = defaultdict(lambda: defaultdict(list))
-    for _ts, r, leg, lbl in h1_trades:
+    for t in h1_trades:
+        r, leg, lbl = t[1], t[2], t[3]
         cells[leg][lbl].append(r)
     out = {}
     for leg, regimes in cells.items():
@@ -110,7 +112,8 @@ class _MatrixCell:
 def _daily_series(trades, weight_fn):
     """Aggregate weighted R by calendar day → sorted list of daily-R."""
     by_day = defaultdict(float)
-    for ts, r, leg, lbl in trades:
+    for t in trades:
+        ts, r, leg, lbl = t[0], t[1], t[2], t[3]
         w = weight_fn(leg, lbl)
         if w is None:            # dropped (shadow filter)
             continue
