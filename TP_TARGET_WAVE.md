@@ -185,7 +185,78 @@ least informative. Every TP cell in this wave improves it. Every TP cell in this
 wave loses money. If a future change is ever justified by "the win rate went up,"
 this document is the reason to ask for total R before believing it.
 
-## 7. Reproduce
+## 7. The owner's objection: "but a trade at +7% turns negative"
+
+Fair, and it names a real thing the TP wave did not measure. The wave measured
+what *capping* costs; it never measured how often the give-back actually
+happens. `scripts/giveback_probe.py` measures it, by replaying the candles
+between each trade's entry and exit to recover the maximum favourable excursion
+(MFE) the backtester never captured (`backtest.py:363` deferred it).
+
+All four legs pooled, n=4834. "once showed" is the MFE threshold, with the
+median raw price move in brackets — a 1R excursion on these 4h legs is about a
+10% move:
+
+| once showed | n | % of book | **P(ends negative)** | mean final R | gave back | ran on |
+|---|---|---|---|---|---|---|
+| 1R (~10.0%) | 2207 | 45.7% | **26.7%** | +1.289 | **−401.9 R** | **+3245.8 R** |
+| 2R (~15.7%) | 1180 | 24.4% | 10.5% | +2.377 | −78.1 R | +2883.4 R |
+| 3R (~20.9%) | 713 | 14.7% | 5.6% | +3.416 | −26.1 R | +2461.7 R |
+| 5R (~31.1%) | 317 | 6.6% | 2.5% | +5.753 | −4.7 R | +1828.4 R |
+
+**The fear is real and the cure is 8× worse than the disease.** Yes, 26.7% of
+trades that once showed ~10% profit end negative, bleeding 402 R. But cutting
+them off at that level also kills the 3246 R kept by the ones that ran on —
+**8 R destroyed for every 1 R saved.** That ratio is the whole argument, and it
+only gets worse further out: 37:1 at 2R, 94:1 at 3R, 389:1 at 5R.
+
+**And the intuition inverts.** "The deeper in profit, the more there is to give
+back" is exactly backwards. P(negative) collapses 26.7% → 10.5% → 5.6% → 2.5%
+as the excursion grows. A trade that has already run is *safer*, not riskier;
+the reversals are overwhelmingly trades still near entry. Per leg the shape is
+identical — donchian 40.0% → 3.4%, ichimoku 28.1% → 1.7%, band_walk 17.2% →
+0.0%, squeeze (whose 24-bar time-stop already truncates) 14.4% → 5.3%.
+
+Band_walk's 1R row sits at ~7.5% median move — the owner's exact number. There:
+17.2% end negative for −65.6 R, against +614.6 R kept by the rest.
+
+### This was already tested with the right mechanism, and it lost
+
+A break-even stop — arm at +ARM×R, exit flat if price returns to entry — is the
+precise tool for this fear, and `docs/research/SIGNAL_AND_EXIT_EXPERIMENTS.md`
+§4 backtested it properly (bar-sequenced, 2026-07-20):
+
+| arm at | HOLD Exp-R | BE Exp-R | Δ | MaxDD |
+|---|---|---|---|---|
+| 1.0R | +0.176 | +0.146 | **−17%** | 26→25% |
+| 1.5R | +0.176 | +0.164 | −7% | 26→**27%** |
+| 2.0R | +0.176 | +0.163 | −7% | 26→**27%** |
+
+Expectancy-negative **and drawdown does not improve.** The MFE table above
+explains why: trades that reach +1R and dip back through entry are
+disproportionately the ones that recover into runners. Note also that an earlier
+*quick estimate* of the same idea looked **+21%** — the proper sequenced test
+overturned it. Without that test, this intuition would look confirmed.
+
+### What the system already does instead
+
+The deployed legs are not "hold and pray". Give-back is handled by mechanisms
+that fire **after** a peak fades rather than capping **before** it forms:
+
+- **donchian** — `don_exit_bars` opposite-channel exit (`engine.py:1704`): a
+  real trailing exit that ratchets up as price advances.
+- **ichimoku** — exits on the 26-bar TK structure breaking.
+- **squeeze / band_walk** — 24-bar and 12-bar time-stops.
+- **account level** — adaptive daily profit lock (floor 8%, scaling to a 10%
+  ceiling on BTC-4h ADX) plus the daily give-back guard.
+
+That is the distinction the whole document rests on: **a TP caps before the peak
+and you never learn how far it would have gone; a trailing or give-back rule
+fires after the peak and keeps the discovery.** The first is measured to lose in
+every cell tested. The second is the deployed design.
+
+## 8. Reproduce
 
     python scripts/tp_target_wave.py
     python scripts/tp_bandwalk_probe.py
+    python scripts/giveback_probe.py

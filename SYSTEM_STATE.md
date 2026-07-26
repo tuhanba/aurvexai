@@ -170,6 +170,12 @@ the win rate *rises* 40.0% → 51.9%. `DON_TP_R`/`SQZ_TP_R`/`ICH_TP_R`/
 `BW_TP_R` stay at 1000.0 (unreachable = no TP); `TP1_FRAC`/`TP2_FRAC`/
 `TP3_FRAC` remain dead for these legs, so there is no break-even move and
 no runner. A rising win rate is not evidence — ask for total R.
+The follow-up "but a profitable trade gives it all back" was measured too
+(MFE replay, §7 of that doc): the give-back is real — 26.7% of trades that
+once showed ~10% end negative, −402 R — but the same cut kills the +3246 R
+kept by the ones that ran on, **8 R destroyed per 1 R saved**. P(negative)
+*falls* as the excursion grows (26.7% → 2.5% by 5R), so a trade that has
+already run is safer, not riskier.
 
 2026-07-09 (later wave, owner decision): ichimoku promoted to ACTIVE
 (shadow-only removed — its +0.314R/DSR +4.14 is the strongest harness
