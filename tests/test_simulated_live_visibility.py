@@ -129,3 +129,31 @@ def test_reset_still_defaults_to_paper(tmp_path):
     rows = db.conn.execute("SELECT mode FROM balance_ledger").fetchall()
     assert [r["mode"] for r in rows] == ["paper"]
     db.close()
+
+
+# --- the modulation line must name the factor that cut the size ------------
+
+def test_modulation_line_shows_regime_and_corr():
+    """The owner saw 'x0.62 (shadow 1.00 · score 1.00)' — a product of two 1.00s
+    reading 0.62. The cutting factor must be visible."""
+    n = _Cap()
+    n.trade_opened(_trade(metadata={"actual_risk_amount": 0.61,
+                                    "risk_multiplier": 0.62,
+                                    "m_shadow": 1.0, "m_score": 1.0,
+                                    "m_regime": 0.62, "m_corr": 1.0}),
+                   balance=197.0)
+    line = n.msgs[0]
+    assert "x0.62" in line
+    assert "regime 0.62" in line
+    assert "corr 1.00" in line
+
+
+def test_modulation_line_omits_absent_factors():
+    n = _Cap()
+    n.trade_opened(_trade(metadata={"actual_risk_amount": 0.61,
+                                    "risk_multiplier": 0.8,
+                                    "m_shadow": 0.8, "m_score": 1.0}),
+                   balance=197.0)
+    line = n.msgs[0]
+    assert "shadow 0.80" in line
+    assert "regime" not in line and "corr" not in line

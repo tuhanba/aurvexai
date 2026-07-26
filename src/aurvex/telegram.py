@@ -417,8 +417,19 @@ class BaseNotifier:
         if clip_reason and clip_reason != "none":
             rows.append(("Clip", str(clip_reason)))
         if modulation_applied:
+            # Show EVERY factor, not just shadow and score. With those two at
+            # 1.00 and the product at 0.62 the line read as a contradiction and
+            # gave the operator no way to see that the regime weight (or the
+            # correlation controller) was the one cutting size.
+            factors = [f"shadow {m_shadow:.2f}", f"score {m_score:.2f}"]
+            m_regime = md.get("m_regime")
+            m_corr = md.get("m_corr")
+            if m_regime is not None:
+                factors.append(f"regime {float(m_regime):.2f}")
+            if m_corr is not None:
+                factors.append(f"corr {float(m_corr):.2f}")
             rows.append(("Modulation",
-                         f"x{risk_mult:.2f} (shadow {m_shadow:.2f} · score {m_score:.2f})"))
+                         f"x{risk_mult:.2f} (" + " · ".join(factors) + ")"))
         if rank_pos is not None and rank_total is not None:
             basis = f" · {rank_basis}" if rank_basis else ""
             rows.append(("Rank", f"{rank_pos}/{rank_total}{basis}"))
