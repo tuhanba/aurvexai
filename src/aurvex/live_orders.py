@@ -129,10 +129,17 @@ class LiveOrderAdapter:
     @staticmethod
     def _order_args(p: OrderPayload) -> Dict[str, Any]:
         params: Dict[str, Any] = {}
-        if p.reduce_only:
-            params["reduceOnly"] = True
+        # Binance USDT-M rejects reduceOnly sent alongside closePosition=true
+        # (-1106 "Parameter 'reduceonly' sent when not required"). closePosition
+        # already means "flatten the whole position at trigger", so reduce-only
+        # is implied. Our protective stop carries BOTH flags internally — that
+        # is correct as INTENT, but only one may go on the wire. Sending both
+        # rejected the stop AFTER the entry had filled, which is precisely the
+        # failure that flattened a real position and tripped the adapter.
         if p.close_position:
             params["closePosition"] = True
+        elif p.reduce_only:
+            params["reduceOnly"] = True
         if p.stop_price is not None:
             params["stopPrice"] = p.stop_price
         if p.time_in_force:
@@ -227,7 +234,13 @@ class LiveOrderAdapter:
             log.error("protection placement failed — flattening %s: %s",
                       symbol, self._safe(exc))
             self.emergency_flatten(symbol)
-            self.trip(f"protection placement failed on {symbol}")
+            # Carry the EXCHANGE'S OWN words into the trip reason. "protection
+            # placement failed on X" alone is a dead end for the operator: it
+            # names the symbol but never the rejection, so the actual cause
+            # (a filter, a parameter conflict, a bracket) stays buried in the
+            # container log.
+            self.trip(f"protection placement failed on {symbol}: "
+                      f"{self._safe(exc)}")
             report.status = TRIPPED
             report.reason = ("protection placement failed — position flattened, "
                              "adapter tripped: " + self._safe(exc))

@@ -158,3 +158,40 @@ def test_first_trip_reason_wins():
     a.trip("later noise")
     assert "original cause" in a.engaged()[1]
     assert "later noise" not in a.engaged()[1]
+
+
+# --- Binance rejects reduceOnly together with closePosition ---------------
+
+def _payload(**kw):
+    from aurvex.order_payload import OrderPayload
+    d = dict(symbol="DOT/USDT:USDT", side="SELL", order_type="STOP_MARKET",
+             qty=0.0, stop_price=0.81, intent="stop_loss")
+    d.update(kw)
+    return OrderPayload(**d)
+
+
+def test_close_position_order_does_not_also_send_reduce_only():
+    """Binance -1106: reduceOnly cannot accompany closePosition=true. Our
+    protective stop carries both flags as INTENT; only one may go on the wire."""
+    from aurvex.live_orders import LiveOrderAdapter
+    args = LiveOrderAdapter._order_args(
+        _payload(reduce_only=True, close_position=True))
+    assert args["closePosition"] is True
+    assert "reduceOnly" not in args
+
+
+def test_partial_take_profit_still_sends_reduce_only():
+    from aurvex.live_orders import LiveOrderAdapter
+    args = LiveOrderAdapter._order_args(
+        _payload(order_type="TAKE_PROFIT_MARKET", qty=5.0, stop_price=0.87,
+                 reduce_only=True, close_position=False, intent="take_profit"))
+    assert args["reduceOnly"] is True
+    assert "closePosition" not in args
+
+
+def test_stop_price_and_tif_still_pass_through():
+    from aurvex.live_orders import LiveOrderAdapter
+    args = LiveOrderAdapter._order_args(
+        _payload(reduce_only=True, close_position=True, time_in_force="GTC"))
+    assert args["stopPrice"] == 0.81
+    assert args["timeInForce"] == "GTC"
