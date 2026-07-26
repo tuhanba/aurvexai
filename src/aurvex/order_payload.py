@@ -190,6 +190,14 @@ def build_entry_payload(decision, filters: SymbolFilters) -> OrderPayload:
     )
 
 
+# A take-profit this far from entry, measured in R, is not a target: it is the
+# "no fixed TP" sentinel the mechanism-exit legs use (DON_TP_R / SQZ_TP_R /
+# ICH_TP_R / BW_TP_R default to 1000R precisely so it can never be reached).
+# Every REAL target in this system is <= 5R (TP_TARGET_WAVE.md; rev_tp_r 1.2),
+# so 50R sits far above anything legitimate and far below the sentinel.
+SENTINEL_TP_R = 50.0
+
+
 def build_protection_payloads(decision, filters: SymbolFilters) -> List[OrderPayload]:
     """Protection orders for an ALLOW ``Decision``: one SL + up to three TPs.
 
@@ -198,14 +206,25 @@ def build_protection_payloads(decision, filters: SymbolFilters) -> List[OrderPay
       the closePosition semantics; qty is 0.0 because the exchange ignores it).
     * TPs: TAKE_PROFIT_MARKET per target, ``reduce_only=True``, each with its
       own fraction of the entry qty rounded DOWN to step_size.
+
+    SENTINEL TPs ARE NOT SENT. donchian / squeeze / ichimoku / band_walk exit on
+    a mechanism (channel break, TK-cross, time-stop) and carry an unreachable
+    1000R target purely to keep the 3-slot TP contract intact. Sending that to
+    Binance is not harmless: the exchange rejects a trigger price that far
+    outside its band, the rejection lands AFTER the entry has filled, and the
+    adapter's protection-failure path then flattens the position and trips
+    itself — which is exactly the 2026-07-26 live incident (a real DOT entry
+    filled, was flattened at −0.01 USDT, and every later entry fell back to
+    SIMULATED). The stop still rests on the exchange; the engine owns the exit.
     """
     entry = round_price_to_tick(decision.entry, filters.tick_size)
     closing_side = _exchange_side(decision.side, closing=True)
     entry_qty = round_qty_down(
         (decision.position_size / decision.entry) if decision.entry else 0.0,
         filters.step_size)
+    r = abs(decision.entry - decision.stop_loss) if decision.entry else 0.0
     ctx = {"entry": entry, "position_side": decision.side,
-           "leverage": int(decision.leverage or 1)}
+           "leverage": int(decision.leverage or 1), "risk_r": r}
 
     payloads = [OrderPayload(
         symbol=decision.symbol, side=closing_side, order_type="STOP_MARKET",
@@ -220,6 +239,8 @@ def build_protection_payloads(decision, filters: SymbolFilters) -> List[OrderPay
                               fractions):
         if not tp_price or frac <= 0:
             continue
+        if r > 0 and abs(tp_price - decision.entry) / r >= SENTINEL_TP_R:
+            continue                      # mechanism-exit sentinel — never sent
         payloads.append(OrderPayload(
             symbol=decision.symbol, side=closing_side,
             order_type="TAKE_PROFIT_MARKET",
@@ -280,6 +301,20 @@ def validate(payload: OrderPayload, filters: SymbolFilters) -> ValidationResult:
             if wrong:
                 errors.append(f"take_profit {payload.stop_price} on wrong side "
                               f"of entry {entry} for {position_side}")
+
+    # 6) trigger price within a sane band of entry. Binance rejects a trigger
+    # far outside its price filter, and that rejection arrives AFTER the entry
+    # fills — costing a real round-trip and tripping the adapter. Catching it
+    # here means the group is REFUSED before anything is sent. The band is
+    # deliberately generous: legitimate targets are <= 5R.
+    risk_r = float(payload.context.get("risk_r", 0.0) or 0.0)
+    if (payload.stop_price is not None and entry > 0 and risk_r > 0
+            and abs(payload.stop_price - entry) / risk_r >= SENTINEL_TP_R):
+        errors.append(
+            f"{payload.intent} trigger {payload.stop_price} is "
+            f"{abs(payload.stop_price - entry) / risk_r:.0f}R from entry "
+            f"{entry} — beyond the {SENTINEL_TP_R:.0f}R sanity band "
+            "(unreachable sentinel; it must not be sent to the exchange)")
 
     return ValidationResult(ok=not errors, errors=errors)
 

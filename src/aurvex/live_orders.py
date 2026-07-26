@@ -90,11 +90,14 @@ class LiveOrderAdapter:
         self._sleep = sleeper
         self._poll = max(0.05, poll_interval_sec)
         self.tripped = False           # adapter-level kill; sticky until restart
+        self.trip_reason = ""          # WHY it tripped — surfaced, not just logged
 
     # -- gates ---------------------------------------------------------------
     def engaged(self) -> "tuple[bool, str]":
         if self.tripped:
-            return False, "adapter tripped — restart + human review required"
+            why = f" ({self.trip_reason})" if self.trip_reason else ""
+            return False, ("adapter tripped — restart + human review "
+                           f"required{why}")
         if not self.cfg.live_enabled:
             return False, "LIVE_ENABLED is false"
         if not self.cfg.live_human_confirm:
@@ -440,4 +443,5 @@ class LiveOrderAdapter:
     def trip(self, reason: str) -> None:
         if not self.tripped:
             log.error("LIVE ADAPTER TRIPPED: %s", reason)
+            self.trip_reason = reason      # first cause wins; later ones are noise
         self.tripped = True
