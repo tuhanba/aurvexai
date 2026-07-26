@@ -403,7 +403,12 @@ def test_reconcile_recreates_missing_protective_stop(tmp_path):
     assert order["side"] == "sell"                       # closes the LONG
     assert order["params"]["stopPrice"] == 91.5          # current_stop
     assert order["params"]["closePosition"] is True
-    assert order["params"]["reduceOnly"] is True
+    # reduceOnly must NOT be sent with closePosition. This assertion used to
+    # require it, which locked in the defect: Binance answers -1106 "Parameter
+    # 'reduceonly' sent when not required", so on 2026-07-26 the stop could
+    # neither be placed at entry nor recreated here, and real BNB/DOT positions
+    # sat NAKED while this recovery path retried and failed every cycle.
+    assert "reduceOnly" not in order["params"]
     assert any("protective stop" in m for m in notifier.criticals)
     db.close()
 

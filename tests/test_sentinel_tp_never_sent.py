@@ -195,3 +195,58 @@ def test_stop_price_and_tif_still_pass_through():
         _payload(reduce_only=True, close_position=True, time_in_force="GTC"))
     assert args["stopPrice"] == 0.81
     assert args["timeInForce"] == "GTC"
+
+
+# --- the RECOVERY path must not carry the same conflict -------------------
+
+class _FakeEx:
+    def __init__(self):
+        self.calls = []
+
+    def create_order(self, symbol, typ, side, qty, price, params):
+        self.calls.append({"symbol": symbol, "type": typ, "side": side,
+                           "qty": qty, "params": params})
+        return {"id": "1"}
+
+
+def _armed_adapter(ex):
+    from aurvex.config import Config
+    from aurvex.live_orders import LiveOrderAdapter
+    cfg = Config()
+    cfg.live_enabled = True
+    cfg.live_human_confirm = "TOK"
+    cfg.mode = "live"
+    cfg.live_send_orders = True
+    cfg.binance_api_key = "k"
+    cfg.binance_api_secret = "s"
+    return LiveOrderAdapter(cfg, db=None, exchange_factory=lambda *a, **k: ex)
+
+
+def test_protective_stop_recreation_omits_reduce_only():
+    """The reconciler calls this to re-arm a NAKED position. Sending
+    reduceOnly with closePosition made recovery impossible: -1106 both at
+    entry and on every retry, so the position stayed naked."""
+    ex = _FakeEx()
+    res = _armed_adapter(ex).place_protective_stop("DOT/USDT:USDT", "LONG", 0.8)
+    assert res["ok"]
+    params = ex.calls[0]["params"]
+    assert params["closePosition"] is True
+    assert "reduceOnly" not in params
+    assert params["stopPrice"] == 0.8
+    assert params["workingType"] == "MARK_PRICE"
+
+
+def test_protective_stop_side_is_the_closing_side():
+    ex = _FakeEx()
+    _armed_adapter(ex).place_protective_stop("DOT/USDT:USDT", "SHORT", 0.9)
+    assert ex.calls[0]["side"] == "buy"
+
+
+def test_protective_stop_refuses_while_disarmed():
+    from aurvex.config import Config
+    from aurvex.live_orders import LiveOrderAdapter
+    ex = _FakeEx()
+    a = LiveOrderAdapter(Config(), db=None, exchange_factory=lambda *x, **k: ex)
+    res = a.place_protective_stop("DOT/USDT:USDT", "LONG", 0.8)
+    assert not res["ok"]
+    assert ex.calls == []          # a disarmed adapter touches nothing

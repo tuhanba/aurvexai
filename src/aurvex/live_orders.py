@@ -362,10 +362,15 @@ class LiveOrderAdapter:
             return {"ok": False, "reason": f"disarmed: {why}"}
         close_side = "sell" if trade_side == "LONG" else "buy"
         try:
+            # NO reduceOnly here: Binance rejects it alongside closePosition
+            # (-1106) and closePosition already implies it. This path is the
+            # RECOVERY path — the reconciler calls it to re-arm a naked
+            # position — so the conflict made a bad situation unrecoverable:
+            # the stop could neither be placed at entry nor recreated after.
             o = self._ex().create_order(
                 symbol, "stop_market", close_side, None, None,
                 {"stopPrice": stop_price, "closePosition": True,
-                 "reduceOnly": True, "workingType": "MARK_PRICE"})
+                 "workingType": "MARK_PRICE"})
             oid = str(o.get("id", ""))
             log.warning("protective stop placed %s %s @ %s (order %s)",
                         symbol, close_side, stop_price, oid)
