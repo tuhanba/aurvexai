@@ -463,11 +463,29 @@ class TelegramCommander(BaseCommander):
             self._send("❌ Token mismatch. Usage: /live &lt;token&gt;")
             return
         ok, msg = e.switch_mode("live")
-        if ok:
+        if not ok:
+            self._send(f"❌ Live switch refused: {msg}")
+            return
+        # switch_mode returns early with "already in live mode" WITHOUT
+        # checking any gate, so success here does NOT prove orders are real.
+        # Verify before claiming it — an unverified "orders are REAL" is how
+        # an owner ends up watching simulated fills and believing them.
+        gates_ok, why = e.live_gates_ok()
+        adapter = getattr(e.executor, "order_adapter", None)
+        if gates_ok and adapter is not None:
+            armed, why = adapter.engaged()
+        else:
+            armed = False
+            if gates_ok and adapter is None:
+                why = "no order adapter on the executor"
+        if armed:
             self._send(f"🔴 <b>LIVE — orders are REAL from this cycle.</b>\n"
                        f"{msg}\nSwitch back anytime: /paper · emergency: /panic")
         else:
-            self._send(f"❌ Live switch refused: {msg}")
+            self._send(f"⚠️ <b>Live mode — but orders are SIMULATED.</b>\n"
+                       f"{msg}\nshut: {why}\n\n"
+                       "Nothing will reach Binance until that is fixed in .env "
+                       "and the engine is recreated.")
 
     def _cmd_paper(self, _args: List[str]) -> None:
         """ONE command back to paper, no restart. Refused while live
