@@ -429,7 +429,18 @@ class BaseNotifier:
             reason += (" · shadow reduced risk (no block)" if risk_mult < 1.0
                        else " · shadow raised risk, measured edge (no block)")
 
-        self.send("\n".join([header, ctx, _grid(rows), reason]))
+        # LOUD simulated banner. A stub trade in live mode is otherwise
+        # indistinguishable from a real one — same [LIVE] tag, same block — so
+        # the owner can believe an order reached Binance when nothing did.
+        # Name the shut gate right here, at the only surface they read on a
+        # phone. Never suppresses the message; only adds to it.
+        parts = [header, ctx, _grid(rows), reason]
+        if md.get("simulated"):
+            ack = md.get("order_ack") or {}
+            why = ack.get("disarm_reason") or "order adapter not armed"
+            parts.insert(1, "⚠️ <b>SIMULATED — NO ORDER REACHED BINANCE</b>\n"
+                            f"why: {_esc(str(why))}")
+        self.send("\n".join(parts))
 
     def trade_event(self, t, kind: str, price: float, pnl: float,
                     stop_to: Optional[str] = None) -> None:

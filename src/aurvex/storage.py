@@ -518,12 +518,21 @@ class Storage:
         return float(bal)
 
     def reset_for_new_epoch(self, initial_balance: float,
-                            label: str = "wave2") -> Dict[str, Any]:
+                            label: str = "wave2",
+                            mode: str = "paper") -> Dict[str, Any]:
         """Reset trading data for a clean forward-test, preserving shadow rows.
 
         Keeps  : shadows (resolved learning history — most valuable data)
         Clears : trades, signal_events, funnel, balance_ledger, heartbeat, meta
-        Seeds  : new balance + new epoch stamp.
+        Seeds  : new balance + new epoch stamp, tagged with ``mode`` so the
+                 seed row lands on the ledger the dashboard actually reads.
+                 (It was hardcoded "paper": after a live reset the equity chart
+                 started from an empty live ledger and looked broken.)
+
+        NOTE: clearing ``meta`` also clears ``mode_override`` — the engine's
+        persisted live decision (gate 3). That is deliberate and safe: after a
+        reset the engine falls back to AX_MODE, so live must be re-confirmed
+        through Telegram. Do not "fix" this by preserving the override.
 
         Engine must be stopped before calling; restart it after.
         """
@@ -535,7 +544,7 @@ class Storage:
         self.conn.commit()
 
         self.set_meta("balance", initial_balance)
-        self.append_ledger(mode="paper", balance=initial_balance, change=0.0,
+        self.append_ledger(mode=mode, balance=initial_balance, change=0.0,
                            reason="reset_init", trade_id=None)
         epoch = {"label": label, "started_ms": int(time.time() * 1000),
                  "id": new_id()}

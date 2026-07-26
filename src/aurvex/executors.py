@@ -502,8 +502,9 @@ class LiveExecutor(BaseExecutor):
     # -- order send ---------------------------------------------------------
     # Without an armed adapter this NEVER hits an exchange (simulated ack).
     def _send_order(self, decision: Decision, risk_mult: float) -> dict:
+        why = "no order adapter injected"
         if self.order_adapter is not None:
-            armed, _why = self.order_adapter.engaged()
+            armed, why = self.order_adapter.engaged()
             if armed:
                 # Canary shrink must reach the exchange payloads too: scale
                 # the decision's notional before payload construction.
@@ -511,12 +512,17 @@ class LiveExecutor(BaseExecutor):
                 scaled = copy.copy(decision)
                 scaled.position_size = decision.position_size * risk_mult
                 return self.order_adapter.send_entry(scaled)
+        # Disarmed: the stub. Carry the ADAPTER'S OWN reason into the ack so
+        # every downstream surface (Telegram receipt, dashboard, report) can
+        # name the gate that is still shut instead of showing a live-looking
+        # trade with no explanation. Behaviour is unchanged — only observable.
         return {
             "status": "SIMULATED",
             "symbol": decision.symbol,
             "side": decision.side,
             "notional": decision.position_size * risk_mult,
             "note": "stub - no real order placed",
+            "disarm_reason": why,
         }
 
     def open(self, decision: Decision,

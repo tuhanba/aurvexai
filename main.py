@@ -170,7 +170,8 @@ def _run_reset(cfg) -> int:
     print()
 
     db = Storage(cfg.db_path)
-    result = db.reset_for_new_epoch(cfg.initial_paper_balance, label=cfg.epoch_label)
+    result = db.reset_for_new_epoch(cfg.initial_paper_balance,
+                                    label=cfg.epoch_label, mode=cfg.mode)
     db.close()
 
     print(f"✓ Shadows preserved : {result['shadows_kept']} rows")
@@ -179,6 +180,11 @@ def _run_reset(cfg) -> int:
     print(f"✓ New epoch         : {result['new_epoch']['label']} "
           f"({result['new_epoch']['id']})")
     print()
+    if cfg.mode == "live":
+        print("!! meta was cleared, which includes mode_override (gate 3).")
+        print("!! The engine restarts on AX_MODE. To trade live again you must")
+        print("!! re-send:  /livemode confirm <YOUR_TOKEN>  then recreate.")
+        print()
     print("Done. Restart the engine:")
     print("  docker compose restart engine")
 

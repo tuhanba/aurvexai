@@ -688,9 +688,12 @@ def create_app(cfg=None) -> Flask:
         """Equity history for the chart: realised balance after every fill
         (balance_ledger) plus one LIVE point = cash + open mark-to-market.
         Read-only aggregation of what the engine already wrote."""
+        # ACTIVE mode, not this container's env: every other query on this page
+        # uses _mode(), so reading cfg.mode here drew the PAPER equity curve
+        # underneath LIVE trade rows after a hot mode switch.
         rows = db.conn.execute(
             "SELECT ts, balance FROM balance_ledger WHERE mode=? "
-            "ORDER BY ts ASC LIMIT 5000", (cfg.mode,)).fetchall()
+            "ORDER BY ts ASC LIMIT 5000", (_mode(),)).fetchall()
         points = [{"ts": int(r["ts"]), "balance": round(r["balance"], 4)}
                   for r in rows]
         balance = db.get_balance()
