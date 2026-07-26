@@ -714,9 +714,12 @@ class TelegramCommander(BaseCommander):
             "SIMULATE sends until the Stage-3 switch is set."
         )
         self._send(
-            "✅ <b>Live mode queued.</b>\n"
-            "data/mode_request.json written.\n"
-            "Restart the engine to apply."
+            "⚠️ <b>Queued only — this is NOT the live switch.</b>\n"
+            "data/mode_request.json written. It applies ONLY on an engine "
+            "restart within the next hour, and is refused as stale after that.\n\n"
+            "👉 Use <code>/live &lt;token&gt;</code> instead — it switches "
+            "immediately, with no restart, and reports the exact gate if any "
+            "is still shut."
             + warning
         )
 

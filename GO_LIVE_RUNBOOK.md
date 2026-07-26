@@ -146,21 +146,32 @@ Apply (gates 1, 2, 4 + canary sizing):
 python3 scripts/arm_live_env.py --token MYTOKEN --yes-real-orders --apply
 ```
 
-Gate 3 is the human confirm — it is deliberately interactive:
-
 ```
 docker compose up -d --force-recreate engine
 ```
 
-In Telegram, send to your bot:
+Gate 3 is the human confirm — it is deliberately interactive. In Telegram,
+send to your bot:
 
 ```
-/livemode confirm MYTOKEN
+/live MYTOKEN
 ```
 
+That is the whole switch: `/live` hot-swaps the executor **immediately, with no
+restart**, and persists the decision in DB meta (`mode_override`) so a later
+container recreate keeps it. The bot must answer:
+
 ```
-docker compose up -d --force-recreate engine
+🔴 LIVE — orders are REAL from this cycle.
 ```
+
+If it answers `❌ Live switch refused: gate closed: ...`, that message names the
+remaining gate — fix it in `.env`, recreate, and send `/live MYTOKEN` again.
+
+> **Do not use `/livemode confirm`.** It is the legacy path: it only writes
+> `data/mode_request.json`, applies nothing by itself, needs a restart **within
+> one hour** to be picked up, and is refused as stale after that. It answers
+> "✅ Live mode queued", which reads like success but is not the switch.
 
 ## PART 7 — Confirm you are actually live
 
@@ -219,6 +230,12 @@ python3 scripts/arm_live_env.py --token MYTOKEN --yes-real-orders --full-size --
 ```
 docker compose up -d --force-recreate engine
 ```
+```
+/live MYTOKEN
+```
+
+(The recreate restarts on `AX_MODE`; `mode_override` survives it, but re-sending
+`/live` costs nothing and makes the state unambiguous.)
 
 ---
 

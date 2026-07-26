@@ -79,6 +79,29 @@ def main():
     print("  paper->live switch it still carries the PAPER balance until you")
     print("  reset. That is the usual cause of 'the numbers look wrong'.")
 
+    _hdr("2b. PENDING MODE REQUEST (the /livemode legacy path)")
+    import json
+    import time as _time
+    req_path = os.path.join("data", "mode_request.json")
+    if not os.path.exists(req_path):
+        print("  no data/mode_request.json — nothing queued.")
+        print("  (That is normal and GOOD: /live switches immediately and")
+        print("   never leaves a file behind. Only the legacy /livemode does.)")
+    else:
+        try:
+            with open(req_path) as f:
+                req = json.load(f)
+            age = _time.time() - float(req.get("requested_at") or 0)
+            print(f"  QUEUED: mode={req.get('mode')} age={age/60:.0f} min")
+            if age > 3600:
+                print("  !! STALE — older than 1 hour. A restart will REFUSE it.")
+                print("     Do not wait for it. Send:  /live <YOUR_TOKEN>")
+            else:
+                print("  It would apply on the next engine restart — but only if")
+                print("  every gate above is open. Simpler: send /live <token>.")
+        except Exception as exc:
+            print(f"  unreadable ({exc})")
+
     _hdr("3. WHAT IS ACTUALLY IN THE DB")
     rows = db.conn.execute(
         "SELECT mode, status, COUNT(*) n FROM trades GROUP BY mode, status"
@@ -115,10 +138,30 @@ def main():
         print(f"    {r['mode']:>6} : {r['n']:>5} rows, last ts {r['last']}")
 
     _hdr("WHAT TO DO")
+    env_shut = [l for l, ok in gates if not ok and "Gate 3" not in l]
+    if env_shut:
+        print("  Open these in .env first (PART 6 of GO_LIVE_RUNBOOK.md), then")
+        print("  'docker compose up -d --force-recreate engine':")
+        for l in env_shut:
+            print(f"     {l}")
+        print()
+    if effective != "live":
+        print("  Then flip gate 3 from Telegram with the ONE command that")
+        print("  actually switches:")
+        print()
+        print("      /live <YOUR_TOKEN>")
+        print()
+        print("  It hot-swaps the executor immediately (no restart) and")
+        print("  persists in mode_override. Expect: '🔴 LIVE — orders are REAL'.")
+        print("  A refusal names the remaining gate verbatim.")
+        print()
+        print("  Do NOT use '/livemode confirm' — legacy, queues a file, needs")
+        print("  a restart within an hour, and answers with a ✅ that is not")
+        print("  the switch.")
     if shut:
-        print("  The gates above are the whole story: open them (PART 6 of")
-        print("  GO_LIVE_RUNBOOK.md) and recreate the engine. Until then the")
-        print("  dashboard is showing a paper simulation wearing a LIVE tag.")
+        print()
+        print("  Until every gate is open the dashboard is showing a paper")
+        print("  simulation wearing a LIVE tag.")
     live_rows = [r for r in rows if r["mode"] == "live"]
     paper_rows = [r for r in rows if r["mode"] == "paper"]
     if paper_rows and effective == "live":
