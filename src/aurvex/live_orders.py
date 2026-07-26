@@ -376,9 +376,21 @@ class LiveOrderAdapter:
                         symbol, close_side, stop_price, oid)
             return {"ok": True, "order_id": oid}
         except Exception as exc:
+            msg = self._safe(exc)
+            # -4130 "An open stop or take profit order with GTE and
+            # closePosition in the direction is existing" is the exchange
+            # telling us the protective stop IS already resting. That is
+            # authoritative — more so than our parse of fetch_open_orders —
+            # so it means PROTECTED, not naked. Without this the reconciler
+            # read its own duplicate-rejection as proof of a naked position
+            # and paged the owner every cycle about a stop that existed.
+            if "-4130" in msg or "closePosition in the direction is existing" in msg:
+                log.info("protective stop already resting on %s (exchange "
+                         "-4130) — position is protected", symbol)
+                return {"ok": True, "already_present": True}
             log.error("protective stop placement FAILED %s @ %s: %s",
-                      symbol, stop_price, self._safe(exc))
-            return {"ok": False, "reason": self._safe(exc)}
+                      symbol, stop_price, msg)
+            return {"ok": False, "reason": msg}
 
     @staticmethod
     def is_protective_order(order: Dict[str, Any], trade_side: str) -> bool:
@@ -389,11 +401,19 @@ class LiveOrderAdapter:
         if "stop" not in otype:
             return False
         info = order.get("info") or {}
-        reduce_only = bool(order.get("reduceOnly")
-                           or info.get("reduceOnly")
-                           or order.get("closePosition")
-                           or info.get("closePosition"))
-        if not reduce_only:
+
+        def _truthy(v) -> bool:
+            # Binance returns these as JSON STRINGS in `info`, so a plain
+            # bool() call reads "false" as True. Parse the string properly.
+            if isinstance(v, str):
+                return v.strip().lower() in ("true", "1", "yes")
+            return bool(v)
+
+        protective = (_truthy(order.get("reduceOnly"))
+                      or _truthy(info.get("reduceOnly"))
+                      or _truthy(order.get("closePosition"))
+                      or _truthy(info.get("closePosition")))
+        if not protective:
             return False
         close_side = "sell" if trade_side == "LONG" else "buy"
         return str(order.get("side", "")).lower() == close_side

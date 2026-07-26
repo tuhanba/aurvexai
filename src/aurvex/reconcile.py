@@ -343,6 +343,21 @@ class ReconcileEnforcer:
             if self.adapter is not None:
                 placed = self.adapter.place_protective_stop(
                     t.symbol, t.side, stop_price)
+            if placed and placed.get("already_present"):
+                # The exchange refused a duplicate: the stop is already there
+                # and we simply failed to recognise it in the open-order list.
+                # The position is PROTECTED — do not page the owner. Log what
+                # we did see so a recurring detection miss is diagnosable.
+                log.warning("reconcile: %s stop detection MISSED a resting "
+                            "protective order (exchange says one exists). "
+                            "orders seen for this symbol: %s",
+                            t.symbol,
+                            [{"type": o.get("type"), "side": o.get("side"),
+                              "reduceOnly": o.get("reduceOnly"),
+                              "closePosition": o.get("closePosition")}
+                             for o in orders_by_symbol.get(t.symbol, [])])
+                report.setdefault("stops_already_present", []).append(t.symbol)
+                continue
             if placed and placed.get("ok"):
                 report["stops_recreated"].append(t.symbol)
                 self._alert(
