@@ -917,6 +917,42 @@ class Config:
     log_backup_count: int = field(
         default_factory=lambda: _int("LOG_BACKUP_COUNT", 5))
 
+    # -- FTMO Mode (Phase 1, Wave 0) ----------------------------------------
+    # A rule-governance layer that encodes FTMO's exact limits (daily loss,
+    # overall max loss, targets, trading-day/weekend rules) as data. OFF by
+    # default and, in Wave 0, wired to NOTHING in the decision path — enabling
+    # the flag alone changes NO behaviour. It only becomes a pre-trade gate in a
+    # later, separately-shipped wave (see FTMO_MODE_ROADMAP.md). FTMO execution
+    # (an MT5/FTMO adapter) is a distinct future wave; the Binance five-gate lock
+    # is never a path to FTMO.
+    ftmo_mode_enabled: bool = field(
+        default_factory=lambda: _bool("FTMO_MODE_ENABLED", False))
+    ftmo_account_size: float = field(
+        default_factory=lambda: _float("FTMO_ACCOUNT_SIZE", 100_000.0))
+    # one_step | two_step
+    ftmo_path: str = field(
+        default_factory=lambda: _str("FTMO_PATH", "two_step").lower())
+    # challenge | verification | funded
+    ftmo_phase: str = field(
+        default_factory=lambda: _str("FTMO_PHASE", "challenge").lower())
+    # standard | swing (swing = no weekend-flat + no news buffer; 2-step only)
+    ftmo_variant: str = field(
+        default_factory=lambda: _str("FTMO_ACCOUNT_VARIANT", "standard").lower())
+    # IANA timezone for the FTMO daily reset (CE(S)T). Kept configurable so the
+    # DST-correct boundary can be adjusted if FTMO ever changes it.
+    ftmo_tz: str = field(
+        default_factory=lambda: _str("FTMO_TZ", "Europe/Prague"))
+
+    def ftmo_ruleset(self):
+        """Build the FtmoRuleSet described by the FTMO_* config (standard
+        published numbers for the path/phase, with the configured size/variant/
+        timezone). Lazily imported to keep config dependency-light."""
+        from .ftmo.rules import ruleset_for
+        rs = ruleset_for(path=self.ftmo_path, phase=self.ftmo_phase,
+                         account_size=self.ftmo_account_size,
+                         variant=self.ftmo_variant)
+        return rs.with_overrides(tz=self.ftmo_tz)
+
     # ---------------------------------------------------------------------
     def validate(self) -> None:
         frac_sum = self.tp1_frac + self.tp2_frac + self.tp3_frac + self.runner_frac
@@ -964,6 +1000,17 @@ class Config:
         assert not self.governor_can_trade, "GOVERNOR_CAN_TRADE must be false"
         assert not self.governor_can_change_live, "GOVERNOR_CAN_CHANGE_LIVE must be false"
         assert not self.governor_can_auto_apply, "GOVERNOR_CAN_AUTO_APPLY must be false"
+        # FTMO Mode config sanity (Wave 0). These never affect decide() logic.
+        assert self.ftmo_path in {"one_step", "two_step"}, (
+            "FTMO_PATH must be one_step|two_step"
+        )
+        assert self.ftmo_phase in {"challenge", "verification", "funded"}, (
+            "FTMO_PHASE must be challenge|verification|funded"
+        )
+        assert self.ftmo_variant in {"standard", "swing"}, (
+            "FTMO_ACCOUNT_VARIANT must be standard|swing"
+        )
+        assert self.ftmo_account_size > 0, "FTMO_ACCOUNT_SIZE must be > 0"
 
     @property
     def is_live(self) -> bool:
