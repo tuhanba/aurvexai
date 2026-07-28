@@ -32,6 +32,14 @@ FTMO_UNIVERSE: Dict[str, str] = {
     "AUDUSD": "AUDUSD=X",
     "USDCAD": "USDCAD=X",
     "USDCHF": "USDCHF=X",
+    "NZDUSD": "NZDUSD=X",
+    # crosses (grow the FX sample)
+    "EURGBP": "EURGBP=X",
+    "EURJPY": "EURJPY=X",
+    "GBPJPY": "GBPJPY=X",
+    "AUDJPY": "AUDJPY=X",
+    "EURAUD": "EURAUD=X",
+    "NZDJPY": "NZDJPY=X",
     # metals
     "XAUUSD": "GC=F",     # gold futures (closest free proxy for FTMO's XAUUSD)
     "XAGUSD": "SI=F",     # silver
