@@ -188,6 +188,9 @@ class Engine:
         # FTMO Mode state (None unless FTMO_MODE_ENABLED). Bootstrapped after the
         # balance is ensured below so the rule %s scale to the simulated capital.
         self._ftmo_state = None
+        # Account-level FTMO sizing factor (health × mode risk fraction), in
+        # (0,1]. 1.0 = no reduction; recomputed each cycle in _ftmo_refresh.
+        self._ftmo_risk_factor: float = 1.0
         self.db.ensure_balance(cfg.initial_paper_balance)
         if cfg.ftmo_mode_enabled:
             self._ftmo_bootstrap()
@@ -752,6 +755,12 @@ class Engine:
         self.db.set_ftmo_state(st.to_dict())
         prof = mode_profile(next_mode(st))
         hs = _health.health_score(st)
+        # Account-level sizing factor: health can only reduce (<=1.0), the mode
+        # risk fraction reduces further (Funded/Recovery/Payout). Governance thus
+        # makes the engine more conservative as health/mode worsen. Kept in the
+        # engine's risk_multiplier which decide() re-clamps to [0.5, 1.5].
+        self._ftmo_risk_factor = max(
+            0.0, min(1.0, _health.health_risk_multiplier(hs) * prof.risk_fraction))
         open_ml = sum((float(getattr(t, "max_loss", 0.0)) or 0.0)
                       * float(getattr(t, "remaining_fraction", 1.0)) for t in opens)
         worst = max(0.0, (float(equity) - float(balance)) + open_ml)
@@ -1019,7 +1028,10 @@ class Engine:
             m_conf = 0.7 + 0.3 * max(0.0, min(1.0, st.confidence))
             m_trans = 1.0 - 0.4 * max(0.0, min(1.0, st.transition_risk))
             m_regime *= m_conf * m_trans
-        rm = max(0.5, min(1.5, m_shadow * m_score * m_regime * m_corr))
+        # FTMO Mode: fold in the account-level sizing factor (health × mode). OFF
+        # unless FTMO_MODE_ENABLED → m_ftmo stays 1.0 and this is byte-identical.
+        m_ftmo = self._ftmo_risk_factor if self.cfg.ftmo_mode_enabled else 1.0
+        rm = max(0.5, min(1.5, m_shadow * m_score * m_regime * m_corr * m_ftmo))
         return rm, m_shadow, m_score, m_regime
 
     def _attach_quality(self, d: Decision, signal, snap) -> None:

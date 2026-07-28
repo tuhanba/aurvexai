@@ -6,13 +6,15 @@ compliance gate's job): lower health → smaller size, fewer slots, a higher
 confidence bar. This satisfies "the lower the health, the more conservative the
 AI becomes" without adding an alpha/ML veto.
 
-The score is a weighted blend of normalised, danger-aware components (each in
-[0,1] where 1 = safe):
+Health is a pure DANGER scalar: it is a weighted blend of how much rule budget
+remains (each component in [0,1] where 1 = perfectly safe). A fresh account with
+full budget scores 100 — not having *made* profit yet is not danger, so profit
+progress is intentionally NOT a component here (it is shown separately on the
+dashboard). Health only falls as the account approaches a rule limit.
 
     daily headroom   : remaining_daily_loss / daily_loss_amount
     overall headroom : remaining_max_loss   / max_loss_amount
     drawdown room    : 1 − current_drawdown / max_loss_amount
-    target progress  : phase progress toward the profit target (challenge only)
 
 Pure functions of :class:`FtmoAccountState`. The engine multiplies
 ``health_risk_multiplier`` into the existing risk_multiplier (kept ≤ 1.0 so
@@ -22,13 +24,10 @@ from __future__ import annotations
 
 from .account_state import FtmoAccountState
 
-# Component weights (sum 1.0). The two loss headrooms dominate; drawdown and
-# target-progress refine. When there is no profit target (funded), the progress
-# weight is redistributed to the overall-headroom term.
-_W_DAILY = 0.35
-_W_MAX = 0.35
+# Component weights (sum 1.0). The two loss headrooms dominate; drawdown refines.
+_W_DAILY = 0.40
+_W_MAX = 0.40
 _W_DD = 0.20
-_W_PROGRESS = 0.10
 
 
 def _clamp01(x: float) -> float:
@@ -43,25 +42,13 @@ def health_components(state: FtmoAccountState) -> dict:
     daily = _clamp01(state.remaining_daily_loss / daily_amt)
     overall = _clamp01(state.remaining_max_loss / max_amt)
     dd = _clamp01(1.0 - state.current_drawdown / max_amt)
-    if rs.has_profit_target:
-        progress = _clamp01(state.phase_progress_pct / 100.0)
-    else:
-        progress = None
-    return {"daily": daily, "overall": overall, "drawdown": dd,
-            "progress": progress}
+    return {"daily": daily, "overall": overall, "drawdown": dd}
 
 
 def health_score(state: FtmoAccountState) -> float:
-    """Overall account health in [0,100] (higher = safer)."""
+    """Overall account health in [0,100] (higher = safer). 100 = full budget."""
     c = health_components(state)
-    if c["progress"] is None:
-        # No target: fold the progress weight into the overall-headroom term.
-        w_max = _W_MAX + _W_PROGRESS
-        total = (_W_DAILY * c["daily"] + w_max * c["overall"]
-                 + _W_DD * c["drawdown"])
-    else:
-        total = (_W_DAILY * c["daily"] + _W_MAX * c["overall"]
-                 + _W_DD * c["drawdown"] + _W_PROGRESS * c["progress"])
+    total = _W_DAILY * c["daily"] + _W_MAX * c["overall"] + _W_DD * c["drawdown"]
     return round(100.0 * _clamp01(total), 2)
 
 

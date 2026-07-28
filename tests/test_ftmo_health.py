@@ -18,15 +18,15 @@ def _state(phase=CHALLENGE, size=100_000):
     return FtmoAccountState.initial(rs, now_ms=_ms(2026, 7, 15, 9, 0))
 
 
-def test_fresh_challenge_is_high_health():
+def test_fresh_challenge_is_full_health():
+    # Full budget, no drawdown -> 100 (progress is NOT a danger component).
     st = _state()
     h = health.health_score(st)
-    assert h == 90.0                 # only the "no progress yet" term is < 1
+    assert h == 100.0
     assert health.health_band(h) == "healthy"
 
 
 def test_fresh_funded_is_full_health():
-    # No profit target -> progress weight folds into overall headroom -> 100.
     st = _state(phase=FUNDED)
     assert health.health_score(st) == 100.0
 
@@ -34,8 +34,9 @@ def test_fresh_funded_is_full_health():
 def test_health_drops_as_budget_erodes():
     st = _state()
     st.update(balance=97_000, equity=97_000, now_ms=_ms(2026, 7, 15, 14, 0))
+    # daily 0.4, overall 0.7, dd 0.7 -> 0.4*0.4 + 0.4*0.7 + 0.2*0.7 = 0.58
     h = health.health_score(st)
-    assert h == 52.5
+    assert h == 58.0
     assert health.health_band(h) == "caution"
 
 
@@ -52,7 +53,7 @@ def test_floating_loss_lowers_health():
     st = _state()
     st.update(balance=100_000, equity=96_000, now_ms=_ms(2026, 7, 15, 14, 0))
     # Equity-based: floating -4k erodes health even though realized balance flat.
-    assert health.health_score(st) < 90.0
+    assert health.health_score(st) < 100.0
 
 
 def test_risk_multiplier_bounds():
@@ -73,5 +74,5 @@ def test_max_open_by_band():
 def test_components_present():
     st = _state()
     c = health.health_components(st)
-    assert set(c) == {"daily", "overall", "drawdown", "progress"}
+    assert set(c) == {"daily", "overall", "drawdown"}
     assert 0.0 <= c["daily"] <= 1.0
