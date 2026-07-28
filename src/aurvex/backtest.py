@@ -33,7 +33,8 @@ from .decision import DecisionEngine
 from .executors import PaperExecutor
 from .filters import PortfolioView
 from .metrics import compute_metrics
-from .models import (ALLOW, OPEN, Candle, MarketSnapshot, OrderBook, now_ms)
+from .models import (ALLOW, LONG, OPEN, Candle, MarketSnapshot, OrderBook,
+                     now_ms)
 from .setups import SetupDetector, build_context
 from .walkforward import funding_cost
 
@@ -225,6 +226,22 @@ class Backtester:
         open_trades: Dict[str, object] = {}
         closed: List[object] = []
         last_trade_ms: Dict[str, int] = {}
+
+        # FTMO governance-in-the-loop (flag-gated; default OFF → byte-identical).
+        # When on, an FtmoAccountState is maintained on EQUITY each event, the
+        # compliance gate runs inside decide(), and health/mode down-size risk —
+        # so we can measure whether the FTMO risk engine keeps the realised
+        # drawdown inside the 10% envelope a RAW trend basket blows through.
+        governed = getattr(cfg, "ftmo_mode_enabled", False)
+        ftmo_state = None
+        ftmo_marks: Dict[str, float] = {}
+        ftmo_peak = balance
+        ftmo_max_dd = 0.0
+        ftmo_breach = None
+        if governed:
+            from .ftmo import FtmoAccountState
+            rs = cfg.ftmo_ruleset().with_overrides(account_size=float(balance))
+            ftmo_state = FtmoAccountState.initial(rs, starting_balance=float(balance))
         signals_seen = 0
         allows = 0
         reject_reasons: Dict[str, int] = {}
@@ -257,6 +274,26 @@ class Backtester:
                     closed.append(tr)
                     last_trade_ms[sym] = ts
                     open_trades.pop(sym, None)
+
+            # FTMO governance: refresh the account state on EQUITY every event
+            # (mark all open trades at their last seen close), roll CE(S)T days,
+            # track drawdown and the first breach.
+            if governed:
+                ftmo_marks[sym] = bar.close
+                equity = balance
+                for ot in open_trades.values():
+                    mk = ftmo_marks.get(ot.symbol, ot.entry)
+                    if ot.entry:
+                        qty = ot.position_size * ot.remaining_fraction / ot.entry
+                        equity += (qty * (mk - ot.entry) if ot.side == LONG
+                                   else qty * (ot.entry - mk))
+                ftmo_state.update(balance=balance, equity=equity, now_ms=bar.ts)
+                if equity > ftmo_peak:
+                    ftmo_peak = equity
+                ftmo_max_dd = max(ftmo_max_dd, ftmo_peak - equity)
+                if ftmo_breach is None and ftmo_state.any_breach:
+                    ftmo_breach = ("daily" if ftmo_state.daily_breached
+                                   else "max", bar.ts)
 
             # 2) look for a new entry (no lookahead: snapshot up to bar i)
             if sym in open_trades or len(open_trades) >= cfg.max_open_trades:
@@ -292,7 +329,30 @@ class Backtester:
                 daily_realized_pnl=0.0,   # daily kill-switch not modelled in backtest
                 now_ms=bar.ts,
             )
-            d = self.engine.decide(signal, snap, pf)
+            # FTMO governance: attach the gate inputs + derive the health/mode
+            # sizing factor (health can only shrink risk; Survival halts entries).
+            risk_mult = 1.0
+            if governed:
+                from .ftmo import ftmo_calendar as _cal
+                from .ftmo import health as _h
+                from .ftmo import mode_profile, next_mode
+                prof = mode_profile(next_mode(ftmo_state))
+                hs = _h.health_score(ftmo_state)
+                risk_mult = max(0.0, min(1.0,
+                                _h.health_risk_multiplier(hs) * prof.risk_fraction))
+                open_ml = sum((float(getattr(t, "max_loss", 0.0)) or 0.0)
+                              * t.remaining_fraction for t in open_trades.values())
+                pf.ftmo_state = ftmo_state
+                pf.ftmo_open_worst_case = max(
+                    0.0, (ftmo_state.equity - ftmo_state.balance) + open_ml)
+                pf.ftmo_mode_allows_new_risk = prof.allow_new_risk
+                pf.ftmo_near_weekend = bool(
+                    ftmo_state.ruleset.weekend_flat_required
+                    and _cal.minutes_to_weekend_close(
+                        bar.ts, ftmo_state.ruleset.tz) <= 15.0)
+                pf.ftmo_mode = prof.name
+                pf.ftmo_health = hs
+            d = self.engine.decide(signal, snap, pf, risk_multiplier=risk_mult)
             if d.decision != ALLOW:
                 key = d.failed_stage or d.reject_reason or "other"
                 reject_reasons[key] = reject_reasons.get(key, 0) + 1
@@ -303,6 +363,8 @@ class Backtester:
             trade = self.executor.open(d)
             trade.open_time = bar.ts
             open_trades[sym] = trade
+            if governed:
+                ftmo_state.record_trade(bar.ts)
 
         # Force-close anything still open at its last bar.
         for sym, tr in list(open_trades.items()):
@@ -326,6 +388,26 @@ class Backtester:
         metrics["symbols"] = list(ltf_data.keys())
         metrics["bars_per_symbol"] = {s: len(c) for s, c in ltf_data.items()}
         metrics.update(self._baseline_extras(closed, reject_reasons, margin_rejected))
+        if governed and ftmo_state is not None:
+            from .ftmo import mode_profile, next_mode
+            fin_ts = max((t.close_time or t.open_time for t in closed),
+                         default=now_ms())
+            ftmo_state.update(balance=balance, equity=balance, now_ms=fin_ts)
+            ftmo_max_dd = max(ftmo_max_dd, ftmo_peak - balance)
+            if ftmo_breach is None and ftmo_state.any_breach:
+                ftmo_breach = ("daily" if ftmo_state.daily_breached else "max",
+                               fin_ts)
+            passed = (ftmo_state.equity - cfg.initial_paper_balance) >= \
+                ftmo_state.ruleset.profit_target_amount()
+            metrics["ftmo_governed"] = {
+                "breach": ftmo_breach[0] if ftmo_breach else None,
+                "max_drawdown_pct": round(
+                    100.0 * ftmo_max_dd / cfg.initial_paper_balance, 2),
+                "final_equity": round(ftmo_state.equity, 2),
+                "passed": bool(passed and ftmo_breach is None),
+                "mode_end": mode_profile(next_mode(ftmo_state)).name,
+                "trading_days": ftmo_state.trading_days_done,
+            }
         self._last_closed = closed   # exposed for the walk-forward orchestrator
         return metrics
 
