@@ -254,26 +254,9 @@ def synthetic_r_samples(seed: int = 7, n: int = 400, win_rate: float = 0.45,
     return [win_r if rng.random() < win_rate else loss_r for _ in range(n)]
 
 
-def run_from_backtest(cfg, *, symbols: Optional[List[str]] = None,
-                      bars: int = 1500, seed: int = 7, n_runs: int = 3000,
-                      risk_pct: Optional[float] = None, trades_per_day: int = 3,
-                      max_days: int = 60, account_size: Optional[float] = None,
-                      min_r_samples: int = 30):
-    """Drive the FTMO Monte-Carlo from an offline backtest's R distribution.
-
-    Returns ``(report, used_synthetic)``. When the backtest yields too few
-    trades (offline/thin), falls back to :func:`synthetic_r_samples` and sets
-    ``used_synthetic=True`` so the caller can flag the output as non-evidence.
-    """
-    from ..backtest import Backtester, generate_candles
-    symbols = symbols or ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
-    data = {s: generate_candles(s, bars, seed=seed + idx,
-                                start_price=100.0 * (idx + 1), tf=cfg.ltf)
-            for idx, s in enumerate(symbols)}
-    bt = Backtester(cfg)
-    bt.run(data)
-    closed = getattr(bt, "_last_closed", []) or []
-    r_samples = r_samples_from_trades(closed)
+def _report_from_samples(cfg, r_samples, *, seed, n_runs, risk_pct,
+                         trades_per_day, max_days, account_size, min_r_samples):
+    """Shared tail: guard the sample count, build the rule set, Monte-Carlo it."""
     used_synthetic = False
     if len(r_samples) < min_r_samples:
         r_samples = synthetic_r_samples(seed)
@@ -286,6 +269,52 @@ def run_from_backtest(cfg, *, symbols: Optional[List[str]] = None,
                          trades_per_day=trades_per_day, max_days=max_days,
                          seed=seed)
     return report, used_synthetic
+
+
+def run_from_backtest(cfg, *, symbols: Optional[List[str]] = None,
+                      bars: int = 1500, seed: int = 7, n_runs: int = 3000,
+                      risk_pct: Optional[float] = None, trades_per_day: int = 3,
+                      max_days: int = 60, account_size: Optional[float] = None,
+                      min_r_samples: int = 30):
+    """Drive the FTMO Monte-Carlo from an offline (synthetic crypto) backtest.
+
+    Returns ``(report, used_synthetic)``. When the backtest yields too few
+    trades, falls back to :func:`synthetic_r_samples` and flags it.
+    """
+    from ..backtest import Backtester, generate_candles
+    symbols = symbols or ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
+    data = {s: generate_candles(s, bars, seed=seed + idx,
+                                start_price=100.0 * (idx + 1), tf=cfg.ltf)
+            for idx, s in enumerate(symbols)}
+    bt = Backtester(cfg)
+    bt.run(data)
+    r_samples = r_samples_from_trades(getattr(bt, "_last_closed", []) or [])
+    return _report_from_samples(
+        cfg, r_samples, seed=seed, n_runs=n_runs, risk_pct=risk_pct,
+        trades_per_day=trades_per_day, max_days=max_days,
+        account_size=account_size, min_r_samples=min_r_samples)
+
+
+def run_from_market_data(cfg, ltf_data, *, seed: int = 7, n_runs: int = 3000,
+                         risk_pct: Optional[float] = None, trades_per_day: int = 3,
+                         max_days: int = 60, account_size: Optional[float] = None,
+                         min_r_samples: int = 30):
+    """Drive the FTMO Monte-Carlo from REAL market data (e.g. FX/indices bars).
+
+    ``ltf_data`` is ``{symbol: [Candle]}`` at ``cfg.ltf``; the shared backtester
+    generates the strategy's trades on it, whose net-R distribution feeds the
+    simulator. Returns ``(report, used_synthetic, backtest_metrics)`` — the raw
+    backtest metrics let the caller show how many real trades were produced.
+    """
+    from ..backtest import Backtester
+    bt = Backtester(cfg)
+    metrics = bt.run(ltf_data)
+    r_samples = r_samples_from_trades(getattr(bt, "_last_closed", []) or [])
+    report, used_synthetic = _report_from_samples(
+        cfg, r_samples, seed=seed, n_runs=n_runs, risk_pct=risk_pct,
+        trades_per_day=trades_per_day, max_days=max_days,
+        account_size=account_size, min_r_samples=min_r_samples)
+    return report, used_synthetic, metrics
 
 
 def _pct(amount: float, base: float) -> float:

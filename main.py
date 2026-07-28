@@ -116,9 +116,34 @@ def _run_ftmo_backtest(cfg, args: list) -> int:
     size_env = os.environ.get("FTMO_SIM_ACCOUNT_SIZE")
     account_size = float(size_env) if size_env else None
 
-    report, synthetic = run_from_backtest(
-        cfg, bars=bars, n_runs=n_runs, risk_pct=risk_pct,
-        trades_per_day=tpd, max_days=max_days, account_size=account_size)
+    use_fx = ("--fx" in args) or os.environ.get("FTMO_FX") == "1"
+    if use_fx:
+        # REAL FTMO-instrument path: forex / metals / indices bars.
+        from aurvex.ftmo.data import load_universe
+        from aurvex.ftmo.ftmo_sim import run_from_market_data
+        cfg.ltf = os.environ.get("FTMO_FX_LTF", "1h")
+        cfg.htf = os.environ.get("FTMO_FX_HTF", "4h")
+        cfg.min_quote_volume_24h = 0.0
+        syms_env = os.environ.get("FTMO_FX_SYMBOLS")
+        names = [s.strip() for s in syms_env.split(",")] if syms_env else None
+        rng = os.environ.get("FTMO_FX_RANGE", "730d")
+        print(f"  loading FX/index data ({cfg.ltf}) — this fetches on first run…")
+        data = load_universe(names, interval=cfg.ltf, range_=rng)
+        if not data:
+            print("  ✗ no instrument data available (offline / all fetches "
+                  "failed). Provide CSVs under data/cache/ftmo/ or retry online.")
+            return 1
+        print(f"  instruments: {', '.join(f'{k}({len(v)})' for k, v in data.items())}")
+        report, synthetic, bt_metrics = run_from_market_data(
+            cfg, data, n_runs=n_runs, risk_pct=risk_pct, trades_per_day=tpd,
+            max_days=max_days, account_size=account_size)
+        print(f"  real backtest trades: {bt_metrics.get('total_trades', 0)}  "
+              f"expectancy_r={bt_metrics.get('expectancy_r')}  "
+              f"winrate={bt_metrics.get('winrate')}%")
+    else:
+        report, synthetic = run_from_backtest(
+            cfg, bars=bars, n_runs=n_runs, risk_pct=risk_pct,
+            trades_per_day=tpd, max_days=max_days, account_size=account_size)
 
     print("=== AurvexAI — FTMO Monte-Carlo pass/survival ===")
     if synthetic:
