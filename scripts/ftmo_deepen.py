@@ -42,7 +42,7 @@ def base_cfg(strat, ltf, htf):
     return c
 
 
-def measure(label, cfg, ltf_data):
+def measure(label, cfg, ltf_data, trades_per_day=3, max_days=60):
     bt = Backtester(cfg)
     m = bt.run(ltf_data)
     r = r_samples_from_trades(getattr(bt, "_last_closed", []) or [])
@@ -52,7 +52,7 @@ def measure(label, cfg, ltf_data):
     if len(r) >= 30:
         for risk in RISKS:
             rep = monte_carlo(r, RULESET, n_runs=RUNS, risk_pct=risk,
-                              trades_per_day=3, max_days=60)
+                              trades_per_day=trades_per_day, max_days=max_days)
             out["risk"][risk] = (rep.pass_rate, rep.survival_rate)
     print(f"  {label:42s} n={len(r):4d} exp={exp:+.3f} wr={wr}%")
     for risk, (pr, sr) in out["risk"].items():
@@ -72,24 +72,34 @@ def main():
                                base_cfg("reversion_v1", "1h", "4h"), fx))
 
     # -- Candidate B: metals trend, long-history daily --------------------
-    print("Candidate B — donchian_trend on LONG-history daily metals")
+    # NOTE: Yahoo daily on GC=F needs range="10y" (range="max" returns only ~266
+    # bars). The backtester resampler uses day-units, so weekly/monthly htf are
+    # "7d"/"30d", not "1w"/"1mo".
+    print("Candidate B — donchian_trend on LONG-history daily metals (10y)")
     metals = {}
     for name in ("XAUUSD", "XAGUSD"):
         try:
-            c = load_or_fetch(name, interval="1d", range_="max")
+            c = load_or_fetch(name, interval="1d", range_="10y")
         except Exception as exc:
             print(f"  {name}: fetch failed ({exc})")
             continue
         if len(c) >= 300:
             metals[name] = c
     print("  metal daily:", ", ".join(f"{k}({len(v)})" for k, v in metals.items()))
-    if metals:
-        cfgB = base_cfg("donchian_trend", "1d", "1w")
-        results.append(measure("donchian_trend 1d/1w  METAL-daily", cfgB, metals))
-        gold = {"XAUUSD": metals["XAUUSD"]} if "XAUUSD" in metals else {}
-        if gold:
-            results.append(measure("donchian_trend 1d/1w  GOLD-daily",
-                                   base_cfg("donchian_trend", "1d", "1w"), gold))
+    # Daily trend is low-frequency: cap the sim to ~1 trade/day over a longer
+    # horizon so the pass rate is not inflated by an unrealistic trade cadence.
+    gold = {"XAUUSD": metals["XAUUSD"]} if "XAUUSD" in metals else {}
+    if gold:
+        results.append(measure("donchian_trend 1d/30d  GOLD-daily",
+                               base_cfg("donchian_trend", "1d", "30d"), gold,
+                               trades_per_day=1, max_days=150))
+        results.append(measure("donchian_trend 1d/7d  GOLD-daily",
+                               base_cfg("donchian_trend", "1d", "7d"), gold,
+                               trades_per_day=1, max_days=150))
+    if len(metals) > 1:
+        results.append(measure("donchian_trend 1d/7d  METAL-daily",
+                               base_cfg("donchian_trend", "1d", "7d"), metals,
+                               trades_per_day=1, max_days=150))
 
     # -- report -----------------------------------------------------------
     lines = ["# FTMO edge candidates — deepened", "",
