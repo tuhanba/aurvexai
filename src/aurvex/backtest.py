@@ -336,8 +336,21 @@ class Backtester:
                 from .ftmo import ftmo_calendar as _cal
                 from .ftmo import health as _h
                 from .ftmo import mode_profile, next_mode
+                from .ftmo.correlation import cluster_full
                 prof = mode_profile(next_mode(ftmo_state))
                 hs = _h.health_score(ftmo_state)
+                # Concurrent-correlation caps: shrink the effective slot count
+                # with health/mode, and cap positions per correlation cluster so
+                # the book can't pile into many correlated trends (open-drawdown
+                # control the base gate lacks).
+                eff_cap = min(cfg.max_open_trades, prof.max_open_cap,
+                              _h.health_max_open(hs, cfg.max_open_trades))
+                if (len(open_trades) >= eff_cap
+                        or cluster_full(sym, list(open_trades.keys()),
+                                        cfg.ftmo_max_cluster)):
+                    reject_reasons["ftmo_concurrency"] = \
+                        reject_reasons.get("ftmo_concurrency", 0) + 1
+                    continue
                 risk_mult = max(0.0, min(1.0,
                                 _h.health_risk_multiplier(hs) * prof.risk_fraction))
                 open_ml = sum((float(getattr(t, "max_loss", 0.0)) or 0.0)

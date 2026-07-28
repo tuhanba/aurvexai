@@ -942,6 +942,11 @@ class Config:
     # DST-correct boundary can be adjusted if FTMO ever changes it.
     ftmo_tz: str = field(
         default_factory=lambda: _str("FTMO_TZ", "Europe/Prague"))
+    # Max concurrent open positions per correlation cluster (metals, equity
+    # indices, JPY crosses, USD majors …). Caps open-drawdown from piling into
+    # correlated trends. 0 disables. Only consulted when FTMO Mode is on.
+    ftmo_max_cluster: int = field(
+        default_factory=lambda: _int("FTMO_MAX_CLUSTER", 2))
 
     def ftmo_ruleset(self):
         """Build the FtmoRuleSet described by the FTMO_* config (standard
