@@ -7,6 +7,7 @@ Usage:
     python main.py dashboard   # run the Flask dashboard on DASHBOARD_PORT
     python main.py demo        # fast synthetic end-to-end run (offline, ~40 cycles)
     python main.py backtest    # offline seeded backtest, prints metrics JSON
+    python main.py ftmo-backtest  # FTMO Monte-Carlo pass/survival (--funded, --json)
     python main.py walkforward # Block 6: real-data (or synthetic) OOS walk-forward
                                # decision table per profile, net-of-cost (+funding)
     python main.py reset       # clear trades/funnel/signals, keep shadow data, new epoch
@@ -65,6 +66,9 @@ def main(argv: list) -> int:
         print(json.dumps(metrics, indent=2, default=str))
         return 0
 
+    if cmd == "ftmo-backtest":
+        return _run_ftmo_backtest(cfg, argv[1:])
+
     if cmd == "walkforward":
         return _run_walkforward(cfg)
 
@@ -89,6 +93,62 @@ def main(argv: list) -> int:
     print(f"unknown command: {cmd}\n")
     _print_help()
     return 2
+
+
+def _run_ftmo_backtest(cfg, args: list) -> int:
+    """FTMO Monte-Carlo pass/survival estimator.
+
+    Pulls the strategy's per-trade R distribution from an offline backtest and
+    simulates thousands of FTMO account paths under the configured rule set,
+    reporting pass rate, daily/max breach rates and funded survival. All knobs
+    are env-driven; ``--json`` also prints the raw report, ``--funded`` adds a
+    funded-account survival estimate.
+    """
+    from aurvex.ftmo.ftmo_sim import funded_survival, run_from_backtest
+    from aurvex.ftmo.ftmo_sim import synthetic_r_samples, r_samples_from_trades  # noqa: F401
+
+    bars = int(os.environ.get("BACKTEST_BARS", "1500"))
+    n_runs = int(os.environ.get("FTMO_SIM_RUNS", "3000"))
+    tpd = int(os.environ.get("FTMO_SIM_TRADES_PER_DAY", "3"))
+    max_days = int(os.environ.get("FTMO_SIM_MAX_DAYS", "60"))
+    risk_env = os.environ.get("FTMO_SIM_RISK_PCT")
+    risk_pct = float(risk_env) if risk_env else None
+    size_env = os.environ.get("FTMO_SIM_ACCOUNT_SIZE")
+    account_size = float(size_env) if size_env else None
+
+    report, synthetic = run_from_backtest(
+        cfg, bars=bars, n_runs=n_runs, risk_pct=risk_pct,
+        trades_per_day=tpd, max_days=max_days, account_size=account_size)
+
+    print("=== AurvexAI — FTMO Monte-Carlo pass/survival ===")
+    if synthetic:
+        print("  ⚠  NO/thin backtest trades — using a SYNTHETIC R distribution.")
+        print("     Output demonstrates the FTMO mechanics only; NOT real edge.")
+    for line in report.summary_lines():
+        print(line)
+
+    if "--funded" in args:
+        # Reuse the same R distribution for a funded-survival horizon.
+        from aurvex.backtest import Backtester, generate_candles
+        syms = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
+        data = {s: generate_candles(s, bars, seed=7 + i,
+                                    start_price=100.0 * (i + 1), tf=cfg.ltf)
+                for i, s in enumerate(syms)}
+        bt = Backtester(cfg)
+        bt.run(data)
+        rsamp = r_samples_from_trades(getattr(bt, "_last_closed", []) or [])
+        if len(rsamp) < 30:
+            rsamp = synthetic_r_samples()
+        months = int(os.environ.get("FTMO_SIM_FUNDED_MONTHS", "12"))
+        frep = funded_survival(rsamp, cfg.ftmo_ruleset(), months=months,
+                               n_runs=n_runs, risk_pct=risk_pct or cfg.risk_pct,
+                               trades_per_day=tpd)
+        print(f"  --- funded survival ({months} months) ---")
+        print(f"  FUNDED SURVIVAL ...... {100.0 * frep.survival_rate:5.1f}%")
+
+    if "--json" in args:
+        print(json.dumps(report.to_dict(), indent=2, default=str))
+    return 0
 
 
 def _run_walkforward(cfg) -> int:
