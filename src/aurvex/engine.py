@@ -185,7 +185,12 @@ class Engine:
         self._profit_lock_fired_day: int = -1
         self._last_error: str = ""
         self._start_ms = now_ms()
+        # FTMO Mode state (None unless FTMO_MODE_ENABLED). Bootstrapped after the
+        # balance is ensured below so the rule %s scale to the simulated capital.
+        self._ftmo_state = None
         self.db.ensure_balance(cfg.initial_paper_balance)
+        if cfg.ftmo_mode_enabled:
+            self._ftmo_bootstrap()
         # Stamp the epoch (configurable via EPOCH_LABEL, default "wave3").
         # Written once on first start; never overwrites an existing epoch stamp.
         self.db.ensure_epoch(cfg.epoch_label)
@@ -707,13 +712,63 @@ class Engine:
             total += base
         return total
 
+    # -- FTMO Mode (rule-governance; OFF unless FTMO_MODE_ENABLED) ----------
+    def _ftmo_bootstrap(self) -> None:
+        """Load or initialise the FTMO account state.
+
+        In Phase-1 simulation the FTMO rule %s scale to the ACTUAL simulated
+        capital: the rule set's account_size is overridden to the current
+        balance so a 5%/10% limit means 5%/10% of the paper stream. (A real
+        FTMO connection, a later wave, takes account_size from the broker.)
+        The CE(S)T day-open baseline + high-water are persisted via ``meta`` so a
+        mid-day restart never silently resets the daily budget."""
+        from .ftmo import FtmoAccountState
+        persisted = self.db.get_ftmo_state()
+        if persisted:
+            try:
+                self._ftmo_state = FtmoAccountState.from_dict(persisted)
+                return
+            except Exception as exc:  # pragma: no cover - defensive
+                log.warning("ftmo state restore failed, reinitialising: %s", exc)
+        bal = self.db.get_balance() or self.cfg.initial_paper_balance
+        rs = self.cfg.ftmo_ruleset().with_overrides(account_size=float(bal))
+        self._ftmo_state = FtmoAccountState.initial(
+            rs, starting_balance=float(bal), now_ms=now_ms())
+        self.db.set_ftmo_state(self._ftmo_state.to_dict())
+
+    def _ftmo_refresh(self, balance: float, equity: float, opens):
+        """Update + persist the FTMO state and derive the per-cycle gate inputs.
+
+        Returns ``(mode_profile, health, open_worst_case, near_weekend)``.
+        ``open_worst_case`` is the additional loss if every open position hit its
+        stop from here: ``floating + Σ(remaining max_loss)`` (floored at 0),
+        which — subtracted from equity — equals ``balance − Σ max_loss``."""
+        from .ftmo import ftmo_calendar as _cal
+        from .ftmo import health as _health
+        from .ftmo import mode_profile, next_mode
+        st = self._ftmo_state
+        now = now_ms()
+        st.update(balance=float(balance), equity=float(equity), now_ms=now)
+        self.db.set_ftmo_state(st.to_dict())
+        prof = mode_profile(next_mode(st))
+        hs = _health.health_score(st)
+        open_ml = sum((float(getattr(t, "max_loss", 0.0)) or 0.0)
+                      * float(getattr(t, "remaining_fraction", 1.0)) for t in opens)
+        worst = max(0.0, (float(equity) - float(balance)) + open_ml)
+        near_weekend = bool(
+            st.ruleset.weekend_flat_required
+            and _cal.minutes_to_weekend_close(now, st.ruleset.tz) <= 15.0)
+        return prof, hs, worst, near_weekend
+
     def _portfolio(self) -> PortfolioView:
         opens = self.db.get_open_trades(mode=self.cfg.mode)
         # P0.4: the exposure cap binds on MTM notional including drift.
-        open_notional = self._mtm_notional(opens, self._marks())
+        marks = self._marks()
+        open_notional = self._mtm_notional(opens, marks)
         open_margin = sum(self._trade_margin(t) for t in opens)
-        return PortfolioView(
-            balance=self.db.get_balance(),
+        balance = self.db.get_balance()
+        pv = PortfolioView(
+            balance=balance,
             open_count=len(opens),
             open_symbols=[t.symbol for t in opens],
             open_notional=open_notional,
@@ -725,6 +780,20 @@ class Engine:
             now_ms=now_ms(),
             daily_profit_locked=self._daily_profit_locked_today(),
         )
+        if self.cfg.ftmo_mode_enabled and self._ftmo_state is not None:
+            # Equity = cash + open mark-to-market (the basis FTMO's rules read).
+            from .accounting import compute_accounting
+            acct = compute_accounting(self.cfg.initial_paper_balance, balance,
+                                      opens, [], marks)
+            prof, hs, worst, near_wknd = self._ftmo_refresh(
+                balance, acct["equity"], opens)
+            pv.ftmo_state = self._ftmo_state
+            pv.ftmo_open_worst_case = worst
+            pv.ftmo_mode_allows_new_risk = prof.allow_new_risk
+            pv.ftmo_near_weekend = near_wknd
+            pv.ftmo_mode = prof.name
+            pv.ftmo_health = hs
+        return pv
 
     def _market_regime(self) -> dict:
         """MEASURED trend-strength regime of the market leader (default BTC 4h),
