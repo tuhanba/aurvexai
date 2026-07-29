@@ -39,6 +39,24 @@ by ~0.11%.** ORB enters on a breakout via a stop order, where fills slip most, s
 this is the single biggest real-world risk. It passes at realistic metals-CFD
 costs (spread ~0.02–0.04%), but only if execution is genuinely tight.
 
+## Session-close exit variant (ORB_TARGET_R=0)
+
+The executor now has an ORB **"SESSION" exit** (close at the first bar of the next
+session), unlocking the sweep's stronger "ride-to-close" variant. Set
+`ORB_TARGET_R=0` for session-close mode (unreachable target → only the OR stop or
+the session close exits); `>0` keeps the fixed-R target (both also session-flat).
+
+Gold, governed, typical spread (RT 0.02%):
+
+| variant | net % (2y) | expectancy_R | maxDD | passes |
+|---|---:|---:|---:|:---:|
+| 3R target | +31.9% | +0.120 | 9.1% | ✅ |
+| **session-close** | **+66.3%** | **+0.190** | 14.6% | ✅ |
+
+Session-close nearly doubles the return (matching the sweep's 77% vs 55% pass) at
+the cost of higher drawdown, and — like the 3R variant — still needs round-trip
+cost ≤ ~0.03% (it does not change the execution-slippage sensitivity).
+
 ## Verdict
 
 **First strategy that passes FTMO in the full engine under governance** — gold

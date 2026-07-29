@@ -418,9 +418,13 @@ class RiskManager:
         is_orb = (profile_of(setup_type) == "orb" or
                   cfg.strategy_profile == "orb")
         if is_orb:
-            # ORB: a single fixed-R target taking 100% (structural OR-opposite
-            # stop is the other exit). Same 3-slot contract as reversion_v1.
-            tp = entry + sign * r * cfg.orb_target_r
+            # ORB exits: the structural OR-opposite stop plus either a fixed-R
+            # target (orb_target_r > 0) or — when orb_target_r <= 0 — ride to the
+            # session close (the executor's "SESSION" exit), modelled here as an
+            # unreachable target so the 3-slot TP contract stays intact and the
+            # position is only closed by the stop or the session-close exit.
+            tp_r = cfg.orb_target_r if cfg.orb_target_r > 0 else 1000.0
+            tp = entry + sign * r * tp_r
             return [
                 TPTarget(price=tp, fraction=1.0),
                 TPTarget(price=tp, fraction=0.0),

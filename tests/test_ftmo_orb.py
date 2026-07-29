@@ -62,6 +62,48 @@ def test_profile_routing():
     assert _build_registry(cfg) == [detect_orb]
 
 
+def test_session_close_exit():
+    from aurvex.executors import PaperExecutor
+    from aurvex.models import TPTarget, Trade
+    cfg = Config()
+    cfg.strategy_profile = "orb"
+    ex = PaperExecutor(cfg)
+    t = Trade(symbol="XAUUSD", side=LONG, setup_type="orb", entry=101.0,
+              stop_loss=100.0, tp_targets=[TPTarget(104.0, 1.0),
+                                           TPTarget(104.0, 0.0), TPTarget(104.0, 0.0)],
+              position_size=10_000.0, risk_pct=0.5, leverage=1, max_loss=100.0,
+              score=60.0, threshold=60.0)
+    t.metadata.update({"entry_bar_ts": DAY0, "last_processed_bar_ts": DAY0,
+                       "current_stop": 100.0})
+    # Same-session bar (neither stop nor target): stays open.
+    ev = ex.simulate_fill(t, high=101.5, low=101.0, close=101.2, bar_ts=DAY0 + 3 * H)
+    assert all(e.kind != "SESSION" for e in ev)
+    assert t.status == "OPEN"
+    # A bar in the NEXT UTC session closes it at the session close.
+    ev = ex.simulate_fill(t, high=101.6, low=101.1, close=101.3, bar_ts=DAY0 + 25 * H)
+    assert any(e.kind == "SESSION" for e in ev)
+    assert t.status == "CLOSED"
+    assert t.close_reason == "SESSION"
+
+
+def test_orb_zero_target_is_unreachable():
+    from aurvex.risk import RiskManager
+    from aurvex.models import Signal, OrderBook
+    cfg = Config()
+    cfg.strategy_profile = "orb"
+    cfg.orb_target_r = 0.0                    # session-close mode
+    rm = RiskManager(cfg)
+    sig = Signal(symbol="XAUUSD", side=LONG, setup_type="orb",
+                 entry_hint=101.0, stop_hint=100.0, base_confidence=0.6)
+    snap = MarketSnapshot(symbol="XAUUSD", candles={},
+                          orderbook=OrderBook(bids=[[100.99, 1e6]], asks=[[101.01, 1e6]]),
+                          last_price=101.0)
+    rr = rm.evaluate(sig, snap, balance=100_000.0, open_notional=0.0)
+    assert rr.allowed
+    # Unreachable target (1000R) so only the stop or the SESSION exit closes it.
+    assert rr.tp_targets[0].price > 500.0
+
+
 def test_orb_target_in_risk_model():
     from aurvex.risk import RiskManager
     from aurvex.models import Signal, OrderBook
