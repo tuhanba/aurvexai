@@ -644,6 +644,17 @@ class Config:
     don_tp_r: float = field(default_factory=lambda: _float("DON_TP_R", 1000.0))
     max_stop_dist_pct_don: float = field(
         default_factory=lambda: _float("MAX_STOP_DIST_PCT_DON", 12.0))
+    # ORB (Opening Range Breakout) — FTMO intraday candidate (metals). The first
+    # ORB_HOURS bars of the session define a range; a break of it enters with the
+    # opposite range side as the structural stop and a fixed R target. Validated
+    # on gold/silver 1h (FTMO_ORB_SWEEP.md: 5/5 OOS folds).
+    orb_hours: int = field(default_factory=lambda: _int("ORB_HOURS", 1))
+    orb_target_r: float = field(default_factory=lambda: _float("ORB_TARGET_R", 3.0))
+    # UTC hour the session (and thus the opening range) begins. 0 = the UTC day.
+    orb_session_start: int = field(
+        default_factory=lambda: _int("ORB_SESSION_START", 0))
+    max_stop_dist_pct_orb: float = field(
+        default_factory=lambda: _float("MAX_STOP_DIST_PCT_ORB", 5.0))
     # BBW contraction gate on the donchian entry (campaign-7 F7 candidate,
     # CONDITIONAL_TA_WAVE_REPORT.md): the breakout is taken ONLY when the
     # signal bar's Bollinger Band Width percentile (BB(20,2) vs the trailing
@@ -987,9 +998,11 @@ class Config:
         )
         assert self.strategy_profile in {"bugra_replica", "aurvex_enhanced",
                                          "reversion_v1", "squeeze_breakout",
-                                         "donchian_trend"}, (
+                                         "donchian_trend", "ichimoku_trend",
+                                         "band_walk", "orb"}, (
             "STRATEGY_PROFILE must be bugra_replica|aurvex_enhanced|"
-            "reversion_v1|squeeze_breakout|donchian_trend"
+            "reversion_v1|squeeze_breakout|donchian_trend|ichimoku_trend|"
+            "band_walk|orb"
         )
         assert self.leverage_policy in {"efficient", "conservative"}, (
             "LEVERAGE_POLICY must be efficient|conservative"

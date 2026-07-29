@@ -100,7 +100,10 @@ def normalize_stop(cfg: Config, side: str, entry: float, stop: float,
                    cfg.strategy_profile == "ichimoku_trend")
     is_bandwalk = (profile_of(setup_type) == "band_walk" or
                    cfg.strategy_profile == "band_walk")
-    if is_bandwalk:
+    is_orb = (profile_of(setup_type) == "orb" or cfg.strategy_profile == "orb")
+    if is_orb:
+        max_stop = cfg.max_stop_dist_pct_orb
+    elif is_bandwalk:
         max_stop = cfg.max_stop_dist_pct_bw
     elif is_ichimoku:
         max_stop = cfg.max_stop_dist_pct_ich
@@ -407,6 +410,17 @@ class RiskManager:
             # contract intact; TP1 (fraction 1.0) closes the position fully first,
             # so the zero-fraction TP2/TP3 never realise anything.
             tp = entry + sign * r * cfg.rev_tp_r
+            return [
+                TPTarget(price=tp, fraction=1.0),
+                TPTarget(price=tp, fraction=0.0),
+                TPTarget(price=tp, fraction=0.0),
+            ]
+        is_orb = (profile_of(setup_type) == "orb" or
+                  cfg.strategy_profile == "orb")
+        if is_orb:
+            # ORB: a single fixed-R target taking 100% (structural OR-opposite
+            # stop is the other exit). Same 3-slot contract as reversion_v1.
+            tp = entry + sign * r * cfg.orb_target_r
             return [
                 TPTarget(price=tp, fraction=1.0),
                 TPTarget(price=tp, fraction=0.0),

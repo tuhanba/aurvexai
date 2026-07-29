@@ -677,6 +677,64 @@ def detect_band_walk(ctx: Context) -> Optional[Signal]:
     )
 
 
+def detect_orb(ctx: Context) -> Optional[Signal]:
+    """Opening Range Breakout (FTMO intraday, metals).
+
+    The first ``ORB_HOURS`` bars of the session (session start = ``ORB_SESSION_START``
+    UTC hour; 0 = the UTC day) define an opening range. The FIRST bar to break it
+    enters in the break direction with the opposite range side as the structural
+    stop; the risk model attaches a fixed ``ORB_TARGET_R`` target. Validated on
+    gold/silver 1h (FTMO_ORB_SWEEP.md: 5/5 out-of-sample folds).
+
+    Needs timestamped bars for session grouping, so it reads the snapshot's
+    closed LTF candles directly (not the timeframe-agnostic TFView arrays).
+    """
+    cfg = ctx.cfg
+    bars = ctx.snap.closed_ltf(cfg.ltf)
+    orb_hours = max(1, cfg.orb_hours)
+    if len(bars) < orb_hours + 2:
+        return None
+    sh = cfg.orb_session_start * 3_600_000
+
+    def _sess(ts: int) -> int:
+        return (ts - sh) // 86_400_000
+
+    last = bars[-1]
+    cur = _sess(last.ts)
+    session = [b for b in bars if _sess(b.ts) == cur]
+    if len(session) < orb_hours + 1:
+        return None                      # opening range not complete yet
+    if session[-1] is not last:
+        return None                      # only act on the just-closed bar
+    opening = session[:orb_hours]
+    hi = max(b.high for b in opening)
+    lo = min(b.low for b in opening)
+    if hi <= lo:
+        return None
+    post = session[orb_hours:]           # bars after the opening range
+    prior = post[:-1]                    # earlier this session (for first-break)
+    close = last.close
+    # Entry is the RANGE LEVEL (a stop-entry order at the breakout boundary,
+    # live-achievable on MT5/FTMO), NOT the breakout bar's close — the edge lives
+    # in the tight range-width risk. Stop = the opposite range side.
+    if last.high >= hi and not any(b.high >= hi for b in prior):
+        side, entry, stop = LONG, hi, lo
+    elif last.low <= lo and not any(b.low <= lo for b in prior):
+        side, entry, stop = SHORT, lo, hi
+    else:
+        return None
+    rng = hi - lo
+    strength = _clamp01(abs(close - entry) / max(rng, 1e-12))
+    return Signal(
+        symbol=ctx.snap.symbol, side=side, setup_type="orb",
+        entry_hint=entry, stop_hint=stop,
+        base_confidence=0.55 + 0.1 * strength,
+        factors={"or_break": strength},
+        notes=(f"ORB {orb_hours}h break {side} · range "
+               f"[{lo:g},{hi:g}] · stop opposite side · tgt {cfg.orb_target_r:g}R"),
+    )
+
+
 def _build_registry(cfg: Config) -> List[Callable[[Context], Optional[Signal]]]:
     """Return the detector list for the configured strategy profile.
 
@@ -701,6 +759,8 @@ def _build_registry(cfg: Config) -> List[Callable[[Context], Optional[Signal]]]:
         return [detect_ichimoku_trend]
     if cfg.strategy_profile == "band_walk":
         return [detect_band_walk]
+    if cfg.strategy_profile == "orb":
+        return [detect_orb]
     return [detect_aurvex_enhanced]
 
 
