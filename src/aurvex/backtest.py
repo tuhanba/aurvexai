@@ -136,6 +136,11 @@ class Backtester:
         self.detector = SetupDetector(cfg)
         self.engine = DecisionEngine(cfg)
         self.executor = PaperExecutor(cfg)
+        # Optional per-symbol detector map for a multi-EDGE portfolio (e.g. gold
+        # ORB + DAX PDHL on one shared account). Populated by run(symbol_profile=).
+        # Routing downstream (risk targets, stop ceiling, session exit) keys on
+        # each signal's setup_type, so a single shared cfg is fine.
+        self._sym_detectors: Dict[str, SetupDetector] = {}
         # Closed Trade objects from the most recent run(); the walk-forward
         # orchestrator reads these to build per-window OOS TradeResults.
         self._last_closed: List[Candle] = []
@@ -203,8 +208,19 @@ class Backtester:
             trade.realized_pnl_pct = trade.realized_pnl / risk_amount
         return fund
 
-    def run(self, ltf_data: Dict[str, List[Candle]]) -> Dict:
+    def run(self, ltf_data: Dict[str, List[Candle]],
+            symbol_profile: Optional[Dict[str, str]] = None) -> Dict:
         cfg = self.cfg
+        # Multi-edge portfolio: build a per-symbol detector from a cfg clone whose
+        # strategy_profile selects that symbol's detector. All other params are
+        # shared; per-signal routing is by setup_type.
+        self._sym_detectors = {}
+        if symbol_profile:
+            import copy as _copy
+            for sym, prof in symbol_profile.items():
+                c2 = _copy.copy(cfg)
+                c2.strategy_profile = prof
+                self._sym_detectors[sym] = SetupDetector(c2)
         htf_data = {s: resample(c, cfg.ltf, cfg.htf) for s, c in ltf_data.items()}
         warmup = max(45, cfg.htf_limit)
         tf_ms = _tf_ms(cfg.ltf)
@@ -313,7 +329,8 @@ class Backtester:
             )
             if build_context(cfg, snap) is None:
                 continue
-            signal = self.detector.detect(snap)
+            det = self._sym_detectors.get(sym, self.detector)
+            signal = det.detect(snap)
             if signal is None:
                 continue
             signals_seen += 1

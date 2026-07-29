@@ -1,5 +1,13 @@
 # ORB cost verdict — realistic FTMO spreads (go/no-go)
 
+> **Correction (cost convention):** the round-trip figures in this file used
+> per-side = rt/2, so the true round-trip is **2× each label below** (the risk
+> model's round-trip = `(taker+slip)/100*2`). Re-measured with the corrected
+> convention (`FTMO_PORTFOLIO.md`), gold ORB is **more** cost-robust than stated
+> here — it still passes at a true 0.06% round-trip. The qualitative verdict
+> stands: gold viable, silver dead, edge execution-sensitive.
+
+
 The ORB edge is execution-sensitive, so this converts FTMO's published *typical*
 spreads into the **per-instrument % cost** that actually hits the strategy, and
 re-runs the governed gold ORB at those levels. It is the honest go/no-go for the

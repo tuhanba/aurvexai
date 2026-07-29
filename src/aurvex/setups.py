@@ -735,6 +735,52 @@ def detect_orb(ctx: Context) -> Optional[Signal]:
     )
 
 
+def detect_pdhl(ctx: Context) -> Optional[Signal]:
+    """Previous-Day High/Low breakout (FTMO intraday, indices — DAX validated).
+
+    The FIRST bar of the current session to break the PRIOR session's high (LONG)
+    or low (SHORT) enters at that level (stop-entry, live-achievable), with an
+    ATR-based stop (``PDHL_STOP_ATR`` × ATR14) — a wider risk than ORB, so cost is
+    a smaller fraction of it (more slippage-robust). Shares ORB's session-close
+    exit. Sessions are UTC days shifted by ``ORB_SESSION_START``.
+    """
+    cfg = ctx.cfg
+    bars = ctx.snap.closed_ltf(cfg.ltf)
+    if len(bars) < 3 or ctx.ltf_atr is None or ctx.ltf_atr <= 0:
+        return None
+    sh = cfg.orb_session_start * 3_600_000
+
+    def _sess(ts: int) -> int:
+        return (ts - sh) // 86_400_000
+
+    last = bars[-1]
+    cur = _sess(last.ts)
+    cur_bars = [b for b in bars if _sess(b.ts) == cur]
+    prev = [b for b in bars if _sess(b.ts) == cur - 1]
+    if not prev or not cur_bars or cur_bars[-1] is not last:
+        return None
+    ph = max(b.high for b in prev)
+    pl = min(b.low for b in prev)
+    earlier = cur_bars[:-1]                 # earlier bars this session
+    if last.high >= ph and not any(b.high >= ph for b in earlier):
+        side, entry = LONG, ph
+    elif last.low <= pl and not any(b.low <= pl for b in earlier):
+        side, entry = SHORT, pl
+    else:
+        return None
+    stop_dist = cfg.pdhl_stop_atr * ctx.ltf_atr
+    stop = entry - stop_dist if side == LONG else entry + stop_dist
+    strength = _clamp01(abs(last.close - entry) / max(stop_dist, 1e-12))
+    return Signal(
+        symbol=ctx.snap.symbol, side=side, setup_type="pdhl",
+        entry_hint=entry, stop_hint=stop,
+        base_confidence=0.55 + 0.1 * strength,
+        factors={"pd_break": strength},
+        notes=(f"prev-day {'high' if side == LONG else 'low'} break {side} · "
+               f"stop {cfg.pdhl_stop_atr:g}xATR · session-close exit"),
+    )
+
+
 def _build_registry(cfg: Config) -> List[Callable[[Context], Optional[Signal]]]:
     """Return the detector list for the configured strategy profile.
 
@@ -761,6 +807,8 @@ def _build_registry(cfg: Config) -> List[Callable[[Context], Optional[Signal]]]:
         return [detect_band_walk]
     if cfg.strategy_profile == "orb":
         return [detect_orb]
+    if cfg.strategy_profile == "pdhl":
+        return [detect_pdhl]
     return [detect_aurvex_enhanced]
 
 

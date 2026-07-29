@@ -432,7 +432,7 @@ class BaseExecutor:
         #    UTC day shifted by ORB_SESSION_START), close everything at this
         #    bar's close (reason "SESSION"). Only fires for the orb profile, so
         #    parity for every other strategy is preserved.
-        if (bar_ts is not None and profile_of(trade.setup_type) == "orb"
+        if (bar_ts is not None and profile_of(trade.setup_type) in ("orb", "pdhl")
                 and trade.status == OPEN):
             sh = int(getattr(self.cfg, "orb_session_start", 0)) * 3_600_000
             entry_ts = int(trade.metadata.get("entry_bar_ts", 0) or 0)

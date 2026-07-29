@@ -655,6 +655,11 @@ class Config:
         default_factory=lambda: _int("ORB_SESSION_START", 0))
     max_stop_dist_pct_orb: float = field(
         default_factory=lambda: _float("MAX_STOP_DIST_PCT_ORB", 5.0))
+    # PDHL (Previous-Day High/Low breakout) — FTMO intraday candidate (indices).
+    # Break of the prior session's high/low with an ATR-based stop and a session-
+    # close exit; more slippage-robust than ORB (FTMO_EDGE_SEARCH2.md: DAX 5/5
+    # folds surviving 0.06% round-trip). Shares ORB's session-close exit model.
+    pdhl_stop_atr: float = field(default_factory=lambda: _float("PDHL_STOP_ATR", 1.5))
     # BBW contraction gate on the donchian entry (campaign-7 F7 candidate,
     # CONDITIONAL_TA_WAVE_REPORT.md): the breakout is taken ONLY when the
     # signal bar's Bollinger Band Width percentile (BB(20,2) vs the trailing
@@ -999,10 +1004,10 @@ class Config:
         assert self.strategy_profile in {"bugra_replica", "aurvex_enhanced",
                                          "reversion_v1", "squeeze_breakout",
                                          "donchian_trend", "ichimoku_trend",
-                                         "band_walk", "orb"}, (
+                                         "band_walk", "orb", "pdhl"}, (
             "STRATEGY_PROFILE must be bugra_replica|aurvex_enhanced|"
             "reversion_v1|squeeze_breakout|donchian_trend|ichimoku_trend|"
-            "band_walk|orb"
+            "band_walk|orb|pdhl"
         )
         assert self.leverage_policy in {"efficient", "conservative"}, (
             "LEVERAGE_POLICY must be efficient|conservative"
