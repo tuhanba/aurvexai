@@ -963,6 +963,20 @@ class Config:
     # correlated trends. 0 disables. Only consulted when FTMO Mode is on.
     ftmo_max_cluster: int = field(
         default_factory=lambda: _int("FTMO_MAX_CLUSTER", 2))
+    # -- FTMO/MT5 auto-execution (DISARMED by default) ----------------------
+    # A future real-order path via MetaTrader5, mirroring the Binance five-gate
+    # discipline: it stays a SIMULATED stub unless EVERY gate is open —
+    # FTMO_LIVE_EXECUTE=true + MT5 login/password/server + the human-confirm
+    # token + the MetaTrader5 package importable. Every default keeps it off; it
+    # never reaches a broker by default. Secrets live only in .env, never in git.
+    ftmo_live_execute: bool = field(
+        default_factory=lambda: _bool("FTMO_LIVE_EXECUTE", False))
+    ftmo_mt5_login: str = field(default_factory=lambda: _str("FTMO_MT5_LOGIN", ""))
+    ftmo_mt5_password: str = field(
+        default_factory=lambda: _str("FTMO_MT5_PASSWORD", ""))
+    ftmo_mt5_server: str = field(default_factory=lambda: _str("FTMO_MT5_SERVER", ""))
+    ftmo_mt5_human_confirm: str = field(
+        default_factory=lambda: _str("FTMO_MT5_HUMAN_CONFIRM", ""))
 
     def ftmo_ruleset(self):
         """Build the FtmoRuleSet described by the FTMO_* config (standard

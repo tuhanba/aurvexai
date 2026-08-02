@@ -101,3 +101,38 @@ FTMO_MODE_ENABLED=true STRATEGY_PROFILE=orb ORB_HOURS=1 ORB_TARGET_R=0 python ma
 
 The measurement is turnkey; the only thing that needs a human + a broker is
 placing the trades and recording the fills.
+
+## Demo toolkit — all the helpers
+
+| Helper | What it does |
+|---|---|
+| `scripts/ftmo_signals_today.py` | Today's ORB/PDHL order tickets **with lot sizing** (entry, stop, ~lots). |
+| `scripts/ftmo_send_signals.py` | Same tickets **pushed to Telegram** — run as a daily cron after 01:00 UTC. |
+| `scripts/ftmo_recent_trades.py` | **Dry run:** what the edges actually did in the last ~45 sessions on real data. |
+| `scripts/ftmo_verify_ppv.py` | Back out your broker's true contract value (PPV) from one closed trade. |
+| `scripts/ftmo_slippage_check.py` | Turn your recorded fills into a per-instrument **GO/NO-GO**. |
+| `docs/ftmo_fills_template.csv` | The fills CSV template to copy. |
+
+**Daily Telegram cron** (levels on your phone every weekday after the gold first
+hour closes):
+
+```
+5 1 * * 1-5  cd /path/to/aurvexai && PYTHONPATH=src FTMO_ACCOUNT_SIZE=100000 \
+  FTMO_GER40_PPV=25 FTMO_NAS100_PPV=20 python scripts/ftmo_send_signals.py
+```
+(Requires `TELEGRAM_ENABLED=true` + `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` in
+`.env`; without them it just prints.)
+
+**Verify your index contract sizes first** — indices vary by broker and a wrong
+PPV mis-sizes every trade. After one closed index trade:
+`python scripts/ftmo_verify_ppv.py <entry> <exit> <lots> <realised_pnl>` → set the
+printed value as `FTMO_GER40_PPV` / `FTMO_NAS100_PPV`.
+
+## Auto-execution (later, disarmed)
+
+`src/aurvex/ftmo/mt5_adapter.py` is the future MT5 order path. It is **disarmed**:
+a simulated stub unless `FTMO_LIVE_EXECUTE=true` **and** MT5 credentials **and**
+`FTMO_MT5_HUMAN_CONFIRM=I_UNDERSTAND` **and** the `MetaTrader5` package are all
+present (mirrors the Binance five-gate lock). Do not arm it until the demo
+GO/NO-GO is GO, and even then run it on the demo first. The real `order_send` path
+is a reviewed skeleton, not yet executed against a live terminal.
