@@ -63,7 +63,7 @@ def run_one(data, governed=False, **kw):
 
 def date_of(ts_ms):
     import datetime as dt
-    return dt.datetime.utcfromtimestamp(ts_ms / 1000.0).strftime("%Y-%m")
+    return dt.datetime.fromtimestamp(ts_ms / 1000.0, dt.timezone.utc).strftime("%Y-%m")
 
 
 def main():

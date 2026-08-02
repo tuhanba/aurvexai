@@ -35,7 +35,7 @@ def cfg():
 
 
 def d(ts):
-    return dt.datetime.utcfromtimestamp(ts / 1000).strftime("%Y-%m-%d")
+    return dt.datetime.fromtimestamp(ts / 1000, dt.timezone.utc).strftime("%Y-%m-%d")
 
 
 def main():

@@ -53,7 +53,7 @@ def run(data, rt):
 
 
 def ym(ts):
-    return dt.datetime.utcfromtimestamp(ts / 1000.0).strftime("%Y-%m")
+    return dt.datetime.fromtimestamp(ts / 1000.0, dt.timezone.utc).strftime("%Y-%m")
 
 
 def main():
