@@ -49,7 +49,7 @@ def test_pdhl_ticket_uses_prior_day_and_atr():
     assert t is not None and t.strategy == "PDHL"
     assert t.buy_stop == 110.0 and t.sell_stop == 100.0   # prior-day high/low
     assert t.stop_dist > 0 and t.lots > 0
-    assert t.verify is True                               # index -> verify PPV
+    assert t.verify is False                              # PPV calibrated to FTMO
 
 
 def test_format_tickets_text():

@@ -19,8 +19,8 @@ INSTRUMENTS = {"XAUUSD": "ORB", "GER40": "PDHL", "NAS100": "PDHL"}
 #   XAUUSD  contract 100 oz -> $100/point   (verify the gold spec once)
 #   US100.cash / GER40.cash  contract size 1 -> 1 currency-unit/point
 # (GER40.cash may be EUR-quoted; confirm its quote currency, else verify by trade.)
-DEFAULT_PPV = {"XAUUSD": 100.0, "GER40": 1.0, "NAS100": 1.0}
-VERIFY_PPV = {"XAUUSD": False, "GER40": True, "NAS100": False}
+DEFAULT_PPV = {"XAUUSD": 100.0, "GER40": 1.15, "NAS100": 1.0}
+VERIFY_PPV = {"XAUUSD": False, "GER40": False, "NAS100": False}
 
 
 @dataclass
