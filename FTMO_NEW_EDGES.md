@@ -40,6 +40,23 @@ so we walk-forwarded them.
 
 **New validated portfolio:** `XAUUSD ORB + GER40 PDHL + NAS100 PDHL + JP225 PDHL`.
 
+## Safe-risk ceiling (acceleration sweep)
+
+Risk sweep of the 4-edge portfolio across the same 5 OOS folds — the highest
+per-trade risk at which NO fold breaches the FTMO drawdown band:
+
+| risk % | folds + | worst-fold maxDD | verdict |
+|---:|:---:|---:|---|
+| **0.50** | 5/5 | **8.6%** | ✅ safe ceiling |
+| 0.60 | 5/5 | 9.9% | ⚠️ at the limit (breaches with real slippage) |
+| 0.70 | 5/5 | 10.7% | ❌ breach |
+| 0.85–1.0 | 4/5 | 12.9% | ❌ breach |
+
+**0.5% is already the safe ceiling** — the system is correctly sized and the risk
+knob offers no free acceleration. Raising it to 0.6% adds ~5%/fold but pushes the
+worst fold to 9.9%, which real fills would tip over. Acceleration therefore comes
+from **added uncorrelated edges** (JP225: fold return ~23%→~36%), not more risk.
+
 ## Caveats
 Yahoo proxy feeds (Nikkei via ^N225), flat cost, simplified stop-entry fills,
 UTC-session anchoring. The base's per-fold and full-sample drawdowns compound over
