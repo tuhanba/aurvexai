@@ -15,14 +15,17 @@
 //|   - Friday pre-close flatten (weekend-flat compliance) + weekend  |
 //|     entry block                                                    |
 //|   - min-lot over-risk guard (skips a trade that can't be sized)   |
+//|  v1.2 (2026-08-03):                                                |
+//|   - high-impact news buffer (FTMO news rule) via MT5 calendar     |
+//|   - no-chase: skip a setup whose range already broke before arming|
 //|                                                                    |
 //|  ⚠ DEMO FIRST. Test on the FTMO Free Trial and watch it before    |
 //|  any funded use. Start with gold only (indices default false).    |
-//|  NOT YET IMPLEMENTED: the 2-minute news buffer (Standard accounts) |
-//|  — add before funded, or use a Swing account (news-exempt).        |
+//|  The news buffer needs the terminal's Economic Calendar (built in |
+//|  to MT5); if the calendar is empty it fails safe (does not block). |
 //+------------------------------------------------------------------+
 #property copyright "Aurvex"
-#property version   "1.10"
+#property version   "1.20"
 #property strict
 #include <Trade/Trade.mqh>
 
@@ -36,6 +39,8 @@ input double DailyStopBufferPct = 1.0;    // stop this % BEFORE the FTMO floor (
 input int    FtmoResetHourUTC = 22;       // FTMO day reset in UTC (22=CEST summer, 23=CET winter)
 input int    FridayFlattenHourUTC = 20;   // close everything before Friday's market close (UTC)
 input double MaxSingleRiskMult = 2.0;     // skip a trade if forced min-lot risk exceeds this x target
+input bool   AvoidNews        = true;     // block entries around high-impact news (FTMO news rule)
+input int    NewsBufferMin    = 2;        // minutes each side of a high-impact event to stand down
 input double AccountSize      = 0;        // 0 = use balance at first start
 input long   Magic            = 770077;   // our order id
 //--- instruments (start GOLD ONLY; enable indices after gold is proven)
@@ -77,7 +82,7 @@ int OnInit()
    g_lastDay = UtcDayStart(TimeGMT());
    g_ftmoDay = FtmoDayStart(TimeGMT());
    EventSetTimer(20);
-   PrintFormat("AurvexFTMO v1.1 started. instruments=%d initBal=%.2f", g_n, g_initBal);
+   PrintFormat("AurvexFTMO v1.2 started. instruments=%d initBal=%.2f", g_n, g_initBal);
    return(INIT_SUCCEEDED);
 }
 void OnDeinit(const int reason){ EventKillTimer(); }
@@ -157,11 +162,24 @@ void OnTimer()
       if(HasPosition(g_sym[i])) { g_tradedToday[i]=true; continue; }
       if(g_tradedToday[i]) { DeletePendings(g_sym[i]); continue; }  // already traded -> no re-entry
 
+      // FTMO news rule: within the buffer of a high-impact event for this symbol's
+      // currency, cancel pendings (avoid a news-time fill) and don't arm new ones.
+      if(IsNewsBlackout(g_sym[i])) { DeletePendings(g_sym[i]); continue; }
+
+      double bid = SymbolInfoDouble(g_sym[i], SYMBOL_BID);
+      double ask = SymbolInfoDouble(g_sym[i], SYMBOL_ASK);
+      double px  = (bid>0 && ask>0) ? (bid+ask)/2.0 : bid;
+
       if(g_strat[i]=="ORB")
       {
          if(nowGmt < today + (datetime)OrbHours*3600) continue;     // first UTC hour not closed
          double hi,lo;
          if(!FirstHourRange(g_sym[i], today, hi, lo)) continue;
+         if(px>0 && (px<lo || px>hi)) {                             // range already broke -> don't chase
+            g_tradedToday[i]=true;
+            Notify(g_sym[i]+" ORB: range already broken before arming — skip today");
+            continue;
+         }
          EnsureStops(g_sym[i], hi, lo, lo, hi, "AurvexORB");        // buy=hi, sell=lo
       }
       else // PDHL
@@ -169,6 +187,11 @@ void OnTimer()
          double ph,pl,atr;
          if(!PrevDayRange(g_sym[i], today, ph, pl)) continue;
          if(!Atr14(g_sym[i], atr) || atr<=0) continue;
+         if(px>0 && (px<pl || px>ph)) {                             // already outside prior-day range
+            g_tradedToday[i]=true;
+            Notify(g_sym[i]+" PDHL: prior-day range already broken before arming — skip today");
+            continue;
+         }
          double d = PdhlStopATR*atr;
          EnsureStops(g_sym[i], ph, ph-d, pl, pl+d, "AurvexPDHL");
       }
@@ -297,7 +320,7 @@ bool HasPending(string sym)
 bool HasPendingSide(string sym, bool isBuy)
 {
    for(int i=OrdersTotal()-1;i>=0;i--){
-      ulong t=OrderGetTicket(i);
+      if(OrderGetTicket(i)==0) continue;               // selects the order
       if(OrderGetString(ORDER_SYMBOL)==sym && OrderGetInteger(ORDER_MAGIC)==Magic){
          long type = OrderGetInteger(ORDER_TYPE);
          if(isBuy  && type==ORDER_TYPE_BUY_STOP)  return true;
@@ -342,6 +365,32 @@ bool LossGuardOk()
    if(eq <= dailyFloor)  { Notify("GUARD: daily floor — flatten + stop for the day");  return false; }
    if(eq <= overallFloor){ Notify("GUARD: overall floor — flatten + stop");            return false; }
    return true;
+}
+
+//+------------------------------------------------------------------+
+//| High-impact news buffer (FTMO news rule)                         |
+//+------------------------------------------------------------------+
+// True if a HIGH-importance event for this symbol's quote currency falls within
+// NewsBufferMin minutes either side of now. Uses the terminal's built-in
+// Economic Calendar; if the calendar has no data it returns false (fail-safe:
+// trading is not blocked when we can't see the calendar).
+bool IsNewsBlackout(string sym)
+{
+   if(!AvoidNews || NewsBufferMin<=0) return false;
+   string ccy = SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT);   // XAUUSD/US100->USD, GER40->EUR
+   if(StringLen(ccy)==0) return false;
+   datetime now  = TimeGMT();
+   datetime from = now - (datetime)(NewsBufferMin*60);
+   datetime to   = now + (datetime)(NewsBufferMin*60);
+   MqlCalendarValue vals[];
+   int n = CalendarValueHistory(vals, from, to, NULL, ccy);
+   for(int i=0;i<n;i++){
+      MqlCalendarEvent ev;
+      if(CalendarEventById(vals[i].event_id, ev)){
+         if(ev.importance==CALENDAR_IMPORTANCE_HIGH) return true;
+      }
+   }
+   return false;
 }
 
 //+------------------------------------------------------------------+

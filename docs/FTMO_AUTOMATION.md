@@ -44,10 +44,18 @@ loss guard.
 - `MaxSingleRiskMult = 2.0` — if the broker's minimum lot would force risk above
   `2×` the target, the EA **skips** that trade instead of over-risking (matters on
   small $10k/$25k accounts).
+- `AvoidNews = true`, `NewsBufferMin = 2` — the FTMO news rule. Within 2 minutes
+  either side of a **high-impact** event for the symbol's currency (USD for
+  XAUUSD/US100, EUR for GER40), the EA cancels its pendings and does not arm new
+  ones. It reads MT5's built-in Economic Calendar; if the calendar is empty it
+  **fails safe** (does not block). Make sure the terminal's calendar is enabled.
 
-> **Still NOT implemented:** the 2-minute news buffer (only relevant on **Standard**
-> funded accounts). On the demo and in the Challenge this is not a hard failure; add
-> it before a Standard funded account, or use a **Swing** account (news-exempt).
+### No-chase (v1.2)
+If the opening range (ORB) or prior-day range (PDHL) has **already broken before
+the EA arms** — e.g. you attach it mid-session, or price gapped — the EA **skips
+that symbol for the day** instead of placing a late/reverse order. So a clean
+"first break wins" only fires from an un-broken range. On a normal overnight run
+this never triggers; it just protects mid-day attaches.
 
 ### Watch it (first days)
 - The EA prints to the **Uzmanlar (Experts)** tab every action.
