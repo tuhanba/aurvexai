@@ -1,37 +1,33 @@
 //+------------------------------------------------------------------+
 //|  AurvexFTMO.mq5  —  ORB (gold) + PDHL (indices) auto-executor     |
-//|  Places the exact stop-entry setups the Aurvex research validated:|
-//|   * XAUUSD   Opening Range Breakout (first UTC hour)              |
-//|   * GER40 / US100  Previous-Day High/Low breakout (ATR stop)      |
-//|  First break wins; flat by 00:00 UTC; risk-based sizing from the  |
-//|  broker's tick value (handles EUR-quoted GER40 automatically).    |
 //|                                                                    |
-//|  v1.1 hardening (2026-08-03):                                      |
-//|   - loss guard now CLOSES positions (not just pendings) + buffer  |
-//|   - both stop sides placed independently, missing side retried    |
-//|   - per-symbol order filling mode (fixes index rejections)        |
-//|   - FTMO-day (CET) baseline for the daily-loss guard, separate    |
-//|     from the UTC trading session used by the strategy             |
-//|   - Friday pre-close flatten (weekend-flat compliance) + weekend  |
-//|     entry block                                                    |
-//|   - min-lot over-risk guard (skips a trade that can't be sized)   |
-//|  v1.2 (2026-08-03):                                                |
-//|   - high-impact news buffer (FTMO news rule) via MT5 calendar     |
-//|   - no-chase: skip a setup whose range already broke before arming|
+//|  v2.0 (2026-08-03): PER-CHART design.                             |
+//|  Attach ONE instance to EACH chart you want to trade:             |
+//|    * XAUUSD  -> Opening Range Breakout (first UTC hour)  [ORB]    |
+//|    * GER40 / US100 (indices) -> Previous-Day High/Low   [PDHL]    |
+//|  Each instance trades ONLY its own chart symbol and DRAWS its     |
+//|  entry/stop levels on that chart, so nothing overlaps and you can |
+//|  see the plan. Strategy is auto-detected from the symbol (metals  |
+//|  = ORB, else PDHL); override with ForceStrategy if needed.        |
 //|                                                                    |
-//|  ⚠ DEMO FIRST. Test on the FTMO Free Trial and watch it before    |
-//|  any funded use. Start with gold only (indices default false).    |
-//|  The news buffer needs the terminal's Economic Calendar (built in |
-//|  to MT5); if the calendar is empty it fails safe (does not block). |
+//|  Carries the v1.1/v1.2 FTMO hardening: loss guard that CLOSES     |
+//|  positions with a safety buffer, CET-aligned daily baseline,      |
+//|  Friday weekend-flat + weekend block, two-sided stop retry,       |
+//|  per-symbol filling, min-lot over-risk skip, high-impact news     |
+//|  buffer, and a no-chase guard (skip an already-broken range).     |
+//|                                                                    |
+//|  ⚠ DEMO FIRST. Set AccountSize to your real account size (e.g.    |
+//|  100000) so the overall-loss floor is stable across restarts.     |
 //+------------------------------------------------------------------+
 #property copyright "Aurvex"
-#property version   "1.20"
+#property version   "2.00"
 #property strict
 #include <Trade/Trade.mqh>
 
 //--- inputs -------------------------------------------------------------
 input double RiskPct          = 0.5;      // risk per trade (% of balance)
-input int    OrbHours         = 1;        // opening-range length (hours)
+input string ForceStrategy    = "AUTO";   // AUTO | ORB | PDHL  (AUTO: metals=ORB, else PDHL)
+input int    OrbHours         = 1;        // opening-range length (hours), ORB only
 input double PdhlStopATR      = 1.5;      // PDHL stop = ATR(14) * this
 input int    MaxDailyLossPct  = 5;        // FTMO 2-step daily limit (guard)
 input int    MaxOverallLossPct= 10;       // FTMO 2-step overall limit (guard)
@@ -41,51 +37,48 @@ input int    FridayFlattenHourUTC = 20;   // close everything before Friday's ma
 input double MaxSingleRiskMult = 2.0;     // skip a trade if forced min-lot risk exceeds this x target
 input bool   AvoidNews        = true;     // block entries around high-impact news (FTMO news rule)
 input int    NewsBufferMin    = 2;        // minutes each side of a high-impact event to stand down
-input double AccountSize      = 0;        // 0 = use balance at first start
+input bool   DrawLevels       = true;     // draw entry/stop lines on the chart
+input double AccountSize      = 0;        // 0 = use balance at first start (set 100000 for stability)
 input long   Magic            = 770077;   // our order id
-//--- instruments (start GOLD ONLY; enable indices after gold is proven)
-input bool   Trade_XAUUSD     = true;
-input string Sym_XAUUSD       = "XAUUSD";
-input bool   Trade_GER40      = false;
-input string Sym_GER40        = "GER40.cash";
-input bool   Trade_US100      = false;
-input string Sym_US100        = "US100.cash";
-//--- optional Telegram (whitelist api.telegram.org in Tools>Options>EA)
-input string TelegramToken    = "";
-input string TelegramChatID   = "";
+input string TelegramToken    = "";       // optional Telegram bot token
+input string TelegramChatID   = "";       // optional Telegram chat id
 
-CTrade  trade;
-//--- per-symbol runtime state
-string  g_sym[3];
-string  g_strat[3];       // "ORB" | "PDHL"
-bool    g_enabled[3];
-bool    g_tradedToday[3];  // a position already opened today for this symbol (latch)
-int     g_n = 0;
+CTrade   trade;
+string   SYM;                 // this chart's symbol
+string   STRAT;               // "ORB" | "PDHL" for this chart
+bool     g_tradedToday = false;
 
-datetime g_lastDay      = 0;   // UTC trading day (strategy session)
-datetime g_ftmoDay      = 0;   // FTMO day (CET-aligned) for the loss guard
-double   g_ftmoDayOpenBal = 0; // balance at the start of the current FTMO day
-double   g_initBal      = 0;
-bool     g_fridayFlat   = false;
+datetime g_lastDay        = 0;   // UTC trading day (strategy session)
+datetime g_ftmoDay        = 0;   // FTMO day (CET-aligned) for the loss guard
+double   g_ftmoDayOpenBal = 0;   // balance at the start of the current FTMO day
+double   g_initBal        = 0;
+bool     g_fridayFlat     = false;
 
 //+------------------------------------------------------------------+
 int OnInit()
 {
+   SYM   = _Symbol;
+   STRAT = DetectStrategy();
    trade.SetExpertMagicNumber(Magic);
-   g_n = 0;
-   if(Trade_XAUUSD){ g_sym[g_n]=Sym_XAUUSD; g_strat[g_n]="ORB";  g_enabled[g_n]=true; g_n++; }
-   if(Trade_GER40 ){ g_sym[g_n]=Sym_GER40;  g_strat[g_n]="PDHL"; g_enabled[g_n]=true; g_n++; }
-   if(Trade_US100 ){ g_sym[g_n]=Sym_US100;  g_strat[g_n]="PDHL"; g_enabled[g_n]=true; g_n++; }
-   for(int i=0;i<g_n;i++){ g_tradedToday[i]=false; SymbolSelect(g_sym[i], true); }
-   g_initBal = (AccountSize>0 ? AccountSize : AccountInfoDouble(ACCOUNT_BALANCE));
+   trade.SetTypeFillingBySymbol(SYM);
+   SymbolSelect(SYM, true);
+   g_initBal        = (AccountSize>0 ? AccountSize : AccountInfoDouble(ACCOUNT_BALANCE));
    g_ftmoDayOpenBal = AccountInfoDouble(ACCOUNT_BALANCE);
-   g_lastDay = UtcDayStart(TimeGMT());
-   g_ftmoDay = FtmoDayStart(TimeGMT());
+   g_lastDay        = UtcDayStart(TimeGMT());
+   g_ftmoDay        = FtmoDayStart(TimeGMT());
    EventSetTimer(20);
-   PrintFormat("AurvexFTMO v1.2 started. instruments=%d initBal=%.2f", g_n, g_initBal);
+   PrintFormat("AurvexFTMO v2.0 on %s  strat=%s  initBal=%.2f", SYM, STRAT, g_initBal);
    return(INIT_SUCCEEDED);
 }
-void OnDeinit(const int reason){ EventKillTimer(); }
+void OnDeinit(const int reason){ EventKillTimer(); if(DrawLevels) DeleteLevels(); }
+
+string DetectStrategy()
+{
+   string s = ForceStrategy; StringToUpper(s);
+   if(s=="ORB" || s=="PDHL") return s;
+   if(StringFind(SYM,"XAU")>=0 || StringFind(SYM,"GOLD")>=0 || StringFind(SYM,"XAG")>=0) return "ORB";
+   return "PDHL";
+}
 
 //+------------------------------------------------------------------+
 //| day boundaries                                                   |
@@ -93,11 +86,11 @@ void OnDeinit(const int reason){ EventKillTimer(); }
 datetime UtcDayStart(datetime t){ return (datetime)((long)t/86400*86400); }
 
 // FTMO's daily-loss window resets at 00:00 CE(S)T. FtmoResetHourUTC expresses
-// that in UTC (22 in summer, 23 in winter). Returns the timestamp of the most
-// recent reset, so a change in this value marks a new FTMO day.
+// that in UTC (22 in summer, 23 in winter). A change in the returned value marks
+// a new FTMO day.
 datetime FtmoDayStart(datetime t)
 {
-   long shifted = (long)t - (long)FtmoResetHourUTC*3600;
+   long shifted  = (long)t - (long)FtmoResetHourUTC*3600;
    long dayFloor = (shifted/86400)*86400;
    return (datetime)(dayFloor + (long)FtmoResetHourUTC*3600);
 }
@@ -114,17 +107,18 @@ void OnTimer()
    {
       g_ftmoDayOpenBal = AccountInfoDouble(ACCOUNT_BALANCE);
       g_ftmoDay = ftmoDay;
-      Notify("FTMO day reset — daily baseline " + DoubleToString(g_ftmoDayOpenBal,2));
+      Notify(SYM+" FTMO day reset — daily baseline " + DoubleToString(g_ftmoDayOpenBal,2));
    }
 
-   //--- new UTC trading day: flatten yesterday, reset per-symbol latches
+   //--- new UTC trading day: flatten this symbol, reset latches, clear the drawing
    if(today != g_lastDay)
    {
-      SessionFlattenAll();
-      for(int i=0;i<g_n;i++) g_tradedToday[i]=false;
-      g_fridayFlat = false;
+      FlattenSymbol(SYM);
+      g_tradedToday = false;
+      g_fridayFlat  = false;
       g_lastDay = today;
-      Notify("New UTC day — flat, ready");
+      if(DrawLevels) DeleteLevels();
+      Notify(SYM+" new UTC day — flat, ready");
    }
 
    //--- weekend: no new entries (markets closed / gap risk)
@@ -137,64 +131,59 @@ void OnTimer()
    {
       if(!g_fridayFlat)
       {
-         SessionFlattenAll();
+         FlattenSymbol(SYM);
          g_fridayFlat = true;
-         Notify("Friday pre-close flatten — flat for the weekend");
+         Notify(SYM+" Friday pre-close flatten — flat for the weekend");
       }
-      return;                                // no new entries after the Friday cutoff
-   }
-
-   //--- FTMO loss guard: on a floor breach, CLOSE positions + cancel pendings, stop for the day
-   if(!LossGuardOk())
-   {
-      SessionFlattenAll();
-      for(int i=0;i<g_n;i++) g_tradedToday[i]=true;   // lock out re-entry until next day
       return;
    }
 
-   //--- per instrument
-   for(int i=0;i<g_n;i++)
+   //--- FTMO loss guard: on a floor breach, CLOSE this symbol + cancel pendings
+   if(!LossGuardOk())
    {
-      if(!g_enabled[i]) continue;
+      FlattenSymbol(SYM);
+      g_tradedToday = true;      // lock out re-entry until the next day
+      return;
+   }
 
-      // one side filled -> cancel the opposite pending, latch "traded today"
-      ManageFirstBreak(g_sym[i]);
-      if(HasPosition(g_sym[i])) { g_tradedToday[i]=true; continue; }
-      if(g_tradedToday[i]) { DeletePendings(g_sym[i]); continue; }  // already traded -> no re-entry
+   //--- one side filled -> cancel the opposite pending, latch "traded today"
+   ManageFirstBreak(SYM);
+   if(HasPosition(SYM)) { g_tradedToday=true; return; }
+   if(g_tradedToday)    { DeletePendings(SYM); return; }
 
-      // FTMO news rule: within the buffer of a high-impact event for this symbol's
-      // currency, cancel pendings (avoid a news-time fill) and don't arm new ones.
-      if(IsNewsBlackout(g_sym[i])) { DeletePendings(g_sym[i]); continue; }
+   //--- FTMO news rule: stand down within the buffer of a high-impact event
+   if(IsNewsBlackout(SYM)) { DeletePendings(SYM); return; }
 
-      double bid = SymbolInfoDouble(g_sym[i], SYMBOL_BID);
-      double ask = SymbolInfoDouble(g_sym[i], SYMBOL_ASK);
-      double px  = (bid>0 && ask>0) ? (bid+ask)/2.0 : bid;
+   double bid = SymbolInfoDouble(SYM, SYMBOL_BID);
+   double ask = SymbolInfoDouble(SYM, SYMBOL_ASK);
+   double px  = (bid>0 && ask>0) ? (bid+ask)/2.0 : bid;
 
-      if(g_strat[i]=="ORB")
-      {
-         if(nowGmt < today + (datetime)OrbHours*3600) continue;     // first UTC hour not closed
-         double hi,lo;
-         if(!FirstHourRange(g_sym[i], today, hi, lo)) continue;
-         if(px>0 && (px<lo || px>hi)) {                             // range already broke -> don't chase
-            g_tradedToday[i]=true;
-            Notify(g_sym[i]+" ORB: range already broken before arming — skip today");
-            continue;
-         }
-         EnsureStops(g_sym[i], hi, lo, lo, hi, "AurvexORB");        // buy=hi, sell=lo
+   if(STRAT=="ORB")
+   {
+      if(nowGmt < today + (datetime)OrbHours*3600) return;     // first UTC hour not closed
+      double hi,lo;
+      if(!FirstHourRange(SYM, today, hi, lo)) return;
+      if(DrawLevels) DrawSetup(hi, lo, lo, hi);                // buy=hi, sell=lo (draw always)
+      if(px>0 && (px<lo || px>hi)) {                           // range already broke -> don't chase
+         g_tradedToday=true;
+         Notify(SYM+" ORB: range already broken before arming — skip today");
+         return;
       }
-      else // PDHL
-      {
-         double ph,pl,atr;
-         if(!PrevDayRange(g_sym[i], today, ph, pl)) continue;
-         if(!Atr14(g_sym[i], atr) || atr<=0) continue;
-         if(px>0 && (px<pl || px>ph)) {                             // already outside prior-day range
-            g_tradedToday[i]=true;
-            Notify(g_sym[i]+" PDHL: prior-day range already broken before arming — skip today");
-            continue;
-         }
-         double d = PdhlStopATR*atr;
-         EnsureStops(g_sym[i], ph, ph-d, pl, pl+d, "AurvexPDHL");
+      EnsureStops(SYM, hi, lo, lo, hi, "AurvexORB");
+   }
+   else // PDHL
+   {
+      double ph,pl,atr;
+      if(!PrevDayRange(SYM, today, ph, pl)) return;
+      if(!Atr14(SYM, atr) || atr<=0) return;
+      double d = PdhlStopATR*atr;
+      if(DrawLevels) DrawSetup(ph, ph-d, pl, pl+d);            // buy=ph, sell=pl (draw always)
+      if(px>0 && (px<pl || px>ph)) {                           // already outside prior-day range
+         g_tradedToday=true;
+         Notify(SYM+" PDHL: prior-day range already broken before arming — skip today");
+         return;
       }
+      EnsureStops(SYM, ph, ph-d, pl, pl+d, "AurvexPDHL");
    }
 }
 
@@ -298,25 +287,50 @@ void EnsureStops(string sym, double buyPrice, double buySL,
 }
 
 //+------------------------------------------------------------------+
-//| order/position management                                        |
+//| chart level drawing                                              |
+//+------------------------------------------------------------------+
+void DrawHLine(string tag, double price, color col, int style)
+{
+   string name = tag + "_" + (string)Magic;
+   if(ObjectFind(0,name) < 0)
+      ObjectCreate(0, name, OBJ_HLINE, 0, 0, price);
+   else
+      ObjectSetDouble(0, name, OBJPROP_PRICE, price);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, col);
+   ObjectSetInteger(0, name, OBJPROP_STYLE, style);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
+   ObjectSetInteger(0, name, OBJPROP_BACK, true);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetString (0, name, OBJPROP_TEXT, tag);
+}
+void DrawSetup(double buyP, double buySL, double sellP, double sellSL)
+{
+   DrawHLine("AX_BUY",    buyP,   clrLime, STYLE_SOLID);
+   DrawHLine("AX_BUYSL",  buySL,  clrGray, STYLE_DOT);
+   DrawHLine("AX_SELL",   sellP,  clrRed,  STYLE_SOLID);
+   DrawHLine("AX_SELLSL", sellSL, clrGray, STYLE_DOT);
+   ChartRedraw(0);
+}
+void DeleteLevels()
+{
+   ObjectDelete(0, "AX_BUY_"    + (string)Magic);
+   ObjectDelete(0, "AX_BUYSL_"  + (string)Magic);
+   ObjectDelete(0, "AX_SELL_"   + (string)Magic);
+   ObjectDelete(0, "AX_SELLSL_" + (string)Magic);
+   ChartRedraw(0);
+}
+
+//+------------------------------------------------------------------+
+//| order/position management (this symbol only)                     |
 //+------------------------------------------------------------------+
 bool HasPosition(string sym)
 {
    for(int i=PositionsTotal()-1;i>=0;i--){
-      ulong t=PositionGetTicket(i);
+      if(PositionGetTicket(i)==0) continue;
       if(PositionGetString(POSITION_SYMBOL)==sym &&
          PositionGetInteger(POSITION_MAGIC)==Magic) return true; }
    return false;
 }
-bool HasPending(string sym)
-{
-   for(int i=OrdersTotal()-1;i>=0;i--){
-      ulong t=OrderGetTicket(i);
-      if(OrderGetString(ORDER_SYMBOL)==sym &&
-         OrderGetInteger(ORDER_MAGIC)==Magic) return true; }
-   return false;
-}
-// true if a pending order of the given side (buy-stop / sell-stop) already exists.
 bool HasPendingSide(string sym, bool isBuy)
 {
    for(int i=OrdersTotal()-1;i>=0;i--){
@@ -340,15 +354,17 @@ void ManageFirstBreak(string sym)
 {
    if(HasPosition(sym)) DeletePendings(sym);   // one side filled -> cancel the other
 }
-void SessionFlattenAll()
+// Close all of OUR orders + positions for this symbol (hedge-safe: close by ticket).
+void FlattenSymbol(string sym)
 {
    for(int i=OrdersTotal()-1;i>=0;i--){
       ulong t=OrderGetTicket(i);
-      if(OrderGetInteger(ORDER_MAGIC)==Magic) trade.OrderDelete(t); }
+      if(OrderGetString(ORDER_SYMBOL)==sym && OrderGetInteger(ORDER_MAGIC)==Magic)
+         trade.OrderDelete(t); }
    for(int i=PositionsTotal()-1;i>=0;i--){
       ulong t=PositionGetTicket(i);
-      if(PositionGetInteger(POSITION_MAGIC)==Magic)
-         trade.PositionClose(PositionGetString(POSITION_SYMBOL)); }
+      if(PositionGetString(POSITION_SYMBOL)==sym && PositionGetInteger(POSITION_MAGIC)==Magic)
+         trade.PositionClose(t); }
 }
 
 //+------------------------------------------------------------------+
@@ -362,8 +378,8 @@ bool LossGuardOk()
    double overallEff = MathMax(0.0, MaxOverallLossPct - DailyStopBufferPct);
    double dailyFloor   = g_ftmoDayOpenBal - g_initBal*dailyEff/100.0;
    double overallFloor = g_initBal        - g_initBal*overallEff/100.0;
-   if(eq <= dailyFloor)  { Notify("GUARD: daily floor — flatten + stop for the day");  return false; }
-   if(eq <= overallFloor){ Notify("GUARD: overall floor — flatten + stop");            return false; }
+   if(eq <= dailyFloor)  { Notify(SYM+" GUARD: daily floor — flatten + stop for the day");  return false; }
+   if(eq <= overallFloor){ Notify(SYM+" GUARD: overall floor — flatten + stop");            return false; }
    return true;
 }
 
@@ -372,8 +388,7 @@ bool LossGuardOk()
 //+------------------------------------------------------------------+
 // True if a HIGH-importance event for this symbol's quote currency falls within
 // NewsBufferMin minutes either side of now. Uses the terminal's built-in
-// Economic Calendar; if the calendar has no data it returns false (fail-safe:
-// trading is not blocked when we can't see the calendar).
+// Economic Calendar; if the calendar has no data it returns false (fail-safe).
 bool IsNewsBlackout(string sym)
 {
    if(!AvoidNews || NewsBufferMin<=0) return false;

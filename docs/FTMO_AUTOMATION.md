@@ -13,22 +13,27 @@ sell-stop orders with **risk-based lot sizing from the broker's tick value**
 fills, and **flattens everything at 00:00 UTC**. It also has an FTMO daily/overall
 loss guard.
 
-### Install (once)
+### Install (once) — v2.0 is PER-CHART
 1. In MT5: **Dosya → Veri Klasörünü Aç** (File → Open Data Folder).
 2. Copy `AurvexFTMO.mq5` into **MQL5 → Experts**.
 3. Open **MetaEditor** (IDE button), open the file, press **Derle / Compile** (F7).
    Fix nothing unless it errors — if it does, send me the error text.
-4. Back in MT5: **Gezgin → Uzman Danışmanlar → AurvexFTMO** → drag it onto a
-   **XAUUSD, H1** chart.
-5. In the dialog tick **"Algoritmik ticarete izin ver"** (Allow Algo Trading),
+4. Back in MT5: drag **AurvexFTMO** onto **each chart you want to trade** — one
+   instance per chart: `XAUUSD`, `GER40.cash`, `US100.cash`. Each instance trades
+   **only its own chart symbol** and draws its own levels. The strategy is
+   auto-detected (metals → ORB, indices → PDHL).
+5. In each dialog tick **"Algoritmik ticarete izin ver"** (Allow Algo Trading),
    and the top toolbar **"Algoritmik Ticaret"** button must be green/on.
 
-### Inputs (start GOLD ONLY)
-- `Trade_XAUUSD = true`, `Trade_GER40 = false`, `Trade_US100 = false`.
-- `RiskPct = 0.5`, `AccountSize = 0` (uses your balance).
-- Symbol names default to `XAUUSD` / `GER40.cash` / `US100.cash` — adjust if yours
-  differ.
-- Prove gold for a few days, then flip `Trade_GER40`/`Trade_US100` to true.
+### Inputs
+- `RiskPct = 0.5`.
+- `AccountSize = 100000` — **set this to your real account size** so the overall-loss
+  floor is stable across restarts (0 = read the balance at first start).
+- `ForceStrategy = AUTO` — auto-picks ORB for metals, PDHL for indices. Override only
+  if a symbol is misdetected.
+- `DrawLevels = true` — green = buy-stop, red = sell-stop, grey dotted = the stops.
+- Start with **only the XAUUSD chart** for a few clean days, then add the index
+  charts. (One instance per chart; they never touch each other's orders.)
 
 ### Safety inputs (v1.1 — leave at defaults unless you know why)
 - `DailyStopBufferPct = 1.0` — the guard stops **1% before** the FTMO daily/overall
@@ -59,7 +64,9 @@ this never triggers; it just protects mid-day attaches.
 
 ### Watch it (first days)
 - The EA prints to the **Uzmanlar (Experts)** tab every action.
-- One EA instance on ONE chart handles all enabled symbols (it selects them).
+- One instance **per chart**; each trades only its own chart symbol and draws its
+  own levels. They share the Magic but never touch each other's orders (all queries
+  filter by symbol), so there is no double-order risk.
 - It only trades its own orders (Magic 770077); your manual trades are untouched.
 
 > ⚠️ The EA is a **reviewed skeleton not yet run on a live terminal** (I can't run
