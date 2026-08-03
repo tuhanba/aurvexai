@@ -43,11 +43,22 @@ FTMO_UNIVERSE: Dict[str, str] = {
     # metals
     "XAUUSD": "GC=F",     # gold futures (closest free proxy for FTMO's XAUUSD)
     "XAGUSD": "SI=F",     # silver
+    "XPTUSD": "PL=F",     # platinum
+    "COPPER": "HG=F",     # copper
+    # energy
+    "WTI": "CL=F",        # WTI crude oil
+    "BRENT": "BZ=F",      # Brent crude oil
     # indices
     "US500": "^GSPC",     # S&P 500
     "NAS100": "^IXIC",    # Nasdaq Composite (proxy for US-tech)
     "US30": "^DJI",       # Dow
     "GER40": "^GDAXI",    # DAX
+    "UK100": "^FTSE",     # FTSE 100
+    "FRA40": "^FCHI",     # CAC 40
+    "JP225": "^N225",     # Nikkei 225
+    "HK50": "^HSI",       # Hang Seng
+    "AUS200": "^AXJO",    # ASX 200
+    "EU50": "^STOXX50E",  # Euro Stoxx 50
 }
 
 _CA_BUNDLE = "/root/.ccr/ca-bundle.crt"
