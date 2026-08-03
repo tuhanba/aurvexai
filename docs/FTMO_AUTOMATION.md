@@ -30,6 +30,25 @@ loss guard.
   differ.
 - Prove gold for a few days, then flip `Trade_GER40`/`Trade_US100` to true.
 
+### Safety inputs (v1.1 — leave at defaults unless you know why)
+- `DailyStopBufferPct = 1.0` — the guard stops **1% before** the FTMO daily/overall
+  floor (so it never actually touches −5% / −10%). On a floor breach the EA now
+  **closes open positions AND cancels pendings**, then stands down until the next day.
+- `FtmoResetHourUTC = 22` — FTMO's daily-loss window resets at 00:00 Prague time.
+  That is **22:00 UTC in summer (CEST)** and **23:00 UTC in winter (CET)**. Set to
+  `23` from late-October to late-March. This only moves the guard's daily baseline;
+  the trading session stays on UTC (unchanged, as validated).
+- `FridayFlattenHourUTC = 20` — closes everything before Friday's market close so
+  nothing is held over the weekend (FTMO Standard weekend-flat rule). The EA also
+  blocks new entries on Saturday/Sunday.
+- `MaxSingleRiskMult = 2.0` — if the broker's minimum lot would force risk above
+  `2×` the target, the EA **skips** that trade instead of over-risking (matters on
+  small $10k/$25k accounts).
+
+> **Still NOT implemented:** the 2-minute news buffer (only relevant on **Standard**
+> funded accounts). On the demo and in the Challenge this is not a hard failure; add
+> it before a Standard funded account, or use a **Swing** account (news-exempt).
+
 ### Watch it (first days)
 - The EA prints to the **Uzmanlar (Experts)** tab every action.
 - One EA instance on ONE chart handles all enabled symbols (it selects them).
