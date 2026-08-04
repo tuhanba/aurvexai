@@ -40,6 +40,17 @@ so we walk-forwarded them.
 
 **New validated portfolio:** `XAUUSD ORB + GER40 PDHL + NAS100 PDHL + JP225 PDHL`.
 
+## Second-pass candidates (fair per-window OOS) — all rejected
+
+Re-tested EU50, HK50, XPTUSD, BRENT stacked on the 4-edge core, each on its own
+longest common window and compared to the core on that same window. HK50/XPTUSD
+add nothing. EU50 and BRENT show marginal gains but only on short, low-confidence
+windows, and both fail a sanity check: EU50 is redundant with DAX (same European
+correlation cluster the cap already limits), and BRENT is oil — the same asset
+whose long-window sibling WTI was rejected. Verdict: **no second edge clears the
+bar.** JP225 remains the single validated addition; searching further trades
+overfit risk for noise.
+
 ## Safe-risk ceiling (acceleration sweep)
 
 Risk sweep of the 4-edge portfolio across the same 5 OOS folds — the highest
