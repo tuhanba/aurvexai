@@ -59,6 +59,9 @@ FTMO_UNIVERSE: Dict[str, str] = {
     "HK50": "^HSI",       # Hang Seng
     "AUS200": "^AXJO",    # ASX 200
     "EU50": "^STOXX50E",  # Euro Stoxx 50
+    # crypto (24/7 — needs weekend-aware handling before live use)
+    "BTC": "BTC-USD",     # Bitcoin
+    "ETH": "ETH-USD",     # Ethereum
 }
 
 _CA_BUNDLE = "/root/.ccr/ca-bundle.crt"

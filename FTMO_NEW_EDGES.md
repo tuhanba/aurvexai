@@ -51,6 +51,29 @@ whose long-window sibling WTI was rejected. Verdict: **no second edge clears the
 bar.** JP225 remains the single validated addition; searching further trades
 overfit risk for noise.
 
+## Third pass — FX and crypto (FTMO-tradeable)
+
+Both run through the ORB/PDHL breakout framework, 5 OOS folds, realistic cost.
+
+| asset | best | exp_R | folds+ | verdict |
+|---|---|---:|:---:|---|
+| EURUSD/GBPUSD/USDJPY/AUDUSD/USDCAD/EURJPY/GBPJPY/AUDJPY | mixed | ≤0.06 | ≤4/5 | **FX = no edge** (mean-reverts, doesn't trend-break) |
+| **BTC** | PDHL | **0.207** | **5/5** | **real edge** (RT 0.10%) |
+| **ETH** | PDHL | **0.331** | **5/5** | **real edge** (RT 0.10%) |
+
+**FX is dead** on breakout — confirms its reversion nature; no FX pair is worth
+adding. **Crypto (BTC, ETH) is a genuine edge** — trends hard, so prior-day
+breakout works, and it is uncorrelated with the gold/index book (strong
+diversification). FTMO offers both as CFDs.
+
+**Not a drop-in, though.** Crypto trades ~24/7 on FTMO, but the current EA is
+weekend-flat (an equities rule) and UTC-day-session — so it would skip crypto's
+weekend moves and underperform this backtest. Integrating crypto needs: (1) a
+crypto branch in the EA with weekend-aware sessions, (2) FTMO's crypto specifics
+(lower leverage ~1:2, margin, maintenance window), (3) real-spread verification on
+the demo (crypto spreads widen in volatility). A validated edge that requires
+integration work, not a symbol you can just attach the current EA to.
+
 ## Safe-risk ceiling (acceleration sweep)
 
 Risk sweep of the 4-edge portfolio across the same 5 OOS folds — the highest
