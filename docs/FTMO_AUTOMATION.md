@@ -111,7 +111,20 @@ In the EA inputs set `TelegramToken` + `TelegramChatID`. Then in MT5:
 | Fully hands-off | **EA** (A) on the demo; optionally EA Telegram alerts (2b) |
 | Semi-manual, levels on phone | **Telegram daily** (2a) → place orders yourself |
 | Fully manual / learning | `python scripts/ftmo.py` menu |
-| Score the result | `scripts/ftmo_slippage_check.py` (works for all of the above) |
+| Score the result (auto) | **`scripts/ftmo_mt5_slippage.py <mt5_report.html>`** — reads an exported MT5 history directly (no manual entry) and gives KAPI 1 GO/NO-GO |
+| Score the result (manual) | `scripts/ftmo_slippage_check.py` (from a hand-logged fills.csv) |
+
+### KAPI 1 — auto GO/NO-GO from the MT5 history
+Once a handful of trades have closed on the demo:
+1. In MT5, open the **History** tab (Geçmiş) → right-click → **Report / Rapor** → save
+   the HTML file (Turkish or English report both work).
+2. Run: `python scripts/ftmo_mt5_slippage.py path/to/report.html`
+   (or `python scripts/ftmo.py` → option **4**).
+3. It maps the broker symbols (XAUUSD, GER40.cash, US100.cash, JP225.cash), computes
+   each trade's **realised R = profit / risk-$** — which already includes spread,
+   slippage, commission and swap — and prints per-instrument + overall expectancy vs
+   the ~0.20R backtest edge, with a **GO / MARGINAL / NO-GO** verdict. Needs ~15–30
+   trades for confidence. Set `FTMO_ACCOUNT_SIZE` / `FTMO_RISK_PCT` if not 100000 / 0.5.
 
 ## The plan (organized)
 

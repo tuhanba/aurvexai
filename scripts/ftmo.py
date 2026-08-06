@@ -7,8 +7,9 @@ It ties the pieces together so you never juggle commands:
   1) Today's signals  — entry / stop-loss / lot for gold ORB + DAX/NAS100 PDHL
   2) Log a trade      — record what you actually got, into fills.csv
   3) GO / NO-GO       — score your recorded fills (real cost -> pass/fail)
-  4) Recent dry-run   — what the edges did over the last ~45 real sessions
-  5) Quit
+  4) MT5 report GO/NO-GO — auto-score an exported MT5 history (no manual entry)
+  5) Recent dry-run   — what the edges did over the last ~45 real sessions
+  6) Quit
 
 Env (optional): FTMO_ACCOUNT_SIZE, FTMO_RISK_PCT, FTMO_GER40_PPV, FTMO_NAS100_PPV,
 FTMO_FILLS_CSV (default ./fills.csv).
@@ -77,9 +78,20 @@ def log_trade():
     print(f"✅ saved to {FILLS}. (Total rows now: {sum(1 for _ in open(FILLS)) - 1})")
 
 
-def _run(script):
+def _run(script, *args):
     env = dict(os.environ, FTMO_FILLS_CSV=FILLS)
-    subprocess.run([sys.executable, os.path.join(HERE, script)], env=env)
+    subprocess.run([sys.executable, os.path.join(HERE, script), *args], env=env)
+
+
+def score_mt5_report():
+    print("\n-- Auto GO/NO-GO from an MT5 history export --")
+    print("In MT5: History tab (Geçmiş) -> right-click -> Report (Rapor) -> save the HTML.")
+    path = input("path to the MT5 report (.html/.csv), blank to cancel: ").strip()
+    if not path:
+        print("cancelled."); return
+    if not os.path.exists(path):
+        print(f"  ↳ not found: {path}"); return
+    _run("ftmo_mt5_slippage.py", path)
 
 
 def menu():
@@ -89,9 +101,10 @@ def menu():
         print("=" * 44)
         print(" 1) Today's signals (entry / stop / lot)")
         print(" 2) Log a trade I took")
-        print(" 3) GO / NO-GO  (score my fills)")
-        print(" 4) Recent dry-run (last ~45 sessions)")
-        print(" 5) Quit")
+        print(" 3) GO / NO-GO  (score my manual fills)")
+        print(" 4) MT5 report GO/NO-GO (auto, no manual entry)")
+        print(" 5) Recent dry-run (last ~45 sessions)")
+        print(" 6) Quit")
         choice = input("pick a number: ").strip()
         if choice == "1":
             show_signals()
@@ -103,11 +116,13 @@ def menu():
             else:
                 _run("ftmo_slippage_check.py")
         elif choice == "4":
+            score_mt5_report()
+        elif choice == "5":
             _run("ftmo_recent_trades.py")
-        elif choice in ("5", "q", "quit", "exit"):
+        elif choice in ("6", "q", "quit", "exit"):
             print("bye 👋"); return 0
         else:
-            print("  ↳ pick 1-5.")
+            print("  ↳ pick 1-6.")
 
 
 if __name__ == "__main__":
