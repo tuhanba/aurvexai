@@ -32,6 +32,10 @@ loss guard.
 - `ForceStrategy = AUTO` — auto-picks ORB for metals, PDHL for indices. Override only
   if a symbol is misdetected.
 - `DrawLevels = true` — green = buy-stop, red = sell-stop, grey dotted = the stops.
+- `TrailStopR = 0.5` — once a trade is +0.5R in profit, the stop trails 0.5R behind
+  the best price: locks profit, still lets winners run to session close. OOS-neutral
+  on expectancy but smooths the curve and cuts "gave it all back" losses. Set 0 to
+  disable (pure let-it-run).
 - Start with **only the XAUUSD chart** for a few clean days, then add the index
   charts. (One instance per chart; they never touch each other's orders.)
 

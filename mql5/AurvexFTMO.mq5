@@ -16,11 +16,16 @@
 //|  per-symbol filling, min-lot over-risk skip, high-impact news     |
 //|  buffer, and a no-chase guard (skip an already-broken range).     |
 //|                                                                    |
+//|  v2.1: optional trailing stop (TrailStopR) — once a trade is      |
+//|  +TrailStopR in profit, the SL trails that far behind the peak,    |
+//|  locking profit while letting winners run. OOS-neutral on          |
+//|  expectancy, smooths the curve, cuts "gave it all back" losses.    |
+//|                                                                    |
 //|  ⚠ DEMO FIRST. Set AccountSize to your real account size (e.g.    |
 //|  100000) so the overall-loss floor is stable across restarts.     |
 //+------------------------------------------------------------------+
 #property copyright "Aurvex"
-#property version   "2.00"
+#property version   "2.10"
 #property strict
 #include <Trade/Trade.mqh>
 
@@ -29,6 +34,7 @@ input double RiskPct          = 0.5;      // risk per trade (% of balance)
 input string ForceStrategy    = "AUTO";   // AUTO | ORB | PDHL  (AUTO: metals=ORB, else PDHL)
 input int    OrbHours         = 1;        // opening-range length (hours), ORB only
 input double PdhlStopATR      = 1.5;      // PDHL stop = ATR(14) * this
+input double TrailStopR       = 0.5;      // trail stop this many R behind the peak once +TrailStopR in profit (0=off)
 input int    MaxDailyLossPct  = 5;        // FTMO 2-step daily limit (guard)
 input int    MaxOverallLossPct= 10;       // FTMO 2-step overall limit (guard)
 input double DailyStopBufferPct = 1.0;    // stop this % BEFORE the FTMO floor (safety)
@@ -53,6 +59,10 @@ datetime g_ftmoDay        = 0;   // FTMO day (CET-aligned) for the loss guard
 double   g_ftmoDayOpenBal = 0;   // balance at the start of the current FTMO day
 double   g_initBal        = 0;
 bool     g_fridayFlat     = false;
+// trailing-stop state for the open position on this chart
+bool     g_haveTrade      = false;
+double   g_tEntry = 0, g_tRisk = 0, g_tPeak = 0;
+bool     g_tLong          = false;
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -148,7 +158,8 @@ void OnTimer()
 
    //--- one side filled -> cancel the opposite pending, latch "traded today"
    ManageFirstBreak(SYM);
-   if(HasPosition(SYM)) { g_tradedToday=true; return; }
+   if(HasPosition(SYM)) { g_tradedToday=true; ManageTrailing(); return; }
+   g_haveTrade = false;                 // no open position -> clear trail state
    if(g_tradedToday)    { DeletePendings(SYM); return; }
 
    //--- FTMO news rule: stand down within the buffer of a high-impact event
@@ -365,6 +376,54 @@ void FlattenSymbol(string sym)
       ulong t=PositionGetTicket(i);
       if(PositionGetString(POSITION_SYMBOL)==sym && PositionGetInteger(POSITION_MAGIC)==Magic)
          trade.PositionClose(t); }
+}
+
+// Trailing stop: once the open position is +TrailStopR in profit, trail the SL to
+// stay TrailStopR behind the best price (locks profit, keeps upside). OOS-neutral
+// on expectancy but smooths the equity curve and cuts "gave it all back" losses.
+void ManageTrailing()
+{
+   if(TrailStopR <= 0) return;
+   ulong tk = 0;
+   for(int i=PositionsTotal()-1;i>=0;i--){
+      ulong t=PositionGetTicket(i);
+      if(PositionGetString(POSITION_SYMBOL)==SYM && PositionGetInteger(POSITION_MAGIC)==Magic){ tk=t; break; }
+   }
+   if(tk==0){ g_haveTrade=false; return; }
+
+   double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+   double sl    = PositionGetDouble(POSITION_SL);
+   double tp    = PositionGetDouble(POSITION_TP);
+   bool   isLong = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY);
+   double bid = SymbolInfoDouble(SYM, SYMBOL_BID);
+   double ask = SymbolInfoDouble(SYM, SYMBOL_ASK);
+
+   if(!g_haveTrade){                       // first sight of this position: record its risk
+      g_haveTrade=true; g_tEntry=entry; g_tLong=isLong;
+      g_tRisk=MathAbs(entry-sl);
+      g_tPeak=(isLong ? bid : ask);
+   }
+   if(g_tRisk<=0) return;
+
+   int    d = (int)SymbolInfoInteger(SYM, SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(SYM, SYMBOL_POINT);
+   double stopLvl = (double)SymbolInfoInteger(SYM, SYMBOL_TRADE_STOPS_LEVEL) * point;
+
+   if(isLong){
+      g_tPeak = MathMax(g_tPeak, bid);
+      if((g_tPeak-g_tEntry)/g_tRisk >= TrailStopR){
+         double newSL = NormalizeDouble(g_tPeak - TrailStopR*g_tRisk, d);
+         if(newSL > sl + point && newSL < bid - stopLvl)
+            trade.PositionModify(tk, newSL, tp);
+      }
+   } else {
+      g_tPeak = MathMin(g_tPeak, ask);
+      if((g_tEntry-g_tPeak)/g_tRisk >= TrailStopR){
+         double newSL = NormalizeDouble(g_tPeak + TrailStopR*g_tRisk, d);
+         if((sl==0 || newSL < sl - point) && newSL > ask + stopLvl)
+            trade.PositionModify(tk, newSL, tp);
+      }
+   }
 }
 
 //+------------------------------------------------------------------+
