@@ -77,7 +77,7 @@ int OnInit()
    g_lastDay        = UtcDayStart(TimeGMT());
    g_ftmoDay        = FtmoDayStart(TimeGMT());
    EventSetTimer(20);
-   PrintFormat("AurvexFTMO v2.0 on %s  strat=%s  initBal=%.2f", SYM, STRAT, g_initBal);
+   PrintFormat("AurvexFTMO v2.1 on %s  strat=%s  initBal=%.2f", SYM, STRAT, g_initBal);
    return(INIT_SUCCEEDED);
 }
 void OnDeinit(const int reason){ EventKillTimer(); if(DrawLevels) DeleteLevels(); }
