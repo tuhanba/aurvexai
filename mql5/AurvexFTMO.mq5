@@ -25,7 +25,7 @@
 //|  100000) so the overall-loss floor is stable across restarts.     |
 //+------------------------------------------------------------------+
 #property copyright "Aurvex"
-#property version   "2.10"
+#property version   "2.20"
 #property strict
 #include <Trade/Trade.mqh>
 
@@ -77,7 +77,8 @@ int OnInit()
    g_lastDay        = UtcDayStart(TimeGMT());
    g_ftmoDay        = FtmoDayStart(TimeGMT());
    EventSetTimer(20);
-   PrintFormat("AurvexFTMO v2.1 on %s  strat=%s  initBal=%.2f", SYM, STRAT, g_initBal);
+   PrintFormat("AurvexFTMO v2.2 on %s  strat=%s  offsetH=%d  initBal=%.2f",
+               SYM, STRAT, (int)(ServerUtcOffset()/3600), g_initBal);
    return(INIT_SUCCEEDED);
 }
 void OnDeinit(const int reason){ EventKillTimer(); if(DrawLevels) DeleteLevels(); }
@@ -201,23 +202,48 @@ void OnTimer()
 //+------------------------------------------------------------------+
 //| data helpers                                                     |
 //+------------------------------------------------------------------+
+// Broker bars are timestamped in SERVER time, but our sessions are UTC. This is
+// the server-minus-UTC offset (whole hours) used to convert a bar's time to UTC.
+long ServerUtcOffset()
+{
+   long diff = (long)TimeTradeServer() - (long)TimeGMT();
+   return (long)(MathRound((double)diff/3600.0)*3600.0);
+}
+// First UTC hour (00:00-01:00 UTC) high/low for `dayStart` (a UTC day start).
+// Scans recent H1 bars and matches by UTC hour, so it is correct on ANY broker
+// timezone (fixes the gold ORB grabbing the wrong hour on a UTC+n server).
 bool FirstHourRange(string sym, datetime dayStart, double &hi, double &lo)
 {
    MqlRates r[]; ArraySetAsSeries(r,true);
-   int n = CopyRates(sym, PERIOD_H1, dayStart, OrbHours, r);
-   if(n < OrbHours) return false;
-   hi=-DBL_MAX; lo=DBL_MAX;
-   for(int k=0;k<n;k++){ hi=MathMax(hi,r[k].high); lo=MathMin(lo,r[k].low); }
-   return (hi>lo);
+   int n = CopyRates(sym, PERIOD_H1, 0, 60, r);
+   if(n < 2) return false;
+   long off = ServerUtcOffset();
+   for(int k=0;k<n;k++){
+      long utc = (long)r[k].time - off;                       // bar open in UTC
+      if(UtcDayStart((datetime)utc)==dayStart && ((utc%86400)/3600)==0){
+         hi=r[k].high; lo=r[k].low;
+         return (hi>lo);
+      }
+   }
+   return false;
 }
+// Prior UTC day's high/low. Scans recent H1 bars and keeps those whose UTC day is
+// the day before `dayStart` — correct on any broker timezone.
 bool PrevDayRange(string sym, datetime dayStart, double &ph, double &pl)
 {
    MqlRates r[]; ArraySetAsSeries(r,true);
-   int n = CopyRates(sym, PERIOD_H1, dayStart-86400, dayStart-1, r);
+   int n = CopyRates(sym, PERIOD_H1, 0, 96, r);
    if(n < 3) return false;
-   ph=-DBL_MAX; pl=DBL_MAX;
-   for(int k=0;k<n;k++){ ph=MathMax(ph,r[k].high); pl=MathMin(pl,r[k].low); }
-   return (ph>pl);
+   long off = ServerUtcOffset();
+   datetime prevDay = dayStart - 86400;
+   ph=-DBL_MAX; pl=DBL_MAX; int cnt=0;
+   for(int k=0;k<n;k++){
+      long utc = (long)r[k].time - off;
+      if(UtcDayStart((datetime)utc)==prevDay){
+         ph=MathMax(ph,r[k].high); pl=MathMin(pl,r[k].low); cnt++;
+      }
+   }
+   return (cnt>=3 && ph>pl);
 }
 bool Atr14(string sym, double &atr)
 {
