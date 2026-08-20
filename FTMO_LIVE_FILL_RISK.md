@@ -93,17 +93,34 @@ Index cash-open ORB was also tried (replace PDHL with the first 1–2 bars of th
 index's own session) — still ~0 (GER40 +0.038, NAS100 +0.064, JP225 +0.006).
 Indices simply lack a robust breakout edge once fills are modelled honestly.
 
-## Silver (XAGUSD) — demo-test candidate, not a confident add
+## Silver (XAGUSD) — a genuine 5th-instrument candidate (demo-prove the spread)
 
-Silver ORB is a genuine edge but with two caveats:
-- **Cost-fragile:** exp +0.169 at 0.03% RT, +0.089 at 0.06%, **−0.017 at 0.10%.**
-  Silver's real FTMO spread runs wide (~0.07–0.13%), so the live edge is likely
-  near breakeven.
-- **~0.8 correlated with gold** — a second gold-like bet, not diversification.
+Under the honest **live-real ORB model** (no-chase + realistic gap-fill, no
+trail — same as gold), silver holds up *as well as or better than* gold across
+the cost range, and OOS as robustly:
 
-Verdict: worth a **demo** trial to measure whether silver's real spread eats the
-edge, but not a confident R-booster. The EA already auto-detects XAG → ORB
-(`DetectStrategy`), so testing silver needs no code change.
+| RT cost | XAGUSD | XAUUSD |
+|---|---:|---:|
+| 0.02% | +0.232 | +0.229 |
+| 0.03% | +0.206 | +0.184 |
+| 0.06% (realistic) | **+0.128** | +0.048 |
+| 0.10% (pessimistic) | +0.024 | −0.134 |
+
+- **OOS (RT 0.06%):** silver +0.128, **3/5 folds** [+0.09, −0.15, +0.26, +0.50,
+  −0.06] — same robustness as gold (also 3/5). Best winner +23R (fat-tail, like
+  gold), so it runs with **no trail**.
+- **Correlation to gold is only +0.26 at the trade level** (same-direction 77%
+  of shared days, but the R magnitudes differ enough that the R-correlation is
+  moderate, not the ~0.8 of the raw price series). So silver is **real
+  diversification**, not a duplicate gold bet — an earlier note claiming
+  otherwise was too pessimistic.
+
+**Verdict:** on the data silver is a legitimate 5th instrument, comparable to
+gold with genuine diversification. The one real unknown is silver's **live FTMO
+spread**, which runs wide and volatile: the edge is solid at 0.06% RT but only
+marginal at 0.10%. So **demo-prove the real spread before adding it live** — the
+backtest is now supportive, not cautionary. The EA already auto-detects
+XAG → ORB (`DetectStrategy`), so testing needs no code change.
 
 ### Silver demo-test setup (no code change)
 1. Open an **XAGUSD** chart on the **demo** account (not the live challenge).
