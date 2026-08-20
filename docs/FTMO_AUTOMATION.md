@@ -26,7 +26,12 @@ loss guard.
    and the top toolbar **"Algoritmik Ticaret"** button must be green/on.
 
 ### Inputs
-- `RiskPct = 0.5`.
+- `RiskPct = 0.5` (funded) / `1.0` challenge. **Tilt it per instrument** (see
+  `FTMO_TRAILING_RESEARCH.md`): gold is the marginal, choppy instrument, so cut
+  its weight — **XAUUSD 0.75%, indices 1.0%** on a challenge account. This raises
+  risk-adjusted return and cuts drawdown at zero added single-instrument risk
+  (no chart goes above 1.0%). Do not concentrate into JP225 until the demo/live
+  KAPI-1 proves its fills.
 - `AccountSize = 100000` — **set this to your real account size** so the overall-loss
   floor is stable across restarts (0 = read the balance at first start).
 - `ForceStrategy = AUTO` — auto-picks ORB for metals, PDHL for indices. Override only
