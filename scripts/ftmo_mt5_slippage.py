@@ -29,10 +29,10 @@ BACKTEST_EXP = 0.20          # validated portfolio expectancy in R
 GO_MIN_EXP = 0.10            # realised expectancy must clear this (half the edge)
 
 # broker symbol prefix -> friendly instrument
-SYMBOL_MAP = [("XAU", "XAUUSD"), ("GER40", "GER40"), ("DE40", "GER40"),
-              ("US100", "NAS100"), ("NAS100", "NAS100"), ("USTEC", "NAS100"),
-              ("JP225", "JP225"), ("JPN225", "JP225"), ("US30", "US30"),
-              ("US500", "US500"), ("SPX", "US500")]
+SYMBOL_MAP = [("XAU", "XAUUSD"), ("XAG", "XAGUSD"), ("GER40", "GER40"),
+              ("DE40", "GER40"), ("US100", "NAS100"), ("NAS100", "NAS100"),
+              ("USTEC", "NAS100"), ("JP225", "JP225"), ("JPN225", "JP225"),
+              ("US30", "US30"), ("US500", "US500"), ("SPX", "US500")]
 
 # header tokens (lowercased) we look for, EN + TR
 H_SYMBOL = {"symbol", "sembol"}

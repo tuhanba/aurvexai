@@ -73,5 +73,48 @@ live index edge is therefore somewhere between this pessimistic ~+0.05 and the
 3. **JP225 tilt stays deferred** until live-proven.
 4. Gold ORB is the anchor — future edge work should protect and extend it.
 
+## Control test — the method distinguishes real edge from artifact
+
+To confirm the live-real model isn't just zeroing everything, it was run on
+metals under the same no-chase + realistic-gap-fill rules:
+
+| instrument | live-real exp | note |
+|---|---:|---|
+| XAUUSD ORB | **+0.184** | real, gap-immune (intraday range) |
+| XAGUSD ORB | **+0.169** | real edge, same fat-tail shape (best +23R) |
+| indices (ORB *or* PDHL) | ~0.00–0.06 | weak |
+
+The method cleanly separates **metal ORB (intraday, gap-immune) = real** from
+**indices (gap-vulnerable) = weak** — it is not a blanket deflator. This is the
+core structural insight: an *opening-range* breakout is immune to the
+overnight-gap problem that erodes a *prior-day* breakout.
+
+Index cash-open ORB was also tried (replace PDHL with the first 1–2 bars of the
+index's own session) — still ~0 (GER40 +0.038, NAS100 +0.064, JP225 +0.006).
+Indices simply lack a robust breakout edge once fills are modelled honestly.
+
+## Silver (XAGUSD) — demo-test candidate, not a confident add
+
+Silver ORB is a genuine edge but with two caveats:
+- **Cost-fragile:** exp +0.169 at 0.03% RT, +0.089 at 0.06%, **−0.017 at 0.10%.**
+  Silver's real FTMO spread runs wide (~0.07–0.13%), so the live edge is likely
+  near breakeven.
+- **~0.8 correlated with gold** — a second gold-like bet, not diversification.
+
+Verdict: worth a **demo** trial to measure whether silver's real spread eats the
+edge, but not a confident R-booster. The EA already auto-detects XAG → ORB
+(`DetectStrategy`), so testing silver needs no code change.
+
+### Silver demo-test setup (no code change)
+1. Open an **XAGUSD** chart on the **demo** account (not the live challenge).
+2. Attach the EA with: **AccountSize = demo size**, **RiskPct = 0.5** (test
+   sizing), **TrailStopR = 0** (silver is a gold-style ORB → no trail, same as
+   XAUUSD), Algo on.
+3. Let it run ~15–20 trades, then `scripts/ftmo_mt5_slippage.py` scores XAGUSD
+   realised R (the scorer now maps XAG). If realised expectancy holds ≥ ~0.10R
+   after real silver spread → consider adding; if it sags to ~0 → drop it.
+
+Keep silver **off the live challenge** until the demo proves the spread.
+
 Reproduce: the probe and the gap/live-real analyses build on
 `scripts/ftmo_trail_probe.py`.
