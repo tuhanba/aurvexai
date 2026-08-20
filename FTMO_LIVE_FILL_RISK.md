@@ -118,9 +118,37 @@ the cost range, and OOS as robustly:
 **Verdict:** on the data silver is a legitimate 5th instrument, comparable to
 gold with genuine diversification. The one real unknown is silver's **live FTMO
 spread**, which runs wide and volatile: the edge is solid at 0.06% RT but only
-marginal at 0.10%. So **demo-prove the real spread before adding it live** — the
-backtest is now supportive, not cautionary. The EA already auto-detects
-XAG → ORB (`DetectStrategy`), so testing needs no code change.
+marginal at 0.10%. The EA already auto-detects XAG → ORB (`DetectStrategy`), so
+testing needs no code change.
+
+**Going straight to live (skipping demo):** silver is the only viable addition,
+but it is 3/5 OOS (not the ideal 4–5/5) and the live spread is unmeasured. To
+skip demo yet bound the risk, add silver **at 0.5% risk (probationary), no
+trail** — small size caps the downside while real fills accumulate; after
+~15–20 silver trades, if the KAPI-1 realised R holds, raise it to 1.0%; if the
+spread eats it, drop it. This substitutes "small-size live test" for
+"demo-first" — a reasonable bridge, not a licence to size it up on backtest
+alone.
+
+## Full metals/energy ORB battery — only silver survives
+
+The same honest live-real ORB model (no-chase + gap-fill, no trail) run across
+every metal/energy candidate, so the search is exhausted:
+
+| instrument | 0.03% | 0.06% | 0.10% | OOS@.06 | corr-gold | verdict |
+|---|---:|---:|---:|:---:|---:|---|
+| gold | +0.184 | +0.048 | −0.134 | 3/5 | — | core |
+| **silver** | +0.206 | +0.128 | +0.024 | 3/5 | +0.26 | **add (probationary)** |
+| platinum | −0.030 | −0.101 | −0.196 | 2/5 | +0.07 | reject |
+| palladium | −0.143 | −0.210 | −0.299 | 1/5 | +0.06 | reject |
+| copper | −0.082 | −0.192 | −0.338 | 2/5 | +0.04 | reject |
+| WTI | −0.040 | −0.147 | −0.291 | 1/5 | +0.04 | reject |
+
+Platinum, palladium, copper and WTI are **negative even at the optimistic 0.03%
+cost** and OOS-unstable (1–2/5). The ORB edge is specific to the two liquid
+precious metals — gold and silver — whose opening-range breakouts trend and
+follow through; the less-liquid or industrial names do not. No other metal or
+energy instrument is worth adding.
 
 ### Silver demo-test setup (no code change)
 1. Open an **XAGUSD** chart on the **demo** account (not the live challenge).
