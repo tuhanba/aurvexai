@@ -115,6 +115,45 @@ live fills.
   the opposite of the risk-allocation gain). Quantity-for-quality trade rejected;
   "first break wins" kept.
 
+## Conditional entry filters (technical confluence) — real kernel, net loss
+
+Tested pre-entry, look-ahead-free conditions on the gold ORB to see if a
+technical gate selects higher-R breakouts (trend alignment, volatility regime,
+break timing):
+
+| condition | exp | n | total R | OOS |
+|---|---:|---:|---:|:---:|
+| all breaks (baseline) | +0.138 | 581 | **80R** | 4/5 |
+| trend-aligned | +0.168 | 309 | 52R | 3/5 |
+| aligned + high-vol | +0.213 | 145 | 31R | 3/5 |
+| trend-counter | +0.105 | 272 | — | 3/5 |
+| late break (>03:00 UTC) | +0.803 | **10** | — | **0/5** |
+
+Two lessons: (1) the intuition has a **real kernel** — trend-aligned breakouts
+do carry higher R than counter-trend (0.168 vs 0.105). (2) But **filtering to the
+high-R subset is a net loss**: it lifts R-per-trade modestly while cutting trade
+count far more, so **total R falls** (80R → 52R → 31R), and every filtered subset
+drops to 3/5 OOS. The eye-catching "+0.80R when late-break" is 10 trades, 0/5
+OOS — the small-sample mirage that makes conditional filters seductive. The key
+principle: **profit = expectancy × frequency**; a filter that raises expectancy
+but starves frequency usually loses money. Take every valid break. (Risk
+*modulation* — sizing up high-conviction breaks instead of filtering — keeps
+frequency but is only 3/5 OOS here and is deliberately OFF per CLAUDE.md; revisit
+only if live data confirms the alignment edge.)
+
+## Research campaign closed (2026-08-20)
+
+Twelve-plus structural levers, instrument candidates, and entry/exit variants
+tested this campaign; **two real wins** (gold no-trail, tilt toward metals) are
+applied, everything else is noise, a fill-model artifact, or a net-negative
+trade. Independent metals-battery, data-driven edge scan, and conditional-filter
+tests all converge on the same conclusion the two prior campaigns reached: the
+system is at its robust structural optimum on Yahoo-proxy data. Further
+backtesting now adds overfit risk, not edge. **The remaining unknowns — the live
+index PDHL fills (gap-sensitivity, esp. US100) and silver's real spread — are
+answerable only by live KAPI-1 data, which is now more valuable than any further
+backtest.** Research focus shifts to accumulating live trades and scoring them.
+
 ## Bottom line
 
 Nine structural levers tested; only two are real and both are applied — gold
