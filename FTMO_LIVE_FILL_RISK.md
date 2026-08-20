@@ -161,5 +161,45 @@ energy instrument is worth adding.
 
 Keep silver **off the live challenge** until the demo proves the spread.
 
+## Honest per-instrument expectancy band — the indices are the fragile side
+
+Live-real fills (no-chase + gap-fill; metals=ORB no-trail, indices=PDHL
+trail0.5) across a realistic cost band:
+
+| instrument | 0.02% | 0.03% | 0.04% | 0.06% | read |
+|---|---:|---:|---:|---:|---|
+| XAGUSD | +0.232 | +0.206 | +0.180 | +0.128 | strongest, cost-robust |
+| XAUUSD | +0.229 | +0.184 | +0.138 | +0.048 | strong (real gold cost is low) |
+| GER40 | +0.090 | +0.067 | +0.045 | +0.000 | weakly positive |
+| JP225 | +0.049 | +0.034 | +0.019 | −0.011 | ~breakeven |
+| NAS100 | −0.044 | −0.059 | −0.075 | −0.106 | **negative at every cost** |
+
+Robust conclusions, independent of the exact cost:
+1. **Metals (gold, silver) are the robust core** — positive across the band,
+   gap-immune (intraday opening range).
+2. **The index PDHL edge is fragile under honest fills.** The validated +0.42R
+   came from a backtest that filled gap-open days at the range level; live, the
+   EA's no-chase skips ~half those days and the rest is weak. NAS100 is negative
+   at every cost; GER40 marginal; JP225 breakeven.
+3. **This corrects the earlier risk-allocation note.** That note tilted risk
+   *toward* the indices and cut gold to 0.75% — but it used the gap-optimistic
+   index numbers. On honest numbers the ranking inverts: **gold is a core edge,
+   not the weakling.** Restore gold toward 1.0%; the fragile side is the indices,
+   led by NAS100.
+
+**Proxy caveat (why this is a flag, not a verdict):** the index feeds are Yahoo
+proxies — and NAS100 here is ^IXIC (Nasdaq *Composite*), while FTMO US100 is the
+Nasdaq-*100* (a different index) — plus the gap-fill is modelled, not measured.
+So "NAS100 is negative" is a robust *direction*, not a certainty. Do not drop an
+index on proxy backtest alone; the **live US100/GER40/JP225 KAPI-1 fills are the
+arbiter.**
+
+### Calibrated live posture (until KAPI-1 confirms)
+- **XAUUSD → 1.0%** (core edge; undo the earlier 0.75% cut).
+- **XAGUSD 0.5%** (probationary — strongest edge but unproven live spread).
+- **GER40 1.0%, JP225 1.0%** (marginal/breakeven, proxy-uncertain — hold).
+- **US100 → 0.5%** (probationary — negative on honest fills, the #1 KAPI-1
+  suspect; halve the risk until the live fills clear it or condemn it).
+
 Reproduce: the probe and the gap/live-real analyses build on
 `scripts/ftmo_trail_probe.py`.
