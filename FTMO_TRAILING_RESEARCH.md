@@ -54,6 +54,14 @@ downside is always capped at −1R.
 
 ## Risk allocation — a second real win (tilt away from gold)
 
+> **⚠️ SUPERSEDED — see `FTMO_LIVE_FILL_RISK.md`.** This section's "cut gold,
+> tilt to indices" conclusion rests on the *naive* backtest index numbers
+> (~0.42R). A later gap-fill analysis showed those numbers may be largely a
+> fill artifact (half the index trades are gap-open days the live EA skips), so
+> gold is actually the robust edge and the indices are the question mark.
+> **Run equal 1.0% across all four charts**; do not down-weight gold. The
+> analysis below is kept for the record.
+
 Portfolio daily simulation over the full sample, **total daily risk budget held
 constant at 4.0%** (so the worst-case all-lose day floor, ~−4.3%, is identical
 across schemes) and the risk redistributed by instrument edge:
