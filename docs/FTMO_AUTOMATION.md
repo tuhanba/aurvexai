@@ -32,10 +32,15 @@ loss guard.
 - `ForceStrategy = AUTO` — auto-picks ORB for metals, PDHL for indices. Override only
   if a symbol is misdetected.
 - `DrawLevels = true` — green = buy-stop, red = sell-stop, grey dotted = the stops.
-- `TrailStopR = 0.5` — once a trade is +0.5R in profit, the stop trails 0.5R behind
-  the best price: locks profit, still lets winners run to session close. OOS-neutral
-  on expectancy but smooths the curve and cuts "gave it all back" losses. Set 0 to
-  disable (pure let-it-run).
+- `TrailStopR` — **set this PER CHART, it is instrument-dependent** (see
+  `FTMO_TRAILING_RESEARCH.md`): **XAUUSD → 0** (gold is low-win-rate / fat-tail;
+  its edge is the rare session-close runner, which a trail clips — no-trail wins
+  4/5 OOS folds), **indices (GER40/US100/JP225) → 0.5** (higher win-rate; the
+  trail lifts expectancy, wins 4–5/5 OOS folds). Splitting the trail this way is
+  ~+11% portfolio expectancy over a uniform 0.5R and restores gold's big-winner
+  tail, at zero added risk (downside always capped at −1R). A 0.3R trail tests
+  even better for the indices but sits too close to price for real
+  spread/slippage — stay at 0.5 live unless demo data confirms 0.3.
 - Start with **only the XAUUSD chart** for a few clean days, then add the index
   charts. (One instance per chart; they never touch each other's orders.)
 
