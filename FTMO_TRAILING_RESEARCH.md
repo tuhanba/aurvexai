@@ -141,6 +141,42 @@ but starves frequency usually loses money. Take every valid break. (Risk
 frequency but is only 3/5 OOS here and is deliberately OFF per CLAUDE.md; revisit
 only if live data confirms the alignment edge.)
 
+## The "give it back" question — peak-R conditional analysis (2026-08-24)
+
+The most persistent intuition: a gold/silver winner peaks intraday (e.g. +5R)
+then gives much of it back by the session-close exit — so surely there's a
+peak-R level where exiting beats holding. Tested directly by instrumenting every
+metal ORB trade with its max-favorable-excursion (peak R) and its final R.
+
+**The giveback is real but the peak is only knowable in hindsight.** Gold
+winners average peak +5.62R → final +3.84R (give back 1.78R from the *peak*);
+silver +6.52R → +4.45R. But the decision-relevant question is forward-looking:
+*at a level X the trade actually reaches, what happens next?*
+
+| reached peak ≥ | gold avg FINAL | silver avg FINAL |
+|---|---:|---:|
+| 1R | +1.32R | +1.44R |
+| 2R | +2.22R | +2.58R |
+| 3R | +3.31R | +3.57R |
+| 4R | +4.14R | +4.53R |
+| 5R | +5.30R | +5.64R |
+
+**At every reachable level, the average final is ABOVE that level** — reaching
++XR predicts *more*, not reversion, because high-R trades are the strongly
+trending ones. So exiting at any threshold forfeits expected gain. Confirmed by
+two sweeps, both below the let-run baseline (gold +0.138, silver +0.180):
+
+- **Fixed take-profit:** TP 3R/4R/5R/6R gold = +0.011/+0.071/+0.064/+0.072 — all
+  below baseline; capping winners always loses (matches the frontier's TP test).
+- **Delayed trail** (arm only after peak≥act, then trail — "protect the big
+  winner"): arm@3R/4R/5R all +0.00 to +0.02, well below baseline, OOS 2–3/5.
+
+**Why the eye is fooled:** the +5R→+2R giveback is vivid and painful and gets
+remembered; the +3R→+8R runner is invisible and gets forgotten. The data says
+the runners more than pay for the givebacks. The giveback is the *price* of the
+fat-tail edge, not a defect — and no threshold-exit rule beats holding to the
+session close. Do not add a take-profit or a delayed trail to the metals.
+
 ## Research campaign closed (2026-08-20)
 
 Twelve-plus structural levers, instrument candidates, and entry/exit variants
