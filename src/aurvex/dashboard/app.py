@@ -514,6 +514,34 @@ def create_app(cfg=None) -> Flask:
         acc["marks_ts"] = marks_meta.get("ts") if isinstance(marks_meta, dict) else None
         return jsonify(acc)
 
+    @app.route("/api/ftmo")
+    def ftmo():
+        """FTMO Mode surface (read-only). Reconstructs the persisted account
+        state and reports the live budgets, operating mode and health. Returns
+        ``{"enabled": false}`` when FTMO Mode is off so the UI can hide the card."""
+        if not getattr(cfg, "ftmo_mode_enabled", False):
+            return jsonify({"enabled": False})
+        blob = db.get_ftmo_state()
+        if not blob:
+            return jsonify({"enabled": True, "ready": False})
+        try:
+            from ..ftmo import FtmoAccountState, health, mode_profile, next_mode
+            st = FtmoAccountState.from_dict(blob)
+            summary = st.summary()
+            mode = mode_profile(next_mode(st)).name
+            hs = health.health_score(st)
+            summary.update({
+                "enabled": True,
+                "ready": True,
+                "mode": mode,
+                "health": hs,
+                "health_band": health.health_band(hs),
+                "rules_source_date": st.ruleset.rules_source_date,
+            })
+            return jsonify(summary)
+        except Exception as exc:  # pragma: no cover - defensive
+            return jsonify({"enabled": True, "ready": False, "error": str(exc)})
+
     @app.route("/api/portfolio_metrics")
     def portfolio_metrics():
         """IF-4 (Wave 2): observe-only slot/risk/turnover metrics.

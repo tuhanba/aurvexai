@@ -644,6 +644,22 @@ class Config:
     don_tp_r: float = field(default_factory=lambda: _float("DON_TP_R", 1000.0))
     max_stop_dist_pct_don: float = field(
         default_factory=lambda: _float("MAX_STOP_DIST_PCT_DON", 12.0))
+    # ORB (Opening Range Breakout) — FTMO intraday candidate (metals). The first
+    # ORB_HOURS bars of the session define a range; a break of it enters with the
+    # opposite range side as the structural stop and a fixed R target. Validated
+    # on gold/silver 1h (FTMO_ORB_SWEEP.md: 5/5 OOS folds).
+    orb_hours: int = field(default_factory=lambda: _int("ORB_HOURS", 1))
+    orb_target_r: float = field(default_factory=lambda: _float("ORB_TARGET_R", 3.0))
+    # UTC hour the session (and thus the opening range) begins. 0 = the UTC day.
+    orb_session_start: int = field(
+        default_factory=lambda: _int("ORB_SESSION_START", 0))
+    max_stop_dist_pct_orb: float = field(
+        default_factory=lambda: _float("MAX_STOP_DIST_PCT_ORB", 5.0))
+    # PDHL (Previous-Day High/Low breakout) — FTMO intraday candidate (indices).
+    # Break of the prior session's high/low with an ATR-based stop and a session-
+    # close exit; more slippage-robust than ORB (FTMO_EDGE_SEARCH2.md: DAX 5/5
+    # folds surviving 0.06% round-trip). Shares ORB's session-close exit model.
+    pdhl_stop_atr: float = field(default_factory=lambda: _float("PDHL_STOP_ATR", 1.5))
     # BBW contraction gate on the donchian entry (campaign-7 F7 candidate,
     # CONDITIONAL_TA_WAVE_REPORT.md): the breakout is taken ONLY when the
     # signal bar's Bollinger Band Width percentile (BB(20,2) vs the trailing
@@ -917,6 +933,61 @@ class Config:
     log_backup_count: int = field(
         default_factory=lambda: _int("LOG_BACKUP_COUNT", 5))
 
+    # -- FTMO Mode (Phase 1, Wave 0) ----------------------------------------
+    # A rule-governance layer that encodes FTMO's exact limits (daily loss,
+    # overall max loss, targets, trading-day/weekend rules) as data. OFF by
+    # default and, in Wave 0, wired to NOTHING in the decision path — enabling
+    # the flag alone changes NO behaviour. It only becomes a pre-trade gate in a
+    # later, separately-shipped wave (see FTMO_MODE_ROADMAP.md). FTMO execution
+    # (an MT5/FTMO adapter) is a distinct future wave; the Binance five-gate lock
+    # is never a path to FTMO.
+    ftmo_mode_enabled: bool = field(
+        default_factory=lambda: _bool("FTMO_MODE_ENABLED", False))
+    ftmo_account_size: float = field(
+        default_factory=lambda: _float("FTMO_ACCOUNT_SIZE", 100_000.0))
+    # one_step | two_step
+    ftmo_path: str = field(
+        default_factory=lambda: _str("FTMO_PATH", "two_step").lower())
+    # challenge | verification | funded
+    ftmo_phase: str = field(
+        default_factory=lambda: _str("FTMO_PHASE", "challenge").lower())
+    # standard | swing (swing = no weekend-flat + no news buffer; 2-step only)
+    ftmo_variant: str = field(
+        default_factory=lambda: _str("FTMO_ACCOUNT_VARIANT", "standard").lower())
+    # IANA timezone for the FTMO daily reset (CE(S)T). Kept configurable so the
+    # DST-correct boundary can be adjusted if FTMO ever changes it.
+    ftmo_tz: str = field(
+        default_factory=lambda: _str("FTMO_TZ", "Europe/Prague"))
+    # Max concurrent open positions per correlation cluster (metals, equity
+    # indices, JPY crosses, USD majors …). Caps open-drawdown from piling into
+    # correlated trends. 0 disables. Only consulted when FTMO Mode is on.
+    ftmo_max_cluster: int = field(
+        default_factory=lambda: _int("FTMO_MAX_CLUSTER", 2))
+    # -- FTMO/MT5 auto-execution (DISARMED by default) ----------------------
+    # A future real-order path via MetaTrader5, mirroring the Binance five-gate
+    # discipline: it stays a SIMULATED stub unless EVERY gate is open —
+    # FTMO_LIVE_EXECUTE=true + MT5 login/password/server + the human-confirm
+    # token + the MetaTrader5 package importable. Every default keeps it off; it
+    # never reaches a broker by default. Secrets live only in .env, never in git.
+    ftmo_live_execute: bool = field(
+        default_factory=lambda: _bool("FTMO_LIVE_EXECUTE", False))
+    ftmo_mt5_login: str = field(default_factory=lambda: _str("FTMO_MT5_LOGIN", ""))
+    ftmo_mt5_password: str = field(
+        default_factory=lambda: _str("FTMO_MT5_PASSWORD", ""))
+    ftmo_mt5_server: str = field(default_factory=lambda: _str("FTMO_MT5_SERVER", ""))
+    ftmo_mt5_human_confirm: str = field(
+        default_factory=lambda: _str("FTMO_MT5_HUMAN_CONFIRM", ""))
+
+    def ftmo_ruleset(self):
+        """Build the FtmoRuleSet described by the FTMO_* config (standard
+        published numbers for the path/phase, with the configured size/variant/
+        timezone). Lazily imported to keep config dependency-light."""
+        from .ftmo.rules import ruleset_for
+        rs = ruleset_for(path=self.ftmo_path, phase=self.ftmo_phase,
+                         account_size=self.ftmo_account_size,
+                         variant=self.ftmo_variant)
+        return rs.with_overrides(tz=self.ftmo_tz)
+
     # ---------------------------------------------------------------------
     def validate(self) -> None:
         frac_sum = self.tp1_frac + self.tp2_frac + self.tp3_frac + self.runner_frac
@@ -946,9 +1017,11 @@ class Config:
         )
         assert self.strategy_profile in {"bugra_replica", "aurvex_enhanced",
                                          "reversion_v1", "squeeze_breakout",
-                                         "donchian_trend"}, (
+                                         "donchian_trend", "ichimoku_trend",
+                                         "band_walk", "orb", "pdhl"}, (
             "STRATEGY_PROFILE must be bugra_replica|aurvex_enhanced|"
-            "reversion_v1|squeeze_breakout|donchian_trend"
+            "reversion_v1|squeeze_breakout|donchian_trend|ichimoku_trend|"
+            "band_walk|orb|pdhl"
         )
         assert self.leverage_policy in {"efficient", "conservative"}, (
             "LEVERAGE_POLICY must be efficient|conservative"
@@ -964,6 +1037,17 @@ class Config:
         assert not self.governor_can_trade, "GOVERNOR_CAN_TRADE must be false"
         assert not self.governor_can_change_live, "GOVERNOR_CAN_CHANGE_LIVE must be false"
         assert not self.governor_can_auto_apply, "GOVERNOR_CAN_AUTO_APPLY must be false"
+        # FTMO Mode config sanity (Wave 0). These never affect decide() logic.
+        assert self.ftmo_path in {"one_step", "two_step"}, (
+            "FTMO_PATH must be one_step|two_step"
+        )
+        assert self.ftmo_phase in {"challenge", "verification", "funded"}, (
+            "FTMO_PHASE must be challenge|verification|funded"
+        )
+        assert self.ftmo_variant in {"standard", "swing"}, (
+            "FTMO_ACCOUNT_VARIANT must be standard|swing"
+        )
+        assert self.ftmo_account_size > 0, "FTMO_ACCOUNT_SIZE must be > 0"
 
     @property
     def is_live(self) -> bool:

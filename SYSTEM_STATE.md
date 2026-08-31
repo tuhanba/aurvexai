@@ -1,8 +1,36 @@
 # SYSTEM_STATE.md — the single source of truth
 
-**Updated: 2026-07-24 (regime-adaptive build + a full research sweep that closed
-every remaining direction; ONE retraction).**
+**Updated: 2026-07-30 — DIRECTION CHANGE: FTMO is now the primary target.**
 If any other document contradicts this file, this file wins.
+
+## 0a. What changed on 2026-07-30 (read this first) — the FTMO pivot
+
+**Aurvex's primary direction is now FTMO.** The engine has been extended into an
+FTMO trading operating system. The prior crypto multi-strategy paper deployment
+is **frozen, not deleted** — it stays flag-gated and parity-preserved; nothing
+about it was removed. FTMO Mode is OFF by default (`FTMO_MODE_ENABLED=false`), so
+the standard build is byte-identical (parity test + full suite green, ~1010 tests).
+
+**Read `FTMO_STATE.md` for the full FTMO picture.** In one paragraph: a parity-safe
+governance layer (FTMO rule math, equity-based CE(S)T daily budgets, operating
+modes, Health Score, a pre-trade worst-case compliance gate, a correlation cap), a
+real-data testing lab (FX/metals/indices, Monte-Carlo, walk-forward,
+governance-in-the-loop), and two validated engine strategies — `STRATEGY_PROFILE=orb`
+(gold Opening Range Breakout) and `pdhl` (DAX/NAS100 Previous-Day High/Low
+breakout). Combined as a 3-edge governed portfolio they pass FTMO with positive
+expectancy in **5/5 out-of-sample folds, 0 breaches, per-fold drawdown < 8%**.
+
+**Honest status: NOT funded-ready.** Everything above is offline (Yahoo proxy
+feeds, flat cost model, simplified stop-entry fills). The one unresolved variable
+is **live breakout stop-entry slippage**, which only a real FTMO demo can settle.
+The next step is a **demo paper-forward** (`docs/FTMO_DEMO_RUNBOOK.md` +
+`scripts/ftmo_signals_today.py` + `scripts/ftmo_slippage_check.py`), which turns
+real fills into an automatic GO/NO-GO. No funded capital before that verdict.
+
+**What is still true from the crypto era (below):** the crypto research findings,
+the parity discipline, and the non-negotiables all still hold. The scalp NO-GO and
+the crypto edge conclusions are unchanged — FTMO did not revive them; it is a
+different instrument universe with its own (breakout) edges.
 
 ## 0. What changed on 2026-07-24 (read this first)
 
