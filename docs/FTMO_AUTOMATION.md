@@ -49,6 +49,25 @@ loss guard.
 - Start with **only the XAUUSD chart** for a few clean days, then add the index
   charts. (One instance per chart; they never touch each other's orders.)
 
+### Index cash-session gate (v2.3 — set PER INDEX CHART)
+`PdhlSessionStartUTC` / `PdhlSessionEndUTC` restrict PDHL (index) entries to the
+hours the underlying exchange is actually open. **Why it matters:** the honest
+backtest used Yahoo index data, which only has *cash-session* bars — so the
+validated index edge was measured in-session only. The live FTMO CFD trades ~23h
+including overnight, and with the default 0/24 the EA armed PDHL orders that
+filled on thin **overnight futures** breakouts (e.g. GER40 at 00:01 UTC, hours
+before the DAX opens) — trades that were never in any backtest and lost heavily
+on the live account. Gating to the cash session makes the live EA trade only the
+regime that was actually validated. **Leave metals (ORB) charts at 0/24** — ORB
+is already time-gated by `OrbHours`. Set per index chart (summer/CEST-EDT UTC;
+add 1h in winter):
+
+| index chart | PdhlSessionStartUTC | PdhlSessionEndUTC |
+|---|---|---|
+| GER40.cash | 7 | 20 |
+| US100.cash | 14 | 20 |
+| JP225.cash | 0 | 6 |
+
 ### Safety inputs (v1.1 — leave at defaults unless you know why)
 - `DailyStopBufferPct = 1.0` — the guard stops **1% before** the FTMO daily/overall
   floor (so it never actually touches −5% / −10%). On a floor breach the EA now

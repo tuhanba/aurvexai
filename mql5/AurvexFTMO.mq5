@@ -25,7 +25,7 @@
 //|  100000) so the overall-loss floor is stable across restarts.     |
 //+------------------------------------------------------------------+
 #property copyright "Aurvex"
-#property version   "2.20"
+#property version   "2.30"
 #property strict
 #include <Trade/Trade.mqh>
 
@@ -40,6 +40,8 @@ input int    MaxOverallLossPct= 10;       // FTMO 2-step overall limit (guard)
 input double DailyStopBufferPct = 1.0;    // stop this % BEFORE the FTMO floor (safety)
 input int    FtmoResetHourUTC = 22;       // FTMO day reset in UTC (22=CEST summer, 23=CET winter)
 input int    FridayFlattenHourUTC = 20;   // close everything before Friday's market close (UTC)
+input int    PdhlSessionStartUTC = 0;     // PDHL only: enter at/after this UTC hour (index cash-session gate)
+input int    PdhlSessionEndUTC   = 24;    // PDHL only: stop entering at/after this UTC hour (0/24 = no gate)
 input double MaxSingleRiskMult = 2.0;     // skip a trade if forced min-lot risk exceeds this x target
 input bool   AvoidNews        = true;     // block entries around high-impact news (FTMO news rule)
 input int    NewsBufferMin    = 2;        // minutes each side of a high-impact event to stand down
@@ -77,7 +79,7 @@ int OnInit()
    g_lastDay        = UtcDayStart(TimeGMT());
    g_ftmoDay        = FtmoDayStart(TimeGMT());
    EventSetTimer(20);
-   PrintFormat("AurvexFTMO v2.2 on %s  strat=%s  offsetH=%d  initBal=%.2f",
+   PrintFormat("AurvexFTMO v2.3 on %s  strat=%s  offsetH=%d  initBal=%.2f",
                SYM, STRAT, (int)(ServerUtcOffset()/3600), g_initBal);
    return(INIT_SUCCEEDED);
 }
@@ -185,6 +187,16 @@ void OnTimer()
    }
    else // PDHL
    {
+      // Cash-session gate: indices only trade well while their exchange is open.
+      // Outside the window (e.g. overnight futures), rest no orders — the honest
+      // backtest only ever entered in-session, so overnight fills are untested.
+      int hourUtc = (int)(((long)nowGmt % 86400) / 3600);
+      if(PdhlSessionStartUTC < PdhlSessionEndUTC &&
+         (hourUtc < PdhlSessionStartUTC || hourUtc >= PdhlSessionEndUTC))
+      {
+         DeletePendings(SYM);
+         return;
+      }
       double ph,pl,atr;
       if(!PrevDayRange(SYM, today, ph, pl)) return;
       if(!Atr14(SYM, atr) || atr<=0) return;
