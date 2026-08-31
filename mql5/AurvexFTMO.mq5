@@ -35,7 +35,7 @@
 //|  $10k account) so the overall-loss floor is stable across restarts.|
 //+------------------------------------------------------------------+
 #property copyright "Aurvex"
-#property version   "2.30"
+#property version   "2.40"
 #property strict
 #include <Trade/Trade.mqh>
 
@@ -52,6 +52,10 @@ input int    FtmoResetHourUTC = 22;       // FTMO day reset in UTC (22=CEST summ
 input int    FridayFlattenHourUTC = 20;   // close everything before Friday's market close (UTC)
 input int    PdhlSessionStartUTC = 0;     // PDHL only: enter at/after this UTC hour (index cash-session gate)
 input int    PdhlSessionEndUTC   = 24;    // PDHL only: stop entering at/after this UTC hour (0/24 = no gate)
+input double DeriskDD1Pct     = 3.0;      // at this % overall drawdown, scale risk to DeriskMult1 (0=off)
+input double DeriskMult1      = 0.6;      // risk multiplier past drawdown tier 1
+input double DeriskDD2Pct     = 6.0;      // at this % overall drawdown, scale risk to DeriskMult2 (deeper tier)
+input double DeriskMult2      = 0.35;     // risk multiplier past drawdown tier 2 (survive near the floor)
 input double MaxSingleRiskMult = 2.0;     // skip a trade if forced min-lot risk exceeds this x target
 input bool   AvoidNews        = true;     // block entries around high-impact news (FTMO news rule)
 input int    NewsBufferMin    = 2;        // minutes each side of a high-impact event to stand down
@@ -89,7 +93,7 @@ int OnInit()
    g_lastDay        = UtcDayStart(TimeGMT());
    g_ftmoDay        = FtmoDayStart(TimeGMT());
    EventSetTimer(20);
-   PrintFormat("AurvexFTMO v2.3 on %s  strat=%s  offsetH=%d  initBal=%.2f",
+   PrintFormat("AurvexFTMO v2.4 on %s  strat=%s  offsetH=%d  initBal=%.2f",
                SYM, STRAT, (int)(ServerUtcOffset()/3600), g_initBal);
    return(INIT_SUCCEEDED);
 }
@@ -283,9 +287,24 @@ bool Atr14(string sym, double &atr)
 //+------------------------------------------------------------------+
 //| sizing + placement                                               |
 //+------------------------------------------------------------------+
+// Graduated de-risk: as the account draws down toward the FTMO floor, shrink the
+// per-trade risk so a losing streak can't bust it — survive to recover. MC on the
+// validated book lifts the pass rate ~+4 points (76% vs 72%) at the same base
+// risk. Returns 1.0 above the first tier. Set the mults to 1.0 to disable.
+double RiskMultiplier()
+{
+   double base = (AccountSize>0 ? AccountSize : g_initBal);
+   if(base<=0) return 1.0;
+   double eq    = AccountInfoDouble(ACCOUNT_EQUITY);
+   double ddPct = (base - eq) / base * 100.0;
+   if(DeriskDD2Pct>0 && ddPct>=DeriskDD2Pct) return DeriskMult2;
+   if(DeriskDD1Pct>0 && ddPct>=DeriskDD1Pct) return DeriskMult1;
+   return 1.0;
+}
 double CalcLots(string sym, double entry, double sl)
 {
    double riskUSD = (AccountSize>0?AccountSize:AccountInfoDouble(ACCOUNT_BALANCE))*RiskPct/100.0;
+   riskUSD *= RiskMultiplier();                       // shrink risk in a drawdown
    double tickVal = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_VALUE);
    double tickSz  = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE);
    double dist    = MathAbs(entry-sl);

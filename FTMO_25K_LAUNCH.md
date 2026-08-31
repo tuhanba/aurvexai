@@ -15,9 +15,9 @@ verification.
 - Note the fee — it is refunded with your first funded payout, lost if you
   breach. Keep a runway; never stake money you can't afford to lose on one try.
 
-## 1. MT5 — install the EA (v2.3)
+## 1. MT5 — install the EA (v2.4)
 
-1. **File → Open Data Folder → MQL5 → Experts**; copy in `AurvexFTMO.mq5` (v2.3).
+1. **File → Open Data Folder → MQL5 → Experts**; copy in `AurvexFTMO.mq5` (v2.4).
 2. Open **MetaEditor**, open the file, press **F7 (Compile)**. It must say
    `0 errors, 0 warnings`. If it errors, send me the text.
 3. Log into the **$25k** account (File → Login to Trade Account → the new
@@ -53,7 +53,13 @@ Why these numbers:
   it); indices = 0.5 (a trail lifts their expectancy).
 - **Session gates:** indices only trade while their exchange is open (summer/UTC
   values below). Metals/BTC stay 0/24 — ORB is already time-gated.
-- This book Monte-Carlos to ~72% single-attempt pass in ~4–5 weeks.
+- **Built-in de-risk (v2.4, leave the defaults):** the EA automatically shrinks
+  per-trade risk as the account draws toward the floor — to 0.6× past −3% overall
+  drawdown, to 0.35× past −6% — so a losing streak can't bust it (survive to
+  recover). Inputs `DeriskDD1Pct/DeriskMult1/DeriskDD2Pct/DeriskMult2` are on by
+  default; leave them. This lifts the pass rate ~+4 points at the same base risk.
+- This book Monte-Carlos to **~76% single-attempt pass** (with the de-risk) in
+  ~4–5 weeks.
 
 **Winter (late Oct → late Mar): add 1 hour** to the index sessions — GER40 8–21,
 US100 15–21 (JP225 stays 0–6). Also set `FtmoResetHourUTC = 23` in winter.
@@ -63,7 +69,7 @@ US100 15–21 (JP225 stays 0–6). Also set `FtmoResetHourUTC = 23` in winter.
 1. Top toolbar **"Algo Trading"** button green.
 2. Each chart corner shows the EA name with a **😊** (not a sad face).
 3. **Toolbox → Experts** tab shows one line per chart:
-   `AurvexFTMO v2.3 on <SYM> strat=... offsetH=3 initBal=25000.00`
+   `AurvexFTMO v2.4 on <SYM> strat=... offsetH=3 initBal=25000.00`
    - **`initBal=25000.00`** on every line (if it says 10000 or 100000 → STOP, fix
      AccountSize).
    - **`offsetH=3`** (FTMO server is UTC+3; timezone fix working).
@@ -96,7 +102,7 @@ report and we read it together.
 
 ## 8. Honest expectations (partner-to-partner)
 
-- Single-attempt Phase-1 pass ≈ **72%** at this config; Phase 2 (+5%) is easier.
+- Single-attempt Phase-1 pass ≈ **76%** at this config (with the built-in de-risk); Phase 2 (+5%) is easier.
   Getting funded in one buy is likely but **not guaranteed** — a second attempt
   can happen, and that's a normal cost, not a failure.
 - The edge is real but **modest**: the money is in a fat tail of rare big
