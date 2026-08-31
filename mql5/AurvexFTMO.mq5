@@ -18,11 +18,21 @@
 //|                                                                    |
 //|  v2.1: optional trailing stop (TrailStopR) — once a trade is      |
 //|  +TrailStopR in profit, the SL trails that far behind the peak,    |
-//|  locking profit while letting winners run. OOS-neutral on          |
-//|  expectancy, smooths the curve, cuts "gave it all back" losses.    |
+//|  locking profit while letting winners run. Per-instrument: gold/   |
+//|  silver (ORB) run TrailStopR=0 (let the fat tail run); indices     |
+//|  (PDHL) use 0.5.                                                    |
 //|                                                                    |
-//|  ⚠ DEMO FIRST. Set AccountSize to your real account size (e.g.    |
-//|  100000) so the overall-loss floor is stable across restarts.     |
+//|  v2.2: gold/metals ORB timezone fix — ServerUtcOffset() maps the   |
+//|  broker's server-time bars to UTC so the opening range is the true |
+//|  00:00-01:00 UTC hour on any broker timezone.                      |
+//|                                                                    |
+//|  v2.3: index cash-session gate (PdhlSessionStartUTC/EndUTC). PDHL  |
+//|  only arms while the index's exchange is open — the honest         |
+//|  backtest (Yahoo, cash-session bars only) never validated the      |
+//|  overnight-futures regime the live CFD was trading and losing in.  |
+//|                                                                    |
+//|  ⚠ Set AccountSize to your REAL account size (e.g. 10000 for a     |
+//|  $10k account) so the overall-loss floor is stable across restarts.|
 //+------------------------------------------------------------------+
 #property copyright "Aurvex"
 #property version   "2.30"
@@ -46,7 +56,7 @@ input double MaxSingleRiskMult = 2.0;     // skip a trade if forced min-lot risk
 input bool   AvoidNews        = true;     // block entries around high-impact news (FTMO news rule)
 input int    NewsBufferMin    = 2;        // minutes each side of a high-impact event to stand down
 input bool   DrawLevels       = true;     // draw entry/stop lines on the chart
-input double AccountSize      = 0;        // 0 = use balance at first start (set 100000 for stability)
+input double AccountSize      = 0;        // 0 = balance at first start; set to REAL account size (e.g. 10000)
 input long   Magic            = 770077;   // our order id
 input string TelegramToken    = "";       // optional Telegram bot token
 input string TelegramChatID   = "";       // optional Telegram chat id
