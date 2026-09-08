@@ -20,36 +20,43 @@ lowers bust probability), not for their own expectancy.
 | GER40.cash | PDHL | diversifier | ~0 to +0.09R |
 | US100.cash | PDHL | diversifier (weakest) | ~0 / negative |
 | JP225.cash | PDHL | diversifier | ~breakeven |
-| BTCUSD | ORB (ForceStrategy=ORB) | optional probation | borderline, cost-fragile |
+| BTCUSD | ORB (ForceStrategy=ORB) | **core** | +0.16R (trail 0.3 keeps it alive at wide spread) |
 
 NAS100/US100 is the weakest — the #1 KAPI-1 suspect. XAGAUD, XAUEUR and other
 quote-currency variants are NOT the tested instruments (FX overlay) — use only
 XAGUSD / XAUUSD.
 
-## Per-chart settings (EA v2.3)
+## Per-chart settings (EA v2.5)
+
+> The launch authority is **`FTMO_25K_LAUNCH.md`** (step-by-step) and
+> **`FTMO_FINAL_REPORT.md`** (summary). This table mirrors the final $25k tune.
 
 | chart | RiskPct | TrailStopR | PdhlSessionStartUTC | PdhlSessionEndUTC | ForceStrategy |
 |---|---|---|---|---|---|
-| XAUUSD | 0.5 | 0 | 0 | 24 | AUTO |
-| XAGUSD | 0.5 | 0 | 0 | 24 | AUTO |
-| GER40.cash | 0.5 | 0.5 | **7** | **20** | AUTO |
-| US100.cash | 0.5 | 0.5 | **14** | **20** | AUTO |
-| JP225.cash | 0.5 | 0.5 | **0** | **6** | AUTO |
-| BTCUSD (optional) | 0.5 | 0 | 0 | 24 | **ORB** |
+| XAUUSD | 0.35 | 0 | 0 | 24 | AUTO |
+| XAGUSD | 0.35 | 0 | 0 | 24 | AUTO |
+| BTCUSD | 0.30 | **0.3** | 0 | 24 | **ORB** |
+| GER40.cash | 0.30 | 0.5 | **7** | **20** | AUTO |
+| US100.cash | 0.25 | 0.5 | **14** | **20** | AUTO |
+| JP225.cash | 0.30 | 0.5 | **0** | **6** | AUTO |
 
-Common to every chart: **AccountSize = your real account size** (e.g. 10000 for a
-$10k account — the single most dangerous input to get wrong), Magic 770077,
-AvoidNews true. Session UTC hours are summer (CEST/EDT); **add 1h in winter**
-(GER40 8-21, US100 15-21). Metals/BTC stay 0/24 — ORB is already time-gated.
+Common to every chart: **AccountSize = your real account size** ($25000 here —
+the single most dangerous input to get wrong), Magic 770077, AvoidNews true,
+OrbRangeHourUTC 0 (single-session), de-risk defaults on. Session UTC hours are
+summer (CEST/EDT); **add 1h in winter** (GER40 8-21, US100 15-21) and set
+FtmoResetHourUTC 23. BTC trail is 0.3 (per-instrument optimum; keeps its edge at
+the wide crypto spread) — gold/silver stay 0.
 
-## Risk protocol — why 0.5%
+## Risk protocol — low, per-instrument, de-risked
 
 Monte-Carlo pass-probability (no FTMO time limit, so slow is free): lower risk
-raises the chance of passing per fee paid. 0.5% → ~55–62% single-attempt pass;
-1.0% → ~52%; 2%+ → <35% and high bust risk. **0.5% is the pass-maximising
-choice.** Keep the diversified book (metals + session-gated indices) — a
-concentrated metals-only book passes *less* often because variance/bust risk
-rises. Funded stage: drop to ~0.3–0.5% for survival.
+raises the chance of passing per fee paid. On a $25k account the min-lot floor is
+low enough to run metals 0.35% / indices 0.25–0.30% / BTC 0.30%, plus the
+built-in draw-down de-risk (v2.4) — together ~76% single-attempt pass. Keep the
+diversified book (metals + BTC + session-gated indices) — a concentrated book
+passes *less* often because variance/bust risk rises. Funded stage: drop to
+~0.2–0.3% for survival. Ready post-KAPI-1 upgrades: BTC multi-session and
+volatility-conviction sizing (see the final report).
 
 ## What was fixed, and why the live account bled
 
