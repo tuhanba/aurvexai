@@ -15,9 +15,9 @@ verification.
 - Note the fee — it is refunded with your first funded payout, lost if you
   breach. Keep a runway; never stake money you can't afford to lose on one try.
 
-## 1. MT5 — install the EA (v2.4)
+## 1. MT5 — install the EA (v2.5)
 
-1. **File → Open Data Folder → MQL5 → Experts**; copy in `AurvexFTMO.mq5` (v2.4).
+1. **File → Open Data Folder → MQL5 → Experts**; copy in `AurvexFTMO.mq5` (v2.5).
 2. Open **MetaEditor**, open the file, press **F7 (Compile)**. It must say
    `0 errors, 0 warnings`. If it errors, send me the text.
 3. Log into the **$25k** account (File → Login to Trade Account → the new
@@ -42,7 +42,7 @@ Trading"** in the Common tab.
 | GER40.cash | 0.30 | 0.5 | 7 | 20 | AUTO |
 | US100.cash | 0.25 | 0.5 | 14 | 20 | AUTO |
 | JP225.cash | 0.30 | 0.5 | 0 | 6 | AUTO |
-| BTCUSD | 0.30 | 0 | 0 | 24 | ORB |
+| BTCUSD | 0.30 | 0.3 | 0 | 24 | ORB |
 
 Why these numbers:
 - **Core = gold + silver + BTC (all ORB)** — the three instruments with a real
@@ -54,8 +54,10 @@ Why these numbers:
 - **Indices 0.25–0.30%** — weak on their own; kept small purely for
   variance-reduction (diversification raises the pass rate). US100 is the weakest
   (honestly ~0/negative), so it gets the lowest weight.
-- **Trailing:** metals/BTC = 0 (their edge is the rare runner — a trail clips
-  it); indices = 0.5 (a trail lifts their expectancy).
+- **Trailing:** metals (gold+silver) = 0 (their edge is the rare runner — a trail clips
+  it); indices = 0.5 and BTC = 0.3 (per-instrument optima — BTC is not a metal,
+  its distribution likes a small trail, which also keeps its edge alive at the
+  wider crypto spread).
 - **Session gates:** indices only trade while their exchange is open (summer/UTC
   values below). Metals/BTC stay 0/24 — ORB is already time-gated.
 - **Built-in de-risk (v2.4, leave the defaults):** the EA automatically shrinks
@@ -74,7 +76,7 @@ BTC has genuine trend-neutral ORB edge at three UTC sessions (00, 03, 13 — lon
 and short both positive at realistic cost; see `FTMO_BTC_MULTISESSION.md`). The EA
 supports this per-chart via `OrbRangeHourUTC`: open **three BTCUSD charts**, set
 `OrbRangeHourUTC` to `0`, `3`, `13` respectively, each `ForceStrategy=ORB`,
-`TrailStopR=0`, and **`RiskPct=0.10`** (three charts × 0.10 = the same 0.30% total
+`TrailStopR=0.3`, and **`RiskPct=0.10`** (three charts × 0.10 = the same 0.30% total
 BTC risk, just spread over 3 sessions = ~3× the BTC trades, faster compounding at
 no added risk). Verify each chart's log shows its `orbHourUTC=`. **Do this only
 after KAPI-1 confirms BTC's live single-session edge and spread** — it is new code
@@ -86,7 +88,7 @@ that should be watched on the first days. To start, run BTC single-session
 1. Top toolbar **"Algo Trading"** button green.
 2. Each chart corner shows the EA name with a **😊** (not a sad face).
 3. **Toolbox → Experts** tab shows one line per chart:
-   `AurvexFTMO v2.4 on <SYM> strat=... offsetH=3 initBal=25000.00`
+   `AurvexFTMO v2.5 on <SYM> strat=... offsetH=3 initBal=25000.00`
    - **`initBal=25000.00`** on every line (if it says 10000 or 100000 → STOP, fix
      AccountSize).
    - **`offsetH=3`** (FTMO server is UTC+3; timezone fix working).
