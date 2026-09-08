@@ -42,10 +42,15 @@ Trading"** in the Common tab.
 | GER40.cash | 0.30 | 0.5 | 7 | 20 | AUTO |
 | US100.cash | 0.25 | 0.5 | 14 | 20 | AUTO |
 | JP225.cash | 0.30 | 0.5 | 0 | 6 | AUTO |
-| BTCUSD (optional) | 0.30 | 0 | 0 | 24 | ORB |
+| BTCUSD | 0.30 | 0 | 0 | 24 | ORB |
 
 Why these numbers:
-- **Metals 0.35%** (gold + silver) — the real edge, weighted highest.
+- **Core = gold + silver + BTC (all ORB)** — the three instruments with a real
+  standalone ORB edge (honest +0.20 / +0.16 / +0.16R). BTC is weekday-only (the
+  EA blocks weekends automatically) and needs `ForceStrategy=ORB` because crypto
+  auto-detects to PDHL, which is negative. Verify BTC's 0.01-lot risk is ≤ ~0.5%
+  on the $25k; if the crypto spread runs too wide at KAPI-1, drop it.
+- **Metals 0.35%** (gold + silver) — the strongest edge, weighted highest.
 - **Indices 0.25–0.30%** — weak on their own; kept small purely for
   variance-reduction (diversification raises the pass rate). US100 is the weakest
   (honestly ~0/negative), so it gets the lowest weight.
