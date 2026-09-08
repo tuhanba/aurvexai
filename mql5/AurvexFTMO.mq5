@@ -35,7 +35,7 @@
 //|  $10k account) so the overall-loss floor is stable across restarts.|
 //+------------------------------------------------------------------+
 #property copyright "Aurvex"
-#property version   "2.40"
+#property version   "2.50"
 #property strict
 #include <Trade/Trade.mqh>
 
@@ -43,6 +43,7 @@
 input double RiskPct          = 0.5;      // risk per trade (% of balance)
 input string ForceStrategy    = "AUTO";   // AUTO | ORB | PDHL  (AUTO: metals=ORB, else PDHL)
 input int    OrbHours         = 1;        // opening-range length (hours), ORB only
+input int    OrbRangeHourUTC  = 0;        // ORB range START hour UTC (0=00:00; for BTC multi-session use 0/3/13 on separate charts)
 input double PdhlStopATR      = 1.5;      // PDHL stop = ATR(14) * this
 input double TrailStopR       = 0.5;      // trail stop this many R behind the peak once +TrailStopR in profit (0=off)
 input int    MaxDailyLossPct  = 5;        // FTMO 2-step daily limit (guard)
@@ -93,8 +94,8 @@ int OnInit()
    g_lastDay        = UtcDayStart(TimeGMT());
    g_ftmoDay        = FtmoDayStart(TimeGMT());
    EventSetTimer(20);
-   PrintFormat("AurvexFTMO v2.4 on %s  strat=%s  offsetH=%d  initBal=%.2f",
-               SYM, STRAT, (int)(ServerUtcOffset()/3600), g_initBal);
+   PrintFormat("AurvexFTMO v2.5 on %s  strat=%s  orbHourUTC=%d  offsetH=%d  initBal=%.2f",
+               SYM, STRAT, OrbRangeHourUTC, (int)(ServerUtcOffset()/3600), g_initBal);
    return(INIT_SUCCEEDED);
 }
 void OnDeinit(const int reason){ EventKillTimer(); if(DrawLevels) DeleteLevels(); }
@@ -188,9 +189,10 @@ void OnTimer()
 
    if(STRAT=="ORB")
    {
-      if(nowGmt < today + (datetime)OrbHours*3600) return;     // first UTC hour not closed
+      // wait until the opening range (OrbRangeHourUTC .. +OrbHours) has closed
+      if(nowGmt < today + (datetime)(OrbRangeHourUTC+OrbHours)*3600) return;
       double hi,lo;
-      if(!FirstHourRange(SYM, today, hi, lo)) return;
+      if(!FirstHourRange(SYM, today, OrbRangeHourUTC, hi, lo)) return;
       if(DrawLevels) DrawSetup(hi, lo, lo, hi);                // buy=hi, sell=lo (draw always)
       if(px>0 && (px<lo || px>hi)) {                           // range already broke -> don't chase
          g_tradedToday=true;
@@ -235,10 +237,12 @@ long ServerUtcOffset()
    long diff = (long)TimeTradeServer() - (long)TimeGMT();
    return (long)(MathRound((double)diff/3600.0)*3600.0);
 }
-// First UTC hour (00:00-01:00 UTC) high/low for `dayStart` (a UTC day start).
+// Opening-range high/low for `dayStart` at UTC hour `rangeHour` (0 = 00:00-01:00).
 // Scans recent H1 bars and matches by UTC hour, so it is correct on ANY broker
-// timezone (fixes the gold ORB grabbing the wrong hour on a UTC+n server).
-bool FirstHourRange(string sym, datetime dayStart, double &hi, double &lo)
+// timezone (fixes the gold ORB grabbing the wrong hour on a UTC+n server). A
+// configurable rangeHour lets BTC run multiple ORB sessions (0/3/13) on separate
+// charts, each an independent instance of the proven single-session logic.
+bool FirstHourRange(string sym, datetime dayStart, int rangeHour, double &hi, double &lo)
 {
    MqlRates r[]; ArraySetAsSeries(r,true);
    int n = CopyRates(sym, PERIOD_H1, 0, 60, r);
@@ -246,7 +250,7 @@ bool FirstHourRange(string sym, datetime dayStart, double &hi, double &lo)
    long off = ServerUtcOffset();
    for(int k=0;k<n;k++){
       long utc = (long)r[k].time - off;                       // bar open in UTC
-      if(UtcDayStart((datetime)utc)==dayStart && ((utc%86400)/3600)==0){
+      if(UtcDayStart((datetime)utc)==dayStart && ((utc%86400)/3600)==rangeHour){
          hi=r[k].high; lo=r[k].low;
          return (hi>lo);
       }

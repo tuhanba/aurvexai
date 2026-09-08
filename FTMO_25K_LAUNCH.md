@@ -69,6 +69,18 @@ Why these numbers:
 **Winter (late Oct → late Mar): add 1 hour** to the index sessions — GER40 8–21,
 US100 15–21 (JP225 stays 0–6). Also set `FtmoResetHourUTC = 23` in winter.
 
+### BTC multi-session (v2.5 — the speed upgrade, after KAPI-1)
+BTC has genuine trend-neutral ORB edge at three UTC sessions (00, 03, 13 — long
+and short both positive at realistic cost; see `FTMO_BTC_MULTISESSION.md`). The EA
+supports this per-chart via `OrbRangeHourUTC`: open **three BTCUSD charts**, set
+`OrbRangeHourUTC` to `0`, `3`, `13` respectively, each `ForceStrategy=ORB`,
+`TrailStopR=0`, and **`RiskPct=0.10`** (three charts × 0.10 = the same 0.30% total
+BTC risk, just spread over 3 sessions = ~3× the BTC trades, faster compounding at
+no added risk). Verify each chart's log shows its `orbHourUTC=`. **Do this only
+after KAPI-1 confirms BTC's live single-session edge and spread** — it is new code
+that should be watched on the first days. To start, run BTC single-session
+(one chart, `OrbRangeHourUTC=0`, `RiskPct=0.30`).
+
 ## 4. Turn it on and VERIFY
 
 1. Top toolbar **"Algo Trading"** button green.
