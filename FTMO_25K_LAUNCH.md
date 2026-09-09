@@ -15,9 +15,9 @@ verification.
 - Note the fee — it is refunded with your first funded payout, lost if you
   breach. Keep a runway; never stake money you can't afford to lose on one try.
 
-## 1. MT5 — install the EA (v2.5)
+## 1. MT5 — install the EA (v2.6)
 
-1. **File → Open Data Folder → MQL5 → Experts**; copy in `AurvexFTMO.mq5` (v2.5).
+1. **File → Open Data Folder → MQL5 → Experts**; copy in `AurvexFTMO.mq5` (v2.6).
 2. Open **MetaEditor**, open the file, press **F7 (Compile)**. It must say
    `0 errors, 0 warnings`. If it errors, send me the text.
 3. Log into the **$25k** account (File → Login to Trade Account → the new
@@ -98,7 +98,7 @@ size. At launch you may keep it **off** (0.0) for the simplest, already-validate
 baseline and turn it on once the demo/KAPI-1 looks clean.
 
 The same filter exists for the index PDHL side as `PdhlMinRangeMedMult` (default
-0.0 = off). Research shows **JP225 is a genuine +0.11R OOS edge** (not the
+0.0 = off). Research shows **JP225 is a genuine +0.09R OOS edge** (not the
 "breakeven" the old roster said) and its vol-filter adds a stable +0.03R, so after
 KAPI-1 you may set `PdhlMinRangeMedMult = 1.0` **on the JP225 chart only** (GER40
 and NAS100 show no benefit — leave them at 0). Same rule: demo-verify first, watch
@@ -109,11 +109,12 @@ the log line `pdhlMinRangeMult=1.00` and the skip messages.
 1. Top toolbar **"Algo Trading"** button green.
 2. Each chart corner shows the EA name with a **😊** (not a sad face).
 3. **Toolbox → Experts** tab shows one line per chart:
-   `AurvexFTMO v2.5 on <SYM> strat=... offsetH=3 initBal=25000.00`
+   `AurvexFTMO v2.6 on <SYM> strat=... minRangeMult=0.00 pdhlMinRangeMult=0.00 offsetH=3 initBal=25000.00`
    - **`initBal=25000.00`** on every line (if it says 10000 or 100000 → STOP, fix
      AccountSize).
    - **`offsetH=3`** (FTMO server is UTC+3; timezone fix working).
-   - Metals show `strat=ORB`, indices `strat=PDHL`, BTC `strat=ORB`.
+   - Metals show `strat=ORB`, indices `strat=PDHL`, BTC `strat=ORB`. The two
+     `minRangeMult` fields are `0.00` unless you enabled the gold/JP225 filters.
 
 ## 5. Keep it running
 

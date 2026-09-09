@@ -1,4 +1,4 @@
-# Aurvex FTMO — final optimization report (2026-09-08)
+# Aurvex FTMO — final optimization report (2026-09-09)
 
 The consolidated state of the system after an exhaustive optimization campaign.
 This is the reference: what's in it, every validated lever, every rejected idea
@@ -11,19 +11,23 @@ A per-chart MT5 EA trading opening-range breakouts on the liquid precious metals
 variance reduction — sized low, de-risked in drawdown, each instrument tuned to
 its own optimum.
 
-## The fully-tuned configuration ($25k, EA v2.5)
+## The fully-tuned configuration ($25k, EA v2.6)
 
 | chart | strategy | RiskPct | TrailStopR | session/extra |
 |---|---|---:|---:|---|
-| XAUUSD | ORB | 0.35 | 0 | — |
+| XAUUSD | ORB | 0.35 | 0 | `MinRangeMedMult=1.0` after KAPI-1 (gold vol-filter) |
 | XAGUSD | ORB | 0.35 | 0 | — |
 | BTCUSD | ORB | 0.30 | **0.3** | ForceStrategy=ORB, weekday-only |
 | GER40.cash | PDHL | 0.30 | 0.5 | session 7–20 UTC |
-| US100.cash | PDHL | 0.25 | 0.5 | session 14–20 UTC |
-| JP225.cash | PDHL | 0.30 | 0.5 | session 0–6 UTC |
+| US100.cash | PDHL | 0.25 | 0.5 | session 14–20 UTC — **cut candidate** (see below) |
+| JP225.cash | PDHL | 0.30→**0.45** | 0.5 | session 0–6 UTC; `PdhlMinRangeMedMult=1.0` after KAPI-1 |
 
-AccountSize=25000 everywhere; de-risk-in-drawdown on by default. MC pass ≈ **76%**
-single-attempt (~4–5 weeks), ~94% across two attempts.
+AccountSize=25000 everywhere; de-risk-in-drawdown on by default. The v2.6 filters
+ship **off** (`MinRangeMedMult`/`PdhlMinRangeMedMult=0`) — enable after KAPI-1.
+MC pass ≈ **76%** single-attempt in the original book; the improved book (gold
+filter, JP225 weight) Monte-Carlos higher, but note those figures are ~3pt
+optimistic (they count a stuck-but-alive path as a pass; the honest "reaches +10%"
+number is ~3pt lower) on top of proxy optimism. KAPI-1 is the arbiter.
 
 ## Validated levers (all applied or ready)
 
@@ -36,10 +40,19 @@ single-attempt (~4–5 weeks), ~94% across two attempts.
 5. **Low, per-instrument risk** — metals 0.35, indices 0.25–0.30; diversification
    for variance reduction; +account size enables the low % that maximises pass.
 6. **BTC as a 3rd core** — +0.16R standalone, uncorrelated with metals.
-7. **Ready, post-KAPI-1 (demo-verified first):**
+7. **Gold low-vol-day filter (v2.6)** — skip gold days whose opening range < the
+   trailing-20d median; OOS +0.19R → +0.36R, bootstrap CI lower bound > 0, and it
+   **more than doubles gold's cost tolerance** (break-even 0.082% → 0.170%). Ships
+   off (`MinRangeMedMult`), enable on gold after KAPI-1. `FTMO_PER_INSTRUMENT_RESEARCH.md`.
+8. **JP225 is a real edge, not a diversifier** — +0.086R OOS (EA-matching, CI
+   excludes 0), +0.118R with its own vol-filter (`PdhlMinRangeMedMult`). Weight it
+   up (~0.45) and zero-weight NAS100/US100 (negative expectancy; break-even 0.013%,
+   below any real spread). OOS-validated allocation move. `FTMO_PORTFOLIO_RESEARCH.md`.
+9. **De-risk parameters confirmed optimal** — 3/0.6/6/0.35 beats both no-de-risk
+   (bust 8.9%→2.5%) and a more aggressive setting (which reaches +10% *less* and
+   slower). Survives block-bootstrap (streak-preserving) stress-test: +6.5pt.
+10. **Ready, post-KAPI-1 (demo-verified first):**
    - **BTC multi-session** (OrbRangeHourUTC 0/3/13) — ~3× BTC trades, same risk.
-   - **Volatility-conviction sizing** — size up in high vol; +~20% expectancy,
-     +3.4pt pass, helps all three core instruments individually.
 
 ## Rejected ideas (tested, with evidence — do not revisit)
 
@@ -60,6 +73,16 @@ single-attempt (~4–5 weeks), ~94% across two attempts.
   rejected with OOS evidence.
 - Trend-following (Donchian) — a real edge but its 18–91% drawdowns are
   incompatible with FTMO's −10% hard limit.
+- **Failed-breakout reversal (fade)** — the "most breakouts fail, so fade them"
+  idea. Honest next-bar entry: loses on metals (fades away the fat-tail runners
+  that carry the edge). The striking stop-at-range-edge version was a look-ahead
+  artifact. Rejected.
+- **Volatility-conviction / vol-targeted sizing (size UP in high vol)** — REJECTED
+  (correcting an earlier "+3.4pt" note, which was an expectancy figure, not pass
+  probability). At the account level, honest train/test, every variant *lowers* OOS
+  pass probability: a prop challenge is variance/barrier-constrained, so levering
+  into high-vol regimes adds bust risk faster than edge. The only sizing modulation
+  that helps is de-risking DOWN in drawdown — never up.
 
 ## Why we lose / why the edge is modest (structural, not fixable)
 

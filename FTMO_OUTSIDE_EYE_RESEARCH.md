@@ -18,7 +18,14 @@ unit out before the recovery. This edge is **fragile to any stop-tightening** �
 the same reason trailing, stall and peak-R exits all lose. Confirmed again: the
 wide original stop + session-close exit is essential; do not pyramid.
 
-## ✅ Conviction sizing by volatility — VALIDATED
+## ❌ Conviction sizing by volatility — LATER REJECTED (see correction)
+
+> **CORRECTION (2026-09-09):** this was later **rejected**. The "+3.4pt" here was
+> an *expectancy* figure. Re-tested at the **account level with honest train/test**,
+> sizing UP in high vol *lowers* OOS pass probability every way — a prop challenge
+> is variance/barrier-constrained, so levering into high-vol regimes adds bust risk
+> faster than edge. Only de-risking DOWN in drawdown helps. See
+> `FTMO_PORTFOLIO_RESEARCH.md` §4. The text below is kept as the original record.
 
 Idea: instead of FILTERING (which loses on frequency), keep every trade but SIZE
 it by conviction — bigger in high volatility, smaller in low. Motivated by the

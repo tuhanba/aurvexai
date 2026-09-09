@@ -26,7 +26,7 @@ NAS100/US100 is the weakest — the #1 KAPI-1 suspect. XAGAUD, XAUEUR and other
 quote-currency variants are NOT the tested instruments (FX overlay) — use only
 XAGUSD / XAUUSD.
 
-## Per-chart settings (EA v2.5)
+## Per-chart settings (EA v2.6)
 
 > The launch authority is **`FTMO_25K_LAUNCH.md`** (step-by-step) and
 > **`FTMO_FINAL_REPORT.md`** (summary). This table mirrors the final $25k tune.
@@ -55,8 +55,10 @@ low enough to run metals 0.35% / indices 0.25–0.30% / BTC 0.30%, plus the
 built-in draw-down de-risk (v2.4) — together ~76% single-attempt pass. Keep the
 diversified book (metals + BTC + session-gated indices) — a concentrated book
 passes *less* often because variance/bust risk rises. Funded stage: drop to
-~0.2–0.3% for survival. Ready post-KAPI-1 upgrades: BTC multi-session and
-volatility-conviction sizing (see the final report).
+~0.2–0.3% for survival. Ready post-KAPI-1 upgrades: BTC multi-session and the
+gold/JP225 low-vol-day filters (see the final report). *Volatility-conviction
+(size-up) sizing was tested and **rejected** — it lowers OOS pass probability;
+see `FTMO_PORTFOLIO_RESEARCH.md`.*
 
 ## What was fixed, and why the live account bled
 
