@@ -143,6 +143,34 @@ count — demo-verify first, KAPI-1 is the arbiter.
 > Gold/silver/BTC are ORB (no prior day) and are unaffected. The scripts were fixed
 > to the calendar-prior-day (EA-matching) convention.
 
+## Result 6 — HTF trend-alignment hybrid: real tendency, NOT deployable
+
+A classic professional idea, tested causally (`scripts/ftmo_hybrid_trend_test.py`):
+take the breakout only when its direction **aligns** with the prevailing trend
+(prior-day close vs the N-day SMA, known at arm time) vs only **counter** to it.
+
+The **directional effect is real and consistent** — aligned beats counter on every
+core instrument (e.g. silver: align +0.499 vs counter −0.012; BTC: +0.091 vs
+−0.031). A breakout *with* the drift runs into the fat tail more often. Prior-day
+momentum bias (`pdmom`) is weaker, so it is specifically the 20-day *trend* that
+matters.
+
+**But as a deployable filter it fails the robustness bar** (bootstrap 90% CI on the
+OOS mean):
+
+| instrument | align OOS (N=10/20/50) | CI excludes 0? |
+|---|---|---|
+| XAUUSD | +0.285 / +0.211 / +0.337 | **no** (crosses 0 at every N) |
+| XAGUSD | +0.466 / +0.499 / +0.366 | only N=10, 20 (borderline) |
+| BTC | +0.115 / +0.091 / +0.092 | **no** (crosses 0 at every N) |
+
+Unlike the gold range filter (whole-neighbourhood, CI>0, cost-robust → shipped),
+the trend-align filter's CI crosses zero for gold and BTC and is only borderline
+for silver, and it halves the trade count. **Not shipped — no EA change.** Recorded
+as a real tendency and a KAPI-1 watch hypothesis (if silver's live fills confirm a
+strong align/counter split, revisit). The exciting silver +0.499 was a reminder to
+always check the CI before believing a single split.
+
 ## Bottom line
 
 The professional move was not "tune harder until positive" — that made every
