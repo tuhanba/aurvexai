@@ -154,6 +154,31 @@ expectancy figure, not an OOS pass-probability figure). **The only sizing
 modulation that helps is de-risking DOWN in drawdown (v2.4); never size UP in
 favourable regimes.**
 
+## 5. Model stress-test — block bootstrap (does the risk model survive streaks?)
+
+The pass-probability Monte-Carlo resampled single days (iid), which breaks
+losing-streak structure. `scripts/ftmo_block_bootstrap.py` re-runs it resampling
+contiguous multi-day **blocks** from the real chronological series, preserving
+autocorrelation and streaks:
+
+| model | TEST pass |
+|---|---|
+| iid bootstrap | 95.8% |
+| block b=3 / 5 / 10 | 96.1 / 96.6 / 96.5% |
+| block b=20 | 98.6% |
+
+- The iid estimate was **not inflated** by ignoring autocorrelation — the streak-
+  preserving model gives similar-to-higher numbers.
+- **De-risk survives brutally well:** under block bootstrap (b=10) it is 96.8% with
+  vs **88.9% without** — a **+7.9pt** gain. Its whole job is surviving clustered
+  losses, and the streak-preserving model confirms it. This is the most valuable,
+  most robust lever in the whole system.
+- **The allocation recommendation holds** under the realistic model: recommended
+  98.3% vs baseline 96.8% (+1.5pt), same as iid.
+
+Caveat: blocks are resampled from one test period; a genuinely adverse regime could
+be worse. The real safeguards remain low risk + de-risk + KAPI-1.
+
 ## Bottom line
 
 No new entry edge was found (FBR joins the rejected pile). The gains from these
