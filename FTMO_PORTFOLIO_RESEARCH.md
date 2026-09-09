@@ -130,6 +130,30 @@ allocation change, not a decision-path change (parity untouched). Treat it as a
 real fills before re-weighting real money; do not destabilise a challenge already
 in flight.
 
+## 4. Volatility-targeted sizing — REJECTED (deep, counter-intuitive)
+
+The regime analysis showed the ORB edge is best in HIGH-vol regimes, so the
+natural idea is to size UP on high-trailing-vol days (causal — vol known at entry).
+Tested honestly at the account level (`scripts/ftmo_voltarget_test.py`), it **loses
+out of sample every way**:
+
+| sizing | TRAIN pass | TEST pass |
+|---|---|---|
+| fixed (baseline) | — | **95.8%** |
+| lo1.0 hi1.3 | 95.2% | 93.3% |
+| lo0.8 hi1.3 | 96.9% | 94.8% |
+| lo1.0 hi1.5 | 95.0% | 92.4% |
+| lo0.7 hi1.4 | 97.3% | 94.9% |
+
+Even variants that *improved* TRAIN failed TEST. The reason is the key insight of
+the whole risk study: high vol is better **expectancy**, but a prop challenge is
+**variance/barrier-constrained**, not expectancy-constrained — levering into
+high-vol days adds variance that trips the −10% floor faster than the extra edge
+pays. This also **refutes the old "vol-sizing +3.4pt" note** (that was an
+expectancy figure, not an OOS pass-probability figure). **The only sizing
+modulation that helps is de-risking DOWN in drawdown (v2.4); never size UP in
+favourable regimes.**
+
 ## Bottom line
 
 No new entry edge was found (FBR joins the rejected pile). The gains from these
