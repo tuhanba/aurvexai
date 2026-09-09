@@ -65,12 +65,45 @@ positive there — confirm on KAPI-1 first).
   (not just this symbol). Correct for a dedicated FTMO account; set false if the
   account holds anything else.
 
-## Deploy (demo first)
-1. Copy `AurvexFTMO_v3_12_merged.mq5` into MQL5/Experts on a **DEMO** account.
-2. Compile (F7) → must be `0 errors, 0 warnings` (send me any error text).
-3. Attach to the charts with `AccountSize` set, filters off to start
-   (`MinRangeMedMult=0`, `PdhlMinRangeMedMult=0`, `PdhlUseBackScan=false`).
-4. Confirm the Experts log: `Aurvex v3.12-merged on <SYM> ... journal=on`.
-5. Let it run; confirm entries, the journal CSV appears (MQL5/Files), and restart the
-   terminal once to confirm state persists.
-6. Only after a clean demo: consider promoting, and enabling the gold/JP225 filters.
+## THE FINAL LIVE CONFIG (10/10 as the data supports — see honest note)
+
+Charts to open (H1): **XAUUSD, XAGUSD, BTCUSD, GER40.cash, JP225.cash**.
+**Drop NAS100/US100** — measured dead weight (break-even 0.013%, dies at any real
+spread). JP225 and GER40 session gates are **automatic** (`AutoPdhlSession=true`);
+no manual session inputs needed.
+
+Every chart: `AccountSize=25000`, `Magic=770077`, `PhaseTargetPct=10`,
+`JournalTrades=true`, `PdhlUseBackScan=false`, `MaxSpreadToStopPct=12.5`,
+`AccountWideEmergencyFlatten=true`, de-risk defaults on.
+
+| chart | RiskPct | TrailStopR | ForceStrategy | MinRangeMedMult | PdhlMinRangeMedMult |
+|---|---|---|---|---|---|
+| XAUUSD | 0.35 | 0 | AUTO (ORB) | **1.0** (gold filter) | 0 |
+| XAGUSD | 0.35 | 0 | AUTO (ORB) | 0 | 0 |
+| BTCUSD | 0.30 | 0.3 | **ORB** | 0 | 0 |
+| GER40.cash | 0.25 | 0.5 | AUTO (PDHL) | 0 | 0 |
+| JP225.cash | **0.45** | 0.5 | AUTO (PDHL) | 0 | **1.0** (JP225 filter) |
+
+This exact config Monte-Carlos (proxy, honest reach-+10% metric) to **~95% reach /
+~1.9% bust** single-attempt Phase-1, ~97% Phase-2 — the best the data supports.
+
+## The one non-negotiable step (this is NOT a demo period)
+I cannot compile MQL5 from here. **You must press F7 (Compile) once** — every .mq5
+needs it, or it will not load. It must say `0 errors, 0 warnings`; if it errors,
+paste me the text and I fix it immediately.
+
+1. Copy `AurvexFTMO_v3_12_merged.mq5` into MQL5/Experts.
+2. **F7 → 0 errors.** (mandatory)
+3. Attach with the config above; confirm the Experts log per chart:
+   `Aurvex v3.12-merged on <SYM> ... magic=... journal=on`, and `initBal`=25000.
+4. **Watch the first day live** (eyes on — since we skip a demo period): confirm
+   entries fire, the journal CSV appears under MQL5/Files, and stops are set right.
+
+## Honest note on "10/10"
+Code quality and config: this is as tight as the evidence allows — call it 10/10 on
+*quality*. **Results are never 10/10** — the edge is real but modest (~+0.15R,
+variance-heavy, ~35% win rate carried by rare runners). The ~95% above is a
+proxy-data ceiling; live will be lower and only KAPI-1 tells the truth. Going live
+without a demo means the new plumbing (persistence, DST, fill-capture) is
+first-running on real money — reviewed correct, but watch day one. Protect your
+runway; treat the fee as a bounded, repeatable cost.

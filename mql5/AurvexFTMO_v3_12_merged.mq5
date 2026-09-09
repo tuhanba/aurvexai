@@ -291,6 +291,13 @@ bool IsUSIndex(string s)
           StringFind(s,"US500")>=0 || StringFind(s,"SPX")>=0 ||
           StringFind(s,"US30")>=0 || StringFind(s,"DJ")>=0;
 }
+bool IsAsianIndex(string s)
+{
+   StringToUpper(s);
+   return StringFind(s,"JP225")>=0 || StringFind(s,"JPN")>=0 ||
+          StringFind(s,"N225")>=0 || StringFind(s,"NIK")>=0 ||
+          StringFind(s,"HK")>=0   || StringFind(s,"JP")>=0;
+}
 bool PdhlSessionAllowed(datetime nowGmt)
 {
    int minuteUtc=(int)(((long)nowGmt%86400)/60);
@@ -310,6 +317,11 @@ bool PdhlSessionAllowed(datetime nowGmt)
       int start=9*60+30-offMin;
       int end=16*60-offMin;
       return minuteUtc>=start && minuteUtc<end;
+   }
+   if(IsAsianIndex(SYM))
+   {
+      // Tokyo cash ~09:00-15:00 JST = 00:00-06:00 UTC (Japan has no DST).
+      return minuteUtc>=0 && minuteUtc<6*60;
    }
    return true;
 }
