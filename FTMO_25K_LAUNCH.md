@@ -15,9 +15,9 @@ verification.
 - Note the fee — it is refunded with your first funded payout, lost if you
   breach. Keep a runway; never stake money you can't afford to lose on one try.
 
-## 1. MT5 — install the EA (v2.6)
+## 1. MT5 — install the EA (v2.7)
 
-1. **File → Open Data Folder → MQL5 → Experts**; copy in `AurvexFTMO.mq5` (v2.6).
+1. **File → Open Data Folder → MQL5 → Experts**; copy in `AurvexFTMO.mq5` (v2.7).
 2. Open **MetaEditor**, open the file, press **F7 (Compile)**. It must say
    `0 errors, 0 warnings`. If it errors, send me the text.
 3. Log into the **$25k** account (File → Login to Trade Account → the new
@@ -104,12 +104,29 @@ KAPI-1 you may set `PdhlMinRangeMedMult = 1.0` **on the JP225 chart only** (GER4
 and NAS100 show no benefit — leave them at 0). Same rule: demo-verify first, watch
 the log line `pdhlMinRangeMult=1.00` and the skip messages.
 
+### v2.7 execution guard + profit-lock (risk layer, default OFF)
+The edge is not in entry timing (proven — see `FTMO_PER_INSTRUMENT_RESEARCH.md`),
+so v2.7 improves the **risk/execution** layer, where the edge actually lives. Both
+default OFF (parity preserved); tune on live/KAPI-1 first — they cannot be
+backtested (proxy data has no spread).
+- **`MaxSpreadPct`** — the EA stands down (cancels pendings, does not arm) whenever
+  the live bid-ask spread exceeds this % of price. It only ever *removes* a trade,
+  never adds risk. Set it **below** each instrument's cost break-even
+  (`FTMO_LIVE_CONFIG.md`) — a safe start once KAPI-1 shows real spreads is roughly:
+  gold/silver 0.05, BTC 0.06, indices 0.04. Leave at 0 until you have measured live
+  spreads, or you may skip everything.
+- **`PhaseTargetPct` / `NearTargetPct` / `NearTargetMult`** — profit-lock: when
+  equity is within `NearTargetPct` of the phase target, per-trade risk is cut to
+  `NearTargetMult`, so a near-pass isn't given back. To use, set
+  `PhaseTargetPct=10` (Phase-1) or `5` (Phase-2); defaults 1.5 / 0.5 mean "within
+  1.5% of target, trade at half risk". Off (0) by default.
+
 ## 4. Turn it on and VERIFY
 
 1. Top toolbar **"Algo Trading"** button green.
 2. Each chart corner shows the EA name with a **😊** (not a sad face).
 3. **Toolbox → Experts** tab shows one line per chart:
-   `AurvexFTMO v2.6 on <SYM> strat=... minRangeMult=0.00 pdhlMinRangeMult=0.00 offsetH=3 initBal=25000.00`
+   `AurvexFTMO v2.7 on <SYM> strat=... minRangeMult=0.00 pdhlMinRangeMult=0.00 maxSpread=0.000 phaseTgt=0.0 offsetH=3 initBal=25000.00`
    - **`initBal=25000.00`** on every line (if it says 10000 or 100000 → STOP, fix
      AccountSize).
    - **`offsetH=3`** (FTMO server is UTC+3; timezone fix working).

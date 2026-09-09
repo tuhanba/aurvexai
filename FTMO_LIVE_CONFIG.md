@@ -26,7 +26,7 @@ NAS100/US100 is the weakest — the #1 KAPI-1 suspect. XAGAUD, XAUEUR and other
 quote-currency variants are NOT the tested instruments (FX overlay) — use only
 XAGUSD / XAUUSD.
 
-## Per-chart settings (EA v2.6)
+## Per-chart settings (EA v2.7)
 
 > The launch authority is **`FTMO_25K_LAUNCH.md`** (step-by-step) and
 > **`FTMO_FINAL_REPORT.md`** (summary). This table mirrors the final $25k tune.

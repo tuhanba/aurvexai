@@ -11,7 +11,7 @@ A per-chart MT5 EA trading opening-range breakouts on the liquid precious metals
 variance reduction — sized low, de-risked in drawdown, each instrument tuned to
 its own optimum.
 
-## The fully-tuned configuration ($25k, EA v2.6)
+## The fully-tuned configuration ($25k, EA v2.7)
 
 | chart | strategy | RiskPct | TrailStopR | session/extra |
 |---|---|---:|---:|---|
@@ -51,7 +51,13 @@ number is ~3pt lower) on top of proxy optimism. KAPI-1 is the arbiter.
 9. **De-risk parameters confirmed optimal** — 3/0.6/6/0.35 beats both no-de-risk
    (bust 8.9%→2.5%) and a more aggressive setting (which reaches +10% *less* and
    slower). Survives block-bootstrap (streak-preserving) stress-test: +6.5pt.
-10. **Ready, post-KAPI-1 (demo-verified first):**
+10. **Execution guard + profit-lock (v2.7, default OFF)** — `MaxSpreadPct` stands
+    the EA down when the live spread exceeds a per-instrument threshold (turns the
+    cost break-even table into a live defence; only removes trades, never adds
+    risk); `PhaseTargetPct`/`NearTargetPct`/`NearTargetMult` cut risk near the phase
+    target so a near-pass isn't given back. Both tune on live/KAPI-1 (proxy has no
+    spread), so they ship off.
+11. **Ready, post-KAPI-1 (demo-verified first):**
    - **BTC multi-session** (OrbRangeHourUTC 0/3/13) — ~3× BTC trades, same risk.
 
 ## Rejected ideas (tested, with evidence — do not revisit)

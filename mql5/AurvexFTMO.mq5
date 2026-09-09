@@ -40,11 +40,26 @@
 //|  See FTMO_PER_INSTRUMENT_RESEARCH.md. Default 0 = no behaviour      |
 //|  change (paper/live parity preserved).                             |
 //|                                                                    |
+//|  v2.7: risk & execution release (edge is NOT in entry timing — a    |
+//|  learned composite model proved individual-breakout outcomes are    |
+//|  unpredictable; the edge lives in instrument selection, the one      |
+//|  regime filter, and risk/execution). Two owner-level, default-OFF    |
+//|  additions:                                                          |
+//|   * MaxSpreadPct — refuse to arm / cancel pendings when the live     |
+//|     bid-ask spread exceeds this % of price. Operationalises the      |
+//|     per-instrument cost break-even (FTMO_LIVE_CONFIG.md): a wide     |
+//|     spread makes a trade zero/negative-EV, so skip it. Only ever     |
+//|     removes trades, never adds risk. Set per chart below break-even. |
+//|   * PhaseTargetPct/NearTargetPct/NearTargetMult — profit-lock: cut   |
+//|     risk when equity is within NearTargetPct of the phase target, so |
+//|     a near-pass is not given back. Raises the reach-target rate.     |
+//|  Both default OFF (parity preserved) — tune on live/KAPI-1 first.    |
+//|                                                                    |
 //|  ⚠ Set AccountSize to your REAL account size (e.g. 25000 for a     |
 //|  $25k account) so the overall-loss floor is stable across restarts.|
 //+------------------------------------------------------------------+
 #property copyright "Aurvex"
-#property version   "2.60"
+#property version   "2.70"
 #property strict
 #include <Trade/Trade.mqh>
 
@@ -69,6 +84,10 @@ input double DeriskMult1      = 0.6;      // risk multiplier past drawdown tier 
 input double DeriskDD2Pct     = 6.0;      // at this % overall drawdown, scale risk to DeriskMult2 (deeper tier)
 input double DeriskMult2      = 0.35;     // risk multiplier past drawdown tier 2 (survive near the floor)
 input double MaxSingleRiskMult = 2.0;     // skip a trade if forced min-lot risk exceeds this x target
+input double MaxSpreadPct     = 0.0;      // v2.7 execution guard: skip/cancel if live bid-ask spread > this % of price (0=off; set below the instrument's cost break-even)
+input double PhaseTargetPct   = 0.0;      // v2.7 profit-lock: the phase profit target % (0=off; e.g. 10 for Phase-1, 5 for Phase-2)
+input double NearTargetPct    = 1.5;      // when equity is within this % of PhaseTargetPct, cut risk to NearTargetMult
+input double NearTargetMult   = 0.5;      // risk multiplier once near the phase target (protect the near-pass)
 input bool   AvoidNews        = true;     // block entries around high-impact news (FTMO news rule)
 input int    NewsBufferMin    = 2;        // minutes each side of a high-impact event to stand down
 input bool   DrawLevels       = true;     // draw entry/stop lines on the chart
@@ -105,9 +124,9 @@ int OnInit()
    g_lastDay        = UtcDayStart(TimeGMT());
    g_ftmoDay        = FtmoDayStart(TimeGMT());
    EventSetTimer(20);
-   PrintFormat("AurvexFTMO v2.6 on %s  strat=%s  orbHourUTC=%d  minRangeMult=%.2f  pdhlMinRangeMult=%.2f  offsetH=%d  initBal=%.2f",
+   PrintFormat("AurvexFTMO v2.7 on %s  strat=%s  orbHourUTC=%d  minRangeMult=%.2f  pdhlMinRangeMult=%.2f  maxSpread=%.3f  phaseTgt=%.1f  offsetH=%d  initBal=%.2f",
                SYM, STRAT, OrbRangeHourUTC, MinRangeMedMult, PdhlMinRangeMedMult,
-               (int)(ServerUtcOffset()/3600), g_initBal);
+               MaxSpreadPct, PhaseTargetPct, (int)(ServerUtcOffset()/3600), g_initBal);
    return(INIT_SUCCEEDED);
 }
 void OnDeinit(const int reason){ EventKillTimer(); if(DrawLevels) DeleteLevels(); }
@@ -198,6 +217,23 @@ void OnTimer()
    double bid = SymbolInfoDouble(SYM, SYMBOL_BID);
    double ask = SymbolInfoDouble(SYM, SYMBOL_ASK);
    double px  = (bid>0 && ask>0) ? (bid+ask)/2.0 : bid;
+
+   //--- v2.7 execution guard: if the live spread is abnormally wide (> MaxSpreadPct
+   // of price), a fill would be zero/negative-EV (see the cost break-even table).
+   // Cancel any resting pendings and stand down until the spread normalises. This
+   // only ever REMOVES trades (never adds risk) and does not latch the day, so it
+   // retries automatically once the spread tightens. Off when MaxSpreadPct=0.
+   if(MaxSpreadPct>0 && bid>0 && ask>0)
+   {
+      double spreadPct = (ask - bid) / px * 100.0;
+      if(spreadPct > MaxSpreadPct)
+      {
+         DeletePendings(SYM);
+         Notify(StringFormat("%s: spread %.3f%% > MaxSpreadPct %.3f%% — stand down (execution guard)",
+                             SYM, spreadPct, MaxSpreadPct));
+         return;
+      }
+   }
 
    if(STRAT=="ORB")
    {
@@ -426,6 +462,11 @@ double RiskMultiplier()
    double base = (AccountSize>0 ? AccountSize : g_initBal);
    if(base<=0) return 1.0;
    double eq    = AccountInfoDouble(ACCOUNT_EQUITY);
+   // v2.7 profit-lock: within NearTargetPct of the phase target -> cut risk so a
+   // near-pass is not given back (only cuts, never raises). Off when PhaseTargetPct=0.
+   double gainPct = (eq - base) / base * 100.0;
+   if(PhaseTargetPct>0 && NearTargetPct>0 && gainPct >= PhaseTargetPct - NearTargetPct)
+      return NearTargetMult;
    double ddPct = (base - eq) / base * 100.0;
    if(DeriskDD2Pct>0 && ddPct>=DeriskDD2Pct) return DeriskMult2;
    if(DeriskDD1Pct>0 && ddPct>=DeriskDD1Pct) return DeriskMult1;
