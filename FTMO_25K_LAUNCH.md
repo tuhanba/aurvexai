@@ -78,7 +78,11 @@ supports this per-chart via `OrbRangeHourUTC`: open **three BTCUSD charts**, set
 `OrbRangeHourUTC` to `0`, `3`, `13` respectively, each `ForceStrategy=ORB`,
 `TrailStopR=0.3`, and **`RiskPct=0.10`** (three charts × 0.10 = the same 0.30% total
 BTC risk, just spread over 3 sessions = ~3× the BTC trades, faster compounding at
-no added risk). Verify each chart's log shows its `orbHourUTC=`. **Do this only
+no added risk). The three charts are **automatically independent** — the EA sets
+its effective order id to `Magic + OrbRangeHourUTC` (770077 / 770080 / 770090), so
+each session manages only its own orders and they never cancel each other. Leave
+`Magic` at 770077 on all three; do not set it manually. Verify each chart's log
+shows its `orbHourUTC=`. **Do this only
 after KAPI-1 confirms BTC's live single-session edge and spread** — it is new code
 that should be watched on the first days. To start, run BTC single-session
 (one chart, `OrbRangeHourUTC=0`, `RiskPct=0.30`).

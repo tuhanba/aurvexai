@@ -99,6 +99,10 @@ input string TelegramChatID   = "";       // optional Telegram chat id
 CTrade   trade;
 string   SYM;                 // this chart's symbol
 string   STRAT;               // "ORB" | "PDHL" for this chart
+long     g_magic = 0;         // effective magic = Magic + OrbRangeHourUTC, so multiple
+                              // charts of the SAME symbol (BTC multi-session 0/3/13) manage
+                              // ONLY their own orders. OrbRangeHourUTC=0 => g_magic=Magic
+                              // (unchanged for every standard chart; parity preserved).
 bool     g_tradedToday = false;
 
 datetime g_lastDay        = 0;   // UTC trading day (strategy session)
@@ -116,7 +120,8 @@ int OnInit()
 {
    SYM   = _Symbol;
    STRAT = DetectStrategy();
-   trade.SetExpertMagicNumber(Magic);
+   g_magic = Magic + OrbRangeHourUTC;      // distinct per ORB session; = Magic when hour 0
+   trade.SetExpertMagicNumber(g_magic);
    trade.SetTypeFillingBySymbol(SYM);
    SymbolSelect(SYM, true);
    g_initBal        = (AccountSize>0 ? AccountSize : AccountInfoDouble(ACCOUNT_BALANCE));
@@ -540,7 +545,7 @@ void EnsureStops(string sym, double buyPrice, double buySL,
 //+------------------------------------------------------------------+
 void DrawHLine(string tag, double price, color col, int style)
 {
-   string name = tag + "_" + (string)Magic;
+   string name = tag + "_" + (string)g_magic;
    if(ObjectFind(0,name) < 0)
       ObjectCreate(0, name, OBJ_HLINE, 0, 0, price);
    else
@@ -562,10 +567,10 @@ void DrawSetup(double buyP, double buySL, double sellP, double sellSL)
 }
 void DeleteLevels()
 {
-   ObjectDelete(0, "AX_BUY_"    + (string)Magic);
-   ObjectDelete(0, "AX_BUYSL_"  + (string)Magic);
-   ObjectDelete(0, "AX_SELL_"   + (string)Magic);
-   ObjectDelete(0, "AX_SELLSL_" + (string)Magic);
+   ObjectDelete(0, "AX_BUY_"    + (string)g_magic);
+   ObjectDelete(0, "AX_BUYSL_"  + (string)g_magic);
+   ObjectDelete(0, "AX_SELL_"   + (string)g_magic);
+   ObjectDelete(0, "AX_SELLSL_" + (string)g_magic);
    ChartRedraw(0);
 }
 
@@ -577,14 +582,14 @@ bool HasPosition(string sym)
    for(int i=PositionsTotal()-1;i>=0;i--){
       if(PositionGetTicket(i)==0) continue;
       if(PositionGetString(POSITION_SYMBOL)==sym &&
-         PositionGetInteger(POSITION_MAGIC)==Magic) return true; }
+         PositionGetInteger(POSITION_MAGIC)==g_magic) return true; }
    return false;
 }
 bool HasPendingSide(string sym, bool isBuy)
 {
    for(int i=OrdersTotal()-1;i>=0;i--){
       if(OrderGetTicket(i)==0) continue;               // selects the order
-      if(OrderGetString(ORDER_SYMBOL)==sym && OrderGetInteger(ORDER_MAGIC)==Magic){
+      if(OrderGetString(ORDER_SYMBOL)==sym && OrderGetInteger(ORDER_MAGIC)==g_magic){
          long type = OrderGetInteger(ORDER_TYPE);
          if(isBuy  && type==ORDER_TYPE_BUY_STOP)  return true;
          if(!isBuy && type==ORDER_TYPE_SELL_STOP) return true;
@@ -596,7 +601,7 @@ void DeletePendings(string sym)
 {
    for(int i=OrdersTotal()-1;i>=0;i--){
       ulong t=OrderGetTicket(i);
-      if(OrderGetString(ORDER_SYMBOL)==sym && OrderGetInteger(ORDER_MAGIC)==Magic)
+      if(OrderGetString(ORDER_SYMBOL)==sym && OrderGetInteger(ORDER_MAGIC)==g_magic)
          trade.OrderDelete(t); }
 }
 void ManageFirstBreak(string sym)
@@ -608,11 +613,11 @@ void FlattenSymbol(string sym)
 {
    for(int i=OrdersTotal()-1;i>=0;i--){
       ulong t=OrderGetTicket(i);
-      if(OrderGetString(ORDER_SYMBOL)==sym && OrderGetInteger(ORDER_MAGIC)==Magic)
+      if(OrderGetString(ORDER_SYMBOL)==sym && OrderGetInteger(ORDER_MAGIC)==g_magic)
          trade.OrderDelete(t); }
    for(int i=PositionsTotal()-1;i>=0;i--){
       ulong t=PositionGetTicket(i);
-      if(PositionGetString(POSITION_SYMBOL)==sym && PositionGetInteger(POSITION_MAGIC)==Magic)
+      if(PositionGetString(POSITION_SYMBOL)==sym && PositionGetInteger(POSITION_MAGIC)==g_magic)
          trade.PositionClose(t); }
 }
 
@@ -625,7 +630,7 @@ void ManageTrailing()
    ulong tk = 0;
    for(int i=PositionsTotal()-1;i>=0;i--){
       ulong t=PositionGetTicket(i);
-      if(PositionGetString(POSITION_SYMBOL)==SYM && PositionGetInteger(POSITION_MAGIC)==Magic){ tk=t; break; }
+      if(PositionGetString(POSITION_SYMBOL)==SYM && PositionGetInteger(POSITION_MAGIC)==g_magic){ tk=t; break; }
    }
    if(tk==0){ g_haveTrade=false; return; }
 
