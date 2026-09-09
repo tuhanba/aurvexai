@@ -185,6 +185,34 @@ autocorrelation and streaks:
 Caveat: blocks are resampled from one test period; a genuinely adverse regime could
 be worse. The real safeguards remain low risk + de-risk + KAPI-1.
 
+## 6. De-risk parameters are already near-optimal (and a model artifact caught)
+
+Optimising the de-risk thresholds/multipliers against pass probability *looked*
+like it wanted a more aggressive setting (kick in at −2% not −3%, cut to 0.5/0.25
+not 0.6/0.35 → "pass" 99.6% vs 97.5%). Scrutiny killed it. Counting only paths
+that **actually reach +10%** (not "survived to the step cap"):
+
+| de-risk | REACHED +10% | stuck-alive | bust | median days to +10% |
+|---|---|---|---|---|
+| **current 3 / 0.6 / 6 / 0.35** | **94.2%** | 3.3% | 2.5% | **72** |
+| aggressive 2 / 0.5 / 4 / 0.25 | 91.8% | 8.0% | 0.2% | 79 |
+
+The aggressive setting's higher score was **entirely stuck-alive paths miscounted
+as passes.** By the honest metric it reaches the target *less* (91.8 vs 94.2) and
+is *slower* (79 vs 72 days) — it over-de-risks into a crawl (great at not busting,
+bad at progressing). **Keep the current de-risk (3/0.6/6/0.35); it is already the
+right balance between survival and progress.**
+
+### Model caveat this exposed
+The pass-probability figures throughout this file count a path that survives to the
+step cap without reaching +10% as a "pass" (the no-time-limit framing). At the
+current de-risk that stuck-alive fraction is ~3%, so the **honest "reaches +10%"
+number is ~3 points below the quoted "pass" number** (e.g. a "97.7% pass" is
+~94% actually reaching target). All the *relative* conclusions in this file
+(allocation, filters, de-risk value) compare like-for-like at the same de-risk and
+are unaffected; only the absolute levels carry this ~3pt optimism, on top of the
+proxy-data optimism. KAPI-1 remains the arbiter of the absolute.
+
 ## Bottom line
 
 No new entry edge was found (FBR joins the rejected pile). The gains from these
