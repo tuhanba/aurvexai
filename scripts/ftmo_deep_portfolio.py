@@ -55,11 +55,13 @@ def orb_R(sym,cost,trail=0.0,rangefilt=0.0,lookback=20,range_h=0,olen=1):
     return out
 
 def pdhl_R(sym,cost,rangefilt=0.0,lookback=20,atrmult=1.5,trail=0.5,ss=0,se=24):
-    bd,days=prep(sym); histrp=[]; dr=[]; out={}
+    # EA-matching: prior CALENDAR day (day-1). If it has no bars (Sun/holiday, e.g.
+    # Monday), the live EA's PrevDayRange returns false and skips -> we skip too.
+    bd,days=prep(sym); dayset=set(days); histrp=[]; dr=[]; out={}
     for di,day in enumerate(days):
         db=bd[day]
-        if di==0: dr.append(max(b[2] for b in db)-min(b[3] for b in db)); continue
-        prev=bd[days[di-1]]; ph=max(b[2] for b in prev); pl=min(b[3] for b in prev)
+        if (day-1) not in dayset: dr.append(max(b[2] for b in db)-min(b[3] for b in db)); continue
+        prev=bd[day-1]; ph=max(b[2] for b in prev); pl=min(b[3] for b in prev)
         atr=mean(dr[-14:]) if len(dr)>=14 else None
         dr.append(max(b[2] for b in db)-min(b[3] for b in db))
         if not atr or atr<=0 or ph<=pl: continue

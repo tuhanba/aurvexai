@@ -120,17 +120,28 @@ show no robust benefit (NAS100 barely reaches breakeven — it stays the weakest
 KAPI-1 drop candidate). But **JP225 is a genuine, robust positive** — and stronger
 than the roster docs' "~breakeven" label:
 
-| JP225 (PDHL, session 0–6 UTC) | k-fold exp | folds | OOS mean | OOS 90% CI |
-|---|---|---|---|---|
-| baseline (no filter) | +0.081 | **5/5** | +0.112 | **[+0.070, +0.155]** |
-| filter ×1.0 | +0.120 | **5/5** | +0.143 | **[+0.079, +0.208]** |
+JP225 OOS, measured **EA-matching** (see correction below):
 
-Both rows have a bootstrap CI **excluding zero**. The baseline result corrects the
-record: **JP225 is not a breakeven diversifier, it is a real +0.11R OOS edge.** The
-vol-filter adds a further stable +0.03R (flat across cost). Shipped as EA input
-`PdhlMinRangeMedMult` (default **0.0 = off**); enable on JP225 with 1.0 after
-KAPI-1. Same caveats as the gold filter: proxy data, new code, halves the trade
+| JP225 (PDHL, session 0–6 UTC) | OOS mean | note |
+|---|---|---|
+| baseline (no filter) | **+0.086** | prior-trading-day sim showed +0.112 (optimistic) |
+| filter ×1.0 | **+0.118** | prior-trading-day sim showed +0.143 (optimistic) |
+
+The baseline result still corrects the roster: **JP225 is not a breakeven
+diversifier, it is a real ~+0.09R OOS edge** (bootstrap CI excludes zero; k-fold
+5/5 positive on the trading-day sim). The vol-filter adds a further stable
+~+0.03R. Shipped as EA input `PdhlMinRangeMedMult` (default **0.0 = off**); enable
+on JP225 with 1.0 after KAPI-1. Caveats: proxy data, new code, halves the trade
 count — demo-verify first, KAPI-1 is the arbiter.
+
+> **Correction (integrity note, 2026-09-09):** the first JP225/portfolio pass used
+> the prior *trading* day for the PDHL reference range, which trades Mondays off
+> Friday's range. The **live EA uses the prior calendar day** (`PrevDayRange`,
+> `day-1`), so it **skips index PDHL on Mondays** (Sunday has no bars) — matching
+> the originally validated probe. Re-measured EA-matching, the JP225 edge is real
+> but ~0.02–0.03R lower than first reported (+0.086 / +0.118, not +0.112 / +0.143).
+> Gold/silver/BTC are ORB (no prior day) and are unaffected. The scripts were fixed
+> to the calendar-prior-day (EA-matching) convention.
 
 ## Bottom line
 

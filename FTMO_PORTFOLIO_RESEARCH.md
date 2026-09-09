@@ -94,15 +94,19 @@ days, pass probability reported on untouched TEST days**. Absolute percentages a
 proxy-optimistic (Yahoo data, no live haircut); the **direction** is the
 deliverable and KAPI-1 confirms the levels.
 
-### Drop-one-leg attribution (TEST pass, baseline 95.6%)
+### Drop-one-leg attribution (EA-matching indices; TEST pass, baseline 97.7%)
 | remove | TEST pass | leg expectancy | read |
 |---|---|---|---|
-| NAS100 | 95.8% | **−0.013** | dead weight — dropping it does not hurt |
-| JP225 | **93.0%** | +0.120 | biggest drop — JP225 is load-bearing |
-| GER40 | 96.5% | +0.005 | ~neutral diversifier |
-| BTC | 97.1% | +0.045 | adds variance; kept for independence |
-| XAUUSD | 96.5% | +0.403 | (gold filtered) |
-| XAGUSD | 99.2% | +0.152 | **artifact — see below** |
+| NAS100 | 97.8% | **−0.009** | dead weight — dropping it does not hurt |
+| JP225 | **96.8%** | +0.080 | biggest drop — JP225 is load-bearing |
+| GER40 | 97.5% | +0.022 | ~neutral diversifier |
+| BTC | 98.3% | +0.045 | adds variance; kept for independence |
+| XAUUSD | 98.7% | +0.403 | (gold filtered) |
+| XAGUSD | 99.8% | +0.152 | **artifact — see below** |
+
+*(Indices measured EA-matching — prior calendar day, Mondays skipped. An earlier
+pass used the prior trading day and was ~0.02–0.03R optimistic on the index legs;
+the direction of every conclusion is unchanged.)*
 
 ### Two things caught here
 1. **NAS100 is genuinely droppable.** It has negative expectancy and removing it
@@ -118,13 +122,13 @@ deliverable and KAPI-1 confirms the levels.
    the exact over-reaction this campaign keeps rejecting. **Silver stays.**
 
 ### JP225 weight is monotone-beneficial (robust)
-Raising JP225 alone (all else fixed) lifts TEST pass 95.6→96.3→96.6→96.9% at
+Raising JP225 alone (all else fixed) lifts TEST pass 97.6→97.8→98.0→98.1% at
 weight 0.30→0.40→0.45→0.55 — a smooth monotone response, the signature of a real
 effect. JP225 has earned metals-level weight.
 
 ### Recommended allocation (OOS-validated)
 Best-on-TRAIN, confirmed on TEST: keep metals + BTC, **zero-weight NAS100, raise
-JP225 to ~0.45**. TEST pass **97.1% vs 95.6% baseline** (+1.5pt). This is a risk-
+JP225 to ~0.45**. TEST pass **98.2% vs 97.7% baseline** (+0.5pt). This is a risk-
 allocation change, not a decision-path change (parity untouched). Treat it as a
 **KAPI-1 recommendation**: confirm NAS100's live weakness and JP225's live edge on
 real fills before re-weighting real money; do not destabilise a challenge already
@@ -163,18 +167,20 @@ autocorrelation and streaks:
 
 | model | TEST pass |
 |---|---|
-| iid bootstrap | 95.8% |
-| block b=3 / 5 / 10 | 96.1 / 96.6 / 96.5% |
-| block b=20 | 98.6% |
+| iid bootstrap | 97.5% |
+| block b=3 / 5 / 10 | 97.9 / 98.4 / 97.7% |
+| block b=20 | 98.8% |
 
 - The iid estimate was **not inflated** by ignoring autocorrelation — the streak-
   preserving model gives similar-to-higher numbers.
-- **De-risk survives brutally well:** under block bootstrap (b=10) it is 96.8% with
-  vs **88.9% without** — a **+7.9pt** gain. Its whole job is surviving clustered
+- **De-risk survives brutally well:** under block bootstrap (b=10) it is 97.8% with
+  vs **91.3% without** — a **+6.5pt** gain. Its whole job is surviving clustered
   losses, and the streak-preserving model confirms it. This is the most valuable,
   most robust lever in the whole system.
 - **The allocation recommendation holds** under the realistic model: recommended
-  98.3% vs baseline 96.8% (+1.5pt), same as iid.
+  98.6% vs baseline 97.8% (+0.8pt).
+
+*(All figures EA-matching — prior calendar day, Mondays skipped on the index legs.)*
 
 Caveat: blocks are resampled from one test period; a genuinely adverse regime could
 be worse. The real safeguards remain low risk + de-risk + KAPI-1.

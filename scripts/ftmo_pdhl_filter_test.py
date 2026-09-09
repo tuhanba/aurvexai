@@ -14,13 +14,14 @@ def atr14(prev_ranges):
 
 def sim_pdhl(sym,cost,rangefilt=0.0,lookback=20,atrmult=1.5,trail=0.5,
              sess_start=0,sess_end=24):
-    bd,days=prep(sym); histrp=[]; dayrange=[]; out=[]
+    # EA-matching: prior CALENDAR day (day-1). Missing (Sun/holiday) -> skip, as the
+    # live EA's PrevDayRange does (this skips index PDHL on Mondays).
+    bd,days=prep(sym); dayset=set(days); histrp=[]; dayrange=[]; out=[]
     for di,day in enumerate(days):
         db=bd[day]
-        if di==0: 
-            ph=max(b[2] for b in db); pl=min(b[3] for b in db)
-            dayrange.append(ph-pl); continue
-        prev=bd[days[di-1]]
+        if (day-1) not in dayset:
+            dayrange.append(max(b[2] for b in db)-min(b[3] for b in db)); continue
+        prev=bd[day-1]
         ph=max(b[2] for b in prev); pl=min(b[3] for b in prev)
         # ATR proxy = mean of last 14 daily ranges
         atr=atr14(dayrange)

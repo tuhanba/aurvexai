@@ -19,7 +19,7 @@ lowers bust probability), not for their own expectancy.
 | XAGUSD | ORB | **core** | +0.13–0.23R |
 | GER40.cash | PDHL | diversifier | ~0 to +0.09R |
 | US100.cash | PDHL | diversifier (weakest) | ~0 / negative |
-| JP225.cash | PDHL | **real edge** | +0.11R OOS (CI excludes 0); +0.14 with vol-filter |
+| JP225.cash | PDHL | **real edge** | +0.09R OOS (EA-matching, CI excludes 0); +0.12 with vol-filter |
 | BTCUSD | ORB (ForceStrategy=ORB) | **core** | +0.16R (trail 0.3 keeps it alive at wide spread) |
 
 NAS100/US100 is the weakest — the #1 KAPI-1 suspect. XAGAUD, XAUEUR and other
