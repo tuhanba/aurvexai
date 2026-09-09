@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import datetime as _dt
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .config import Config
 from .models import LONG, MarketSnapshot, Signal
@@ -36,6 +36,15 @@ class PortfolioView:
     # market profit target has been hit (positions already flattened). Blocks
     # new entries for the rest of the logical day. Ignored in realized-only mode.
     daily_profit_locked: bool = False
+    # FTMO Mode fields (populated by the engine only when FTMO_MODE_ENABLED and an
+    # account state exists; otherwise the defaults make the FTMO gate a no-op and
+    # decide() stays byte-identical). ftmo_state is an ftmo.FtmoAccountState.
+    ftmo_state: Any = None
+    ftmo_open_worst_case: float = 0.0        # Σ additional loss if all opens stop
+    ftmo_mode_allows_new_risk: bool = True   # False in SURVIVAL mode
+    ftmo_near_weekend: bool = False          # Standard-account weekend-flat window
+    ftmo_mode: str = ""                      # current operating-mode name (label)
+    ftmo_health: float = 100.0               # account health score (label)
 
 
 @dataclass
