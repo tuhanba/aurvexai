@@ -55,11 +55,20 @@
 //|     a near-pass is not given back. Raises the reach-target rate.     |
 //|  Both default OFF (parity preserved) — tune on live/KAPI-1 first.    |
 //|                                                                    |
+//|  v2.8: trade journal (JournalTrades, default ON) — writes each      |
+//|  entry's setup context (opening range, the trailing-median the      |
+//|  filter would see, spread at arm + fill, gain/dd, risk mult) to     |
+//|  MQL5/Files/AurvexFTMO_journal_<SYM>_<magic>.csv. Passive (never     |
+//|  affects orders). Join with the exported MT5 history at KAPI-1 to    |
+//|  retro-test every candidate filter/guard on REAL fills. Also fixes   |
+//|  BTC multi-session: effective magic = Magic + OrbRangeHourUTC so     |
+//|  same-symbol charts never manage each other's orders.               |
+//|                                                                    |
 //|  ⚠ Set AccountSize to your REAL account size (e.g. 25000 for a     |
 //|  $25k account) so the overall-loss floor is stable across restarts.|
 //+------------------------------------------------------------------+
 #property copyright "Aurvex"
-#property version   "2.70"
+#property version   "2.80"
 #property strict
 #include <Trade/Trade.mqh>
 
@@ -91,6 +100,7 @@ input double NearTargetMult   = 0.5;      // risk multiplier once near the phase
 input bool   AvoidNews        = true;     // block entries around high-impact news (FTMO news rule)
 input int    NewsBufferMin    = 2;        // minutes each side of a high-impact event to stand down
 input bool   DrawLevels       = true;     // draw entry/stop lines on the chart
+input bool   JournalTrades    = true;     // v2.8: log each entry's context (opening range, median, spread) to MQL5/Files/AurvexFTMO_journal_<SYM>_<magic>.csv — passive, never affects orders
 input double AccountSize      = 0;        // 0 = balance at first start; set to REAL account size (e.g. 10000)
 input long   Magic            = 770077;   // our order id
 input string TelegramToken    = "";       // optional Telegram bot token
@@ -114,6 +124,9 @@ bool     g_fridayFlat     = false;
 bool     g_haveTrade      = false;
 double   g_tEntry = 0, g_tRisk = 0, g_tPeak = 0;
 bool     g_tLong          = false;
+// v2.8 journal: setup context stashed at arm time, written once when the fill appears
+bool     g_journaled      = false;
+double   g_ctxHi = 0, g_ctxLo = 0, g_ctxRefPct = 0, g_ctxMedPct = 0, g_ctxSpreadPct = 0;
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -129,9 +142,10 @@ int OnInit()
    g_lastDay        = UtcDayStart(TimeGMT());
    g_ftmoDay        = FtmoDayStart(TimeGMT());
    EventSetTimer(20);
-   PrintFormat("AurvexFTMO v2.7 on %s  strat=%s  orbHourUTC=%d  minRangeMult=%.2f  pdhlMinRangeMult=%.2f  maxSpread=%.3f  phaseTgt=%.1f  offsetH=%d  initBal=%.2f",
-               SYM, STRAT, OrbRangeHourUTC, MinRangeMedMult, PdhlMinRangeMedMult,
-               MaxSpreadPct, PhaseTargetPct, (int)(ServerUtcOffset()/3600), g_initBal);
+   PrintFormat("AurvexFTMO v2.8 on %s  strat=%s  magic=%d  orbHourUTC=%d  minRangeMult=%.2f  pdhlMinRangeMult=%.2f  maxSpread=%.3f  phaseTgt=%.1f  journal=%s  offsetH=%d  initBal=%.2f",
+               SYM, STRAT, (int)g_magic, OrbRangeHourUTC, MinRangeMedMult, PdhlMinRangeMedMult,
+               MaxSpreadPct, PhaseTargetPct, (JournalTrades?"on":"off"),
+               (int)(ServerUtcOffset()/3600), g_initBal);
    return(INIT_SUCCEEDED);
 }
 void OnDeinit(const int reason){ EventKillTimer(); if(DrawLevels) DeleteLevels(); }
@@ -180,6 +194,7 @@ void OnTimer()
       FlattenSymbol(SYM);
       g_tradedToday = false;
       g_fridayFlat  = false;
+      g_journaled   = false;               // new day -> journal the next fill
       g_lastDay = today;
       if(DrawLevels) DeleteLevels();
       Notify(SYM+" new UTC day — flat, ready");
@@ -212,7 +227,7 @@ void OnTimer()
 
    //--- one side filled -> cancel the opposite pending, latch "traded today"
    ManageFirstBreak(SYM);
-   if(HasPosition(SYM)) { g_tradedToday=true; ManageTrailing(); return; }
+   if(HasPosition(SYM)) { g_tradedToday=true; JournalOnFill(); ManageTrailing(); return; }
    g_haveTrade = false;                 // no open position -> clear trail state
    if(g_tradedToday)    { DeletePendings(SYM); return; }
 
@@ -267,6 +282,15 @@ void OnTimer()
             return;
          }
       }
+      // stash setup context for the journal (median computed even if filter off,
+      // so KAPI-1 can retro-test the filter on real fills)
+      if(JournalTrades) {
+         g_ctxHi=hi; g_ctxLo=lo;
+         double m0=(hi+lo)/2.0; g_ctxRefPct=(m0>0)?(hi-lo)/m0*100.0:0;
+         double med0=OrbMedianRangePct(SYM, OrbRangeHourUTC, OrbHours, today, 20);
+         g_ctxMedPct=(med0>0)?med0*100.0:-1;
+         g_ctxSpreadPct=(px>0 && ask>0 && bid>0)?(ask-bid)/px*100.0:0;
+      }
       EnsureStops(SYM, hi, lo, lo, hi, "AurvexORB");
    }
    else // PDHL
@@ -304,6 +328,14 @@ void OnTimer()
                    "% — skip (low-vol day filter)");
             return;
          }
+      }
+      // stash setup context for the journal (prior-day range median even if filter off)
+      if(JournalTrades) {
+         g_ctxHi=ph; g_ctxLo=pl;
+         double mp=(ph+pl)/2.0; g_ctxRefPct=(mp>0)?(ph-pl)/mp*100.0:0;
+         double refRp2, medRp2;
+         g_ctxMedPct = PrevDayRangePctMed(SYM, today, 20, refRp2, medRp2) ? medRp2*100.0 : -1;
+         g_ctxSpreadPct=(px>0 && ask>0 && bid>0)?(ask-bid)/px*100.0:0;
       }
       EnsureStops(SYM, ph, ph-d, pl, pl+d, "AurvexPDHL");
    }
@@ -619,6 +651,50 @@ void FlattenSymbol(string sym)
       ulong t=PositionGetTicket(i);
       if(PositionGetString(POSITION_SYMBOL)==sym && PositionGetInteger(POSITION_MAGIC)==g_magic)
          trade.PositionClose(t); }
+}
+
+// v2.8 trade journal: write ONE CSV row when the fill first appears, capturing the
+// setup context (opening range, the trailing-median the filter would see, the
+// spread at arm + at fill) that the MT5 report lacks. Join this with the exported
+// history on symbol+time at KAPI-1 to retro-test every candidate filter/guard on
+// REAL fills. Passive — reads state and writes a file, never touches orders.
+void JournalOnFill()
+{
+   if(!JournalTrades || g_journaled) return;
+   ulong tk=0;
+   for(int i=PositionsTotal()-1;i>=0;i--){ ulong t=PositionGetTicket(i);
+      if(PositionGetString(POSITION_SYMBOL)==SYM && PositionGetInteger(POSITION_MAGIC)==g_magic){ tk=t; break; } }
+   if(tk==0) return;
+   double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+   double sl    = PositionGetDouble(POSITION_SL);
+   double vol   = PositionGetDouble(POSITION_VOLUME);
+   bool   isLong= (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY);
+   double base  = (AccountSize>0 ? AccountSize : g_initBal);
+   double eq    = AccountInfoDouble(ACCOUNT_EQUITY);
+   double gain  = (base>0)?(eq-base)/base*100.0:0;
+   double dd    = (base>0)?(base-eq)/base*100.0:0;
+   double bid=SymbolInfoDouble(SYM,SYMBOL_BID), ask=SymbolInfoDouble(SYM,SYMBOL_ASK);
+   double px =(bid>0&&ask>0)?(bid+ask)/2.0:bid;
+   double spr=(px>0&&ask>0&&bid>0)?(ask-bid)/px*100.0:0;
+   int dg=(int)SymbolInfoInteger(SYM,SYMBOL_DIGITS);
+   string fn="AurvexFTMO_journal_"+SYM+"_"+(string)g_magic+".csv";
+   int h=FileOpen(fn, FILE_READ|FILE_WRITE|FILE_CSV|FILE_ANSI, ',');
+   if(h==INVALID_HANDLE){ Notify(SYM+" journal: FileOpen failed"); return; }
+   if(FileSize(h)==0)
+      FileWrite(h,"utc_time","symbol","strat","side","entry","sl","lots","hi","lo",
+                "ref_range_pct","trail_med_pct","spread_arm_pct","spread_fill_pct",
+                "gain_pct","dd_pct","riskmult");
+   FileSeek(h,0,SEEK_END);
+   FileWrite(h, TimeToString(TimeGMT(),TIME_DATE|TIME_MINUTES), SYM, STRAT,
+             (isLong?"long":"short"),
+             DoubleToString(entry,dg), DoubleToString(sl,dg), DoubleToString(vol,2),
+             DoubleToString(g_ctxHi,dg), DoubleToString(g_ctxLo,dg),
+             DoubleToString(g_ctxRefPct,4), DoubleToString(g_ctxMedPct,4),
+             DoubleToString(g_ctxSpreadPct,4), DoubleToString(spr,4),
+             DoubleToString(gain,3), DoubleToString(dd,3), DoubleToString(RiskMultiplier(),3));
+   FileClose(h);
+   g_journaled=true;
+   Notify(SYM+" journaled entry -> MQL5/Files/"+fn);
 }
 
 // Trailing stop: once the open position is +TrailStopR in profit, trail the SL to
