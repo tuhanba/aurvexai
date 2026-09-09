@@ -91,6 +91,24 @@ realised R per instrument — the live-adjusted edge. Watch especially whether t
 session-gated indices and silver hold up; drop what does not, keep the metals
 core.
 
+### Per-instrument cost break-even (the max tolerable round-trip cost)
+`scripts/ftmo_cost_breakeven.py` finds the round-trip cost (spread + commission +
+slippage, as a fraction of price) at which each leg's OOS edge crosses zero. Read
+each instrument's *realised* cost at KAPI-1 against its break-even below — if the
+live cost is near or above it, that leg is not viable live.
+
+| leg | break-even cost | note |
+|---|---|---|
+| JP225 (filter) | **0.204%** | most spread-robust |
+| XAUUSD gold (filter) | **0.170%** | the filter more than **doubles** gold's tolerance (0.082% → 0.170%) |
+| BTC (trail 0.3) | 0.118% | crypto spreads run wide — the closest-to-margin core, watch it |
+| XAGUSD silver | 0.098% | less liquid; watch realised spread |
+| GER40 | 0.076% | thin diversifier |
+| NAS100/US100 | **0.013%** | below any realistic index spread — expect it to be non-viable live |
+
+This is the quantitative backing for the allocation call: NAS100's edge dies at
+almost any real cost, while the gold filter and JP225 are the most cost-robust legs.
+
 ## Honest expectations
 
 The edge is **real but modest** (~+0.15R on the metals core, measured over years
