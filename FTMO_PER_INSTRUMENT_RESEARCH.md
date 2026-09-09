@@ -171,6 +171,22 @@ as a real tendency and a KAPI-1 watch hypothesis (if silver's live fills confirm
 strong align/counter split, revisit). The exciting silver +0.499 was a reminder to
 always check the CI before believing a single split.
 
+## Result 7 — two more hybrids, both rejected
+
+Trying to rescue the borderline silver trend-align into something deployable
+(`scripts/ftmo_hybrid_trend_test.py` / `hybrid2`):
+
+- **Silver align + range-filter combined** — over-filters to 143 trades and
+  collapses: OOS +0.499 (align alone) → **+0.034** (CI crosses 0). The two causal
+  filters stacked are worse than either alone.
+- **Cross-instrument confluence** (gold's prior-day trend gating silver/BTC) — no
+  help on silver (+0.217 vs +0.219 base) and **hurts** BTC (−0.045 vs +0.023). A
+  clean, causal retry of the old look-ahead "cross-confirmation"; still no usable
+  edge. Gold's trend does not inform the other instruments.
+
+The hybrid space is exhausted: the deployable levers are the gold and JP225
+low-vol-day filters; everything else is a weak tendency (silver align) or noise.
+
 ## Bottom line
 
 The professional move was not "tune harder until positive" — that made every
