@@ -249,6 +249,26 @@ honest, final answer to "can we build our own TA": we can, and the best one we c
 build says the entry is a coin-weighted-to-our-favour that cannot be timed — so we
 win by picking the right coins and never over-betting, exactly as the system does.
 
+## Result 10 — adding to a live trade (pyramiding / 2nd same-day entry): REJECTED
+
+Question: while a trade is open and winning, can we add size (or take a 2nd same-day
+entry) to stack profit? Tested adding a 2nd unit at +1R (add-stop = original entry):
+
+| instrument | base exp | pyramid exp | variance |
+|---|---|---|---|
+| XAUUSD | +0.185 | **−0.398** | 3.09 → 3.35 (up) |
+| XAGUSD | +0.152 | **−0.403** | 3.08 → 3.60 (up) |
+| BTC | −0.042 | **−0.544** | 2.82 → 3.84 (up) |
+
+Pyramiding turns a positive system strongly negative **and** raises variance — the
+worst combination for a bounded challenge. Mechanism: the add lands at +1R (a worse
+price, mid-move), and per the loss anatomy most moves that reach +1R pull back
+(only ~20% run), so the added unit is whipsawed out at its entry stop most of the
+time — converting the fat-tail edge into a mean-reverting loser. A 2nd same-day
+entry is also not the validated setup (the range is already broken; the no-chase
+guard exists for exactly this). **The right way to add trades is more independent
+STREAMS (more instruments, BTC multi-session), never more size on an open trade.**
+
 ## Bottom line
 
 The professional move was not "tune harder until positive" — that made every
