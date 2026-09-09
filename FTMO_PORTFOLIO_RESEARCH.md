@@ -85,11 +85,56 @@ with — slightly friendlier than — the ~76% quoted in the launch docs.)*
    instrument at higher risk passes *less* often than this spread-out book at low
    risk, because variance — not expectancy — is what busts a challenge.
 
+## 3. Deep risk-allocation analysis (2026-09-09)
+
+With the improved book (gold ORB filter on, JP225 revealed as a real edge),
+`scripts/ftmo_deep_portfolio.py` builds the real joint daily P&L and finds the
+risk-weight vector that maximises pass probability — **weights chosen on TRAIN
+days, pass probability reported on untouched TEST days**. Absolute percentages are
+proxy-optimistic (Yahoo data, no live haircut); the **direction** is the
+deliverable and KAPI-1 confirms the levels.
+
+### Drop-one-leg attribution (TEST pass, baseline 95.6%)
+| remove | TEST pass | leg expectancy | read |
+|---|---|---|---|
+| NAS100 | 95.8% | **−0.013** | dead weight — dropping it does not hurt |
+| JP225 | **93.0%** | +0.120 | biggest drop — JP225 is load-bearing |
+| GER40 | 96.5% | +0.005 | ~neutral diversifier |
+| BTC | 97.1% | +0.045 | adds variance; kept for independence |
+| XAUUSD | 96.5% | +0.403 | (gold filtered) |
+| XAGUSD | 99.2% | +0.152 | **artifact — see below** |
+
+### Two things caught here
+1. **NAS100 is genuinely droppable.** It has negative expectancy and removing it
+   leaves pass probability flat-to-better. Its old "variance-reduction" rationale
+   does not survive measurement — it is the #1 leg to zero-weight or cut at KAPI-1.
+2. **The "drop silver → 99.2%" is a Monte-Carlo artifact, NOT a reason to cut
+   silver.** Silver's trade distribution is an extreme fat tail: median **−1.08R**
+   but p95 **+6.56R** and max **+23.19R** — 78% small losses funded by rare
+   monster winners (the biggest in the book). The iid-day bootstrap under-credits
+   that tail under the −10% barrier (it can bust a path before the monster winner
+   lands), but FTMO has **no time limit**, so silver's real +0.15R expectancy and
+   huge winners do pay off. Cutting a core validated edge on a model quirk would be
+   the exact over-reaction this campaign keeps rejecting. **Silver stays.**
+
+### JP225 weight is monotone-beneficial (robust)
+Raising JP225 alone (all else fixed) lifts TEST pass 95.6→96.3→96.6→96.9% at
+weight 0.30→0.40→0.45→0.55 — a smooth monotone response, the signature of a real
+effect. JP225 has earned metals-level weight.
+
+### Recommended allocation (OOS-validated)
+Best-on-TRAIN, confirmed on TEST: keep metals + BTC, **zero-weight NAS100, raise
+JP225 to ~0.45**. TEST pass **97.1% vs 95.6% baseline** (+1.5pt). This is a risk-
+allocation change, not a decision-path change (parity untouched). Treat it as a
+**KAPI-1 recommendation**: confirm NAS100's live weakness and JP225's live edge on
+real fills before re-weighting real money; do not destabilise a challenge already
+in flight.
+
 ## Bottom line
 
-No new entry edge was found (FBR joins the rejected pile). The gain from this pass
-is **certainty about the risk architecture**: low correlations confirm the
-diversified book, the daily floor is a non-issue at our risk level, and the
-de-risk is worth ~+9pt of pass probability. The path to funding is not a better
-signal — it is **low risk, diversified, de-risked, and patient**, which the live
-config already encodes.
+No new entry edge was found (FBR joins the rejected pile). The gains from these
+passes are (a) **certainty about the risk architecture** — low correlations, a
+non-binding daily floor, de-risk worth ~+9pt — and (b) two concrete, OOS-validated
+allocation moves: **cut NAS100, weight JP225 up.** The path to funding is not a
+better signal — it is **low risk, diversified, de-risked, patient, and allocated
+toward the legs that actually carry an edge**, which the config now encodes.

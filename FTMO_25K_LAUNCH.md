@@ -140,6 +140,14 @@ Export the MT5 history (History tab → right-click → Report → save HTML) an
 Watch US100 and BTC especially; keep what holds, drop what doesn't. Send me the
 report and we read it together.
 
+**Allocation recommendation to confirm at KAPI-1** (deep risk-allocation analysis,
+`FTMO_PORTFOLIO_RESEARCH.md`): the research now finds **NAS100/US100 is dead
+weight** (negative expectancy; dropping it does not lower the pass rate) and
+**JP225 is a genuine edge** worth **more** weight (~0.45 vs 0.30). If KAPI-1's real
+fills agree, zero-weight US100 and raise JP225. Keep silver despite its wild swings
+— its rare monster winners are the biggest in the book. Don't re-weight real money
+mid-challenge; apply this on the next challenge or once live data confirms it.
+
 ## 8. Honest expectations (partner-to-partner)
 
 - Single-attempt Phase-1 pass ≈ **76%** at this config (with the built-in de-risk); Phase 2 (+5%) is easier.
