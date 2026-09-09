@@ -187,6 +187,30 @@ Trying to rescue the borderline silver trend-align into something deployable
 The hybrid space is exhausted: the deployable levers are the gold and JP225
 low-vol-day filters; everything else is a weak tendency (silver align) or noise.
 
+## Result 8 — building our OWN technical analysis (coil / inside-day)
+
+Rather than textbook indicators, we built causal price-STRUCTURE signals from the
+day-range series (`scripts/ftmo_own_ta_test.py`): **coil** (yesterday's range in
+the bottom third of the last 7 = compression → expansion), **expand** (top third),
+**inside** (yesterday's range inside the day before).
+
+They capture **real, mechanically-consistent structure** — for silver the
+post-compression breakout is much stronger than base (coil k-fold **+0.505, 5/5**
+vs base +0.152) and its mirror is negative (expand k-fold **−0.149, 1/5**): a clean
+"compression precedes a good breakout, exhaustion precedes a bad one" split.
+Inside-days also lift the mean (gold +0.447, silver +0.349).
+
+**But none is deployable:** every bootstrap 90% CI crosses zero, because filtering
+to the signal cuts the sample to ~120–270 trades (test halves that). Same verdict
+as trend-align — a real tendency, not statistically robust enough to ship.
+
+The consistent thread across Results 6–8: **silver's breakout quality is genuinely
+context-dependent** (better trend-aligned, better post-compression), which is the
+strongest single KAPI-1 hypothesis to watch on live fills. But on proxy data no
+single context filter reaches CI>0, and stacking them collapses the sample. We can
+build our own TA; it sees real structure; it does not beat the simple breakout at a
+robust significance level. The simplicity remains load-bearing.
+
 ## Bottom line
 
 The professional move was not "tune harder until positive" — that made every
