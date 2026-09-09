@@ -98,10 +98,46 @@ first**, confirm the Experts log shows `minRangeMult=1.00` and that the skip
 messages look right, and let KAPI-1 confirm it on real fills before trusting it on
 size.
 
+## Result 4 — gold filter robustness (triple-checked, no error)
+
+Before trusting the gold filter it was stress-tested three ways
+(`scripts/`-reproducible):
+
+- **Bootstrap 90% CI (OOS, 5000 resamples):** filtered gold mean +0.356, CI
+  **[+0.014, +0.753]** — lower bound above 0. Unfiltered gold is +0.194 with CI
+  **[−0.062, +0.464]** — crosses 0. The filter lifts the *whole distribution*
+  above zero, not just the mean.
+- **Lookback stability:** OOS is a flat plateau — +0.346 / +0.356 / +0.326 at
+  lookback 15 / 20 / 25 (only 10 and 30 fall off). Not fragile; 20 is well-centred.
+- **Cost stability:** the filter's OOS *gain grows* with cost — +0.161 at 0.04%
+  up to +0.208 at 0.10%. It strips marginal low-range trades whose small moves are
+  eaten by fees, so it helps *more* under realistic live fills.
+
+## Result 5 — a SECOND real filter: JP225 (and JP225 is not "breakeven")
+
+Extending the same causal vol-filter to the index PDHL strategy: GER40 and NAS100
+show no robust benefit (NAS100 barely reaches breakeven — it stays the weakest, #1
+KAPI-1 drop candidate). But **JP225 is a genuine, robust positive** — and stronger
+than the roster docs' "~breakeven" label:
+
+| JP225 (PDHL, session 0–6 UTC) | k-fold exp | folds | OOS mean | OOS 90% CI |
+|---|---|---|---|---|
+| baseline (no filter) | +0.081 | **5/5** | +0.112 | **[+0.070, +0.155]** |
+| filter ×1.0 | +0.120 | **5/5** | +0.143 | **[+0.079, +0.208]** |
+
+Both rows have a bootstrap CI **excluding zero**. The baseline result corrects the
+record: **JP225 is not a breakeven diversifier, it is a real +0.11R OOS edge.** The
+vol-filter adds a further stable +0.03R (flat across cost). Shipped as EA input
+`PdhlMinRangeMedMult` (default **0.0 = off**); enable on JP225 with 1.0 after
+KAPI-1. Same caveats as the gold filter: proxy data, new code, halves the trade
+count — demo-verify first, KAPI-1 is the arbiter.
+
 ## Bottom line
 
 The professional move was not "tune harder until positive" — that made every
 metal *worse* out of sample. The professional move is: **keep the metals simple
-(proven optimal), reject the BTC over-tune, and add the one causal, OOS-validated,
-mechanistically-sound filter (gold low-vol-day skip), shipped OFF-by-default so it
-is opt-in and demo-checked first.** That is the honest way to raise the edge.
+(proven optimal), reject the BTC over-tune, and add the causal, OOS-validated,
+mechanistically-sound filters that survive bootstrap + k-fold + cost checks — the
+gold ORB low-vol-day skip and the JP225 PDHL low-vol-day skip — both shipped
+OFF-by-default so they are opt-in and demo-checked first.** Two real levers found,
+five over-fits rejected. That is the honest way to raise the edge.

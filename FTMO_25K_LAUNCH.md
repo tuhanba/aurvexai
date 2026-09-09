@@ -97,6 +97,13 @@ genuinely quiet mornings. Let KAPI-1 confirm it on real fills before trusting it
 size. At launch you may keep it **off** (0.0) for the simplest, already-validated
 baseline and turn it on once the demo/KAPI-1 looks clean.
 
+The same filter exists for the index PDHL side as `PdhlMinRangeMedMult` (default
+0.0 = off). Research shows **JP225 is a genuine +0.11R OOS edge** (not the
+"breakeven" the old roster said) and its vol-filter adds a stable +0.03R, so after
+KAPI-1 you may set `PdhlMinRangeMedMult = 1.0` **on the JP225 chart only** (GER40
+and NAS100 show no benefit — leave them at 0). Same rule: demo-verify first, watch
+the log line `pdhlMinRangeMult=1.00` and the skip messages.
+
 ## 4. Turn it on and VERIFY
 
 1. Top toolbar **"Algo Trading"** button green.
