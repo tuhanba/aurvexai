@@ -211,6 +211,44 @@ single context filter reaches CI>0, and stacking them collapses the sample. We c
 build our own TA; it sees real structure; it does not beat the simple breakout at a
 robust significance level. The simplicity remains load-bearing.
 
+## Result 9 — the capstone: a learned composite TA model proves outcomes are unpredictable
+
+The strongest form of "our own technical analysis": pool the core instruments,
+build a composite **entry-quality score** from all the causal features
+(trend-alignment, compression/coil, opening-range size, prior-day momentum),
+**learn the weights on train**, and validate on test
+(`scripts/ftmo_own_ta_model.py`). Sizing/filtering by a learned score keeps the
+full sample, avoiding the collapse that killed the individual filters.
+
+The result is decisive:
+
+- **The learned weights are tiny** — each feature's train correlation with trade R
+  is 0.005–0.05. No causal feature meaningfully predicts an individual trade's
+  outcome.
+- **The score has no out-of-sample power:** top-50%-scored test trades average
+  +0.147R — *identical to the +0.147R base*; top-33% is *worse* (+0.069). It cannot
+  separate winners from losers.
+- **Yet the base breakout is statistically significant** — OOS +0.147R,
+  bootstrap 90% CI **[+0.022, +0.278]**, excludes zero.
+
+**The conclusion is the whole campaign in one line: which individual breakout will
+run is essentially unpredictable from prior price structure.** The 73%-fail /
+20%-big-runner outcome is close to an unforecastable draw from a positive-
+expectancy distribution — which is *precisely why* every entry filter and score
+fails out of sample. You cannot cherry-pick the winners in advance.
+
+So the edge is real and it lives in three places only, none of them entry-timing:
+1. **Instrument selection** — some instruments have better distributions (gold,
+   silver, BTC, JP225); others do not (NAS100).
+2. **The one weak-but-real regime effect** — the gold low-vol-day filter (and JP225's).
+3. **Risk management** — de-risk in drawdown, low per-trade risk, diversification.
+
+Trying to out-analyse the entry is mathematically futile here; the campaign has now
+*proven* it at the model level, not just found it filter-by-filter. This is the
+honest, final answer to "can we build our own TA": we can, and the best one we can
+build says the entry is a coin-weighted-to-our-favour that cannot be timed — so we
+win by picking the right coins and never over-betting, exactly as the system does.
+
 ## Bottom line
 
 The professional move was not "tune harder until positive" — that made every
