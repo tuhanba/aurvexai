@@ -31,11 +31,20 @@
 //|  backtest (Yahoo, cash-session bars only) never validated the      |
 //|  overnight-futures regime the live CFD was trading and losing in.  |
 //|                                                                    |
-//|  ⚠ Set AccountSize to your REAL account size (e.g. 10000 for a     |
-//|  $10k account) so the overall-loss floor is stable across restarts.|
+//|  v2.6: ORB low-volatility-day filter (MinRangeMedMult, default OFF).|
+//|  When >0, the ORB only arms if today's opening range is at least    |
+//|  MinRangeMedMult x the trailing-20-day median opening range — a     |
+//|  causal filter (known at arm time) that skips dead choppy days.     |
+//|  Out-of-sample validated on GOLD only (rf=1.0 lifts XAUUSD OOS      |
+//|  ~+0.19R -> +0.36R); silver/BTC show no benefit, keep them at 0.    |
+//|  See FTMO_PER_INSTRUMENT_RESEARCH.md. Default 0 = no behaviour      |
+//|  change (paper/live parity preserved).                             |
+//|                                                                    |
+//|  ⚠ Set AccountSize to your REAL account size (e.g. 25000 for a     |
+//|  $25k account) so the overall-loss floor is stable across restarts.|
 //+------------------------------------------------------------------+
 #property copyright "Aurvex"
-#property version   "2.50"
+#property version   "2.60"
 #property strict
 #include <Trade/Trade.mqh>
 
@@ -44,6 +53,7 @@ input double RiskPct          = 0.5;      // risk per trade (% of balance)
 input string ForceStrategy    = "AUTO";   // AUTO | ORB | PDHL  (AUTO: metals=ORB, else PDHL)
 input int    OrbHours         = 1;        // opening-range length (hours), ORB only
 input int    OrbRangeHourUTC  = 0;        // ORB range START hour UTC (0=00:00; for BTC multi-session use 0/3/13 on separate charts)
+input double MinRangeMedMult  = 0.0;      // ORB low-vol-day filter: require today's opening range >= this x trailing-20d median (0=off; GOLD only: set 1.0)
 input double PdhlStopATR      = 1.5;      // PDHL stop = ATR(14) * this
 input double TrailStopR       = 0.5;      // trail stop this many R behind the peak once +TrailStopR in profit (0=off)
 input int    MaxDailyLossPct  = 5;        // FTMO 2-step daily limit (guard)
@@ -94,8 +104,8 @@ int OnInit()
    g_lastDay        = UtcDayStart(TimeGMT());
    g_ftmoDay        = FtmoDayStart(TimeGMT());
    EventSetTimer(20);
-   PrintFormat("AurvexFTMO v2.5 on %s  strat=%s  orbHourUTC=%d  offsetH=%d  initBal=%.2f",
-               SYM, STRAT, OrbRangeHourUTC, (int)(ServerUtcOffset()/3600), g_initBal);
+   PrintFormat("AurvexFTMO v2.6 on %s  strat=%s  orbHourUTC=%d  minRangeMult=%.2f  offsetH=%d  initBal=%.2f",
+               SYM, STRAT, OrbRangeHourUTC, MinRangeMedMult, (int)(ServerUtcOffset()/3600), g_initBal);
    return(INIT_SUCCEEDED);
 }
 void OnDeinit(const int reason){ EventKillTimer(); if(DrawLevels) DeleteLevels(); }
@@ -199,6 +209,21 @@ void OnTimer()
          Notify(SYM+" ORB: range already broken before arming — skip today");
          return;
       }
+      // Low-volatility-day filter (v2.6, causal): skip days whose opening range is
+      // abnormally small vs the trailing-20-day median. OOS-validated on GOLD; off
+      // by default so it changes nothing unless enabled (parity preserved).
+      if(MinRangeMedMult>0) {
+         double mid = (hi+lo)/2.0;
+         double todayRp = (mid>0) ? (hi-lo)/mid : 0;
+         double med = OrbMedianRangePct(SYM, OrbRangeHourUTC, OrbHours, today, 20);
+         if(med>0 && todayRp < MinRangeMedMult*med) {          // med<=0 => too little history, fail open
+            g_tradedToday=true;
+            Notify(SYM+" ORB: opening range "+DoubleToString(todayRp*100,3)+"% < "+
+                   DoubleToString(MinRangeMedMult,2)+"x median "+DoubleToString(med*100,3)+
+                   "% — skip (low-vol day filter)");
+            return;
+         }
+      }
       EnsureStops(SYM, hi, lo, lo, hi, "AurvexORB");
    }
    else // PDHL
@@ -256,6 +281,50 @@ bool FirstHourRange(string sym, datetime dayStart, int rangeHour, double &hi, do
       }
    }
    return false;
+}
+// Trailing median of the opening-range SIZE (as a fraction of price) over the last
+// `lookback` completed UTC days before `today`. Causal (uses only prior days), so
+// the low-vol-day filter never peeks at the future. Returns -1 if there is not
+// enough history (caller then trades — fail open). rangeHour/orbHours mirror the
+// live ORB window so the "typical range" is measured on the same hours we trade.
+double OrbMedianRangePct(string sym, int rangeHour, int orbHours, datetime today, int lookback)
+{
+   MqlRates r[]; ArraySetAsSeries(r,true);
+   int n = CopyRates(sym, PERIOD_H1, 0, 1200, r);            // ~50 calendar days of H1
+   if(n < orbHours*2) return -1;
+   long off = ServerUtcOffset();
+   datetime days[]; double dhi[]; double dlo[]; int cnt=0;
+   for(int k=0;k<n;k++){
+      long utc = (long)r[k].time - off;
+      int hr = (int)((utc%86400)/3600);
+      if(hr < rangeHour || hr >= rangeHour+orbHours) continue;
+      datetime d = UtcDayStart((datetime)utc);
+      if(d >= today) continue;                                // prior days only
+      int idx=-1;
+      for(int j=0;j<cnt;j++) if(days[j]==d){ idx=j; break; }
+      if(idx<0){
+         idx=cnt; cnt++;
+         ArrayResize(days,cnt); ArrayResize(dhi,cnt); ArrayResize(dlo,cnt);
+         days[idx]=d; dhi[idx]=r[k].high; dlo[idx]=r[k].low;
+      } else {
+         if(r[k].high>dhi[idx]) dhi[idx]=r[k].high;
+         if(r[k].low <dlo[idx]) dlo[idx]=r[k].low;
+      }
+   }
+   if(cnt < lookback) return -1;
+   // range% per day
+   double rp[]; ArrayResize(rp,cnt);
+   for(int j=0;j<cnt;j++){ double mid=(dhi[j]+dlo[j])/2.0; rp[j]=(mid>0)?(dhi[j]-dlo[j])/mid:0; }
+   // sort days descending (newest first), carrying rp[] along
+   for(int a=0;a<cnt-1;a++) for(int b=a+1;b<cnt;b++) if(days[b]>days[a]){
+      datetime td=days[a]; days[a]=days[b]; days[b]=td;
+      double tr=rp[a]; rp[a]=rp[b]; rp[b]=tr;
+   }
+   // median of the `lookback` most recent days
+   double sub[]; ArrayResize(sub,lookback);
+   for(int j=0;j<lookback;j++) sub[j]=rp[j];
+   ArraySort(sub);
+   return (sub[lookback/2]+sub[(lookback-1)/2])/2.0;
 }
 // Prior UTC day's high/low. Scans recent H1 bars and keeps those whose UTC day is
 // the day before `dayStart` — correct on any broker timezone.

@@ -83,6 +83,20 @@ after KAPI-1 confirms BTC's live single-session edge and spread** — it is new 
 that should be watched on the first days. To start, run BTC single-session
 (one chart, `OrbRangeHourUTC=0`, `RiskPct=0.30`).
 
+### Gold low-volatility-day filter (v2.6 — the edge upgrade, demo-verify first)
+Out-of-sample tests show the GOLD ORB roughly doubles its expectancy (+0.19R →
++0.36R OOS) if it **skips dead low-range days**: only trade when gold's opening-hour
+range is at least the trailing-20-day median range (see
+`FTMO_PER_INSTRUMENT_RESEARCH.md`). The EA ships this as `MinRangeMedMult`
+(default **0.0 = off**). To enable, set **`MinRangeMedMult = 1.0` on the XAUUSD
+chart only** — leave silver, BTC and indices at 0 (they show no benefit). It is
+causal (computed from prior days), but it is **new code and it halves gold's trade
+count**, so run it on the demo first: confirm the Experts log shows
+`minRangeMult=1.00` and that the "skip (low-vol day filter)" messages fire only on
+genuinely quiet mornings. Let KAPI-1 confirm it on real fills before trusting it on
+size. At launch you may keep it **off** (0.0) for the simplest, already-validated
+baseline and turn it on once the demo/KAPI-1 looks clean.
+
 ## 4. Turn it on and VERIFY
 
 1. Top toolbar **"Algo Trading"** button green.
