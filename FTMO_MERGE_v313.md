@@ -1,9 +1,11 @@
-# AurvexFTMO v3.12 — the merge (hardened v3.11 + validated strategy)
+# AurvexFTMO v3.13 — the merge (hardened v3.11 + validated strategy)
 
-`mql5/AurvexFTMO_v3_12_merged.mq5`. A friend hardened our EA into a "v3.11" rewrite
+`mql5/AurvexFTMO_v3_13_final.mq5`. A friend hardened our EA into a "v3.11" rewrite
 with genuinely better operational engineering. This merges **their robustness** with
 **our validated strategy**, and is a **reviewed skeleton — compile (F7) + demo-verify
-before any live use.** The live account stays on the current EA until the demo is clean.
+before any live use.**
+
+**v3.13 hardening (post-review, credit: a second review pass):** enforce risk multipliers <=1 (never-raise is now checked, not just commented); reject ORB windows that cross UTC midnight; size margin for BUY_STOP/SELL_STOP; retry the journal write from the timer. Telegram URL-encoding skipped (Telegram unused). The live account stays on the current EA until the demo is clean.
 
 ## What was taken from the v3.11 hardening (kept as-is)
 - **Restart-safe state** via GlobalVariables — traded-today, Friday-flat, trailing
@@ -92,10 +94,10 @@ I cannot compile MQL5 from here. **You must press F7 (Compile) once** — every 
 needs it, or it will not load. It must say `0 errors, 0 warnings`; if it errors,
 paste me the text and I fix it immediately.
 
-1. Copy `AurvexFTMO_v3_12_merged.mq5` into MQL5/Experts.
+1. Copy `AurvexFTMO_v3_13_final.mq5` into MQL5/Experts.
 2. **F7 → 0 errors.** (mandatory)
 3. Attach with the config above; confirm the Experts log per chart:
-   `Aurvex v3.12-merged on <SYM> ... magic=... journal=on`, and `initBal`=25000.
+   `Aurvex v3.13-merged on <SYM> ... magic=... journal=on`, and `initBal`=25000.
 4. **Watch the first day live** (eyes on — since we skip a demo period): confirm
    entries fire, the journal CSV appears under MQL5/Files, and stops are set right.
 

@@ -25,7 +25,12 @@
 //|   shows clean logs and fills.                                      |
 //+------------------------------------------------------------------+
 #property copyright "Aurvex / hardened rewrite + validated-strategy merge"
-#property version   "3.12"
+#property version   "3.13"
+// v3.13 hardening (post-review): (1) reject risk multipliers >1 (never-raise
+//   enforced, not just commented); (2) reject ORB windows that cross UTC midnight;
+//   (3) size margin for BUY_STOP/SELL_STOP (the order types actually sent);
+//   (4) retry the trade-journal write from the timer if the fill-event write missed.
+//   Telegram URL-encoding intentionally not added — Telegram is unused (dormant).
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -619,7 +624,9 @@ double CalcLots(string sym,double entry,double sl,bool isBuy)
       return 0;
    }
    double marginReq=0.0;
-   ENUM_ORDER_TYPE orderType = isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   // v3.13: we actually send BUY_STOP/SELL_STOP, so size the margin for those exact
+   // order types (not the market BUY/SELL) for a correct fail-closed check.
+   ENUM_ORDER_TYPE orderType = isBuy ? ORDER_TYPE_BUY_STOP : ORDER_TYPE_SELL_STOP;
    ResetLastError();
    if(!OrderCalcMargin(orderType,sym,lots,entry,marginReq) || marginReq<0)
    {
@@ -1002,13 +1009,30 @@ int OnInit()
       Print("ERROR: invalid risk/execution/strategy parameters.");
       return INIT_PARAMETERS_INCORRECT;
    }
+   // v3.13: the risk modulators must only ever REDUCE risk. RiskMultiplier() returns
+   // these directly, so a value > 1 would RAISE risk (e.g. a typo NearTargetMult=2.0
+   // doubles risk near the target). Bound them to (0, 1].
+   if(NearTargetMult<=0 || NearTargetMult>1.0 ||
+      DeriskMult1<=0   || DeriskMult1>1.0   ||
+      DeriskMult2<=0   || DeriskMult2>1.0)
+   {
+      Print("ERROR: risk multipliers (NearTargetMult, DeriskMult1/2) must be >0 and <=1.");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   // v3.13: the ORB window must not cross UTC midnight (the hour test and the arming
+   // time do not wrap). Reject rather than silently mis-arm.
+   if(OrbRangeHourUTC+OrbHours>24)
+   {
+      Print("ERROR: OrbRangeHourUTC + OrbHours must be <= 24 (no midnight wrap).");
+      return INIT_PARAMETERS_INCORRECT;
+   }
    trade.SetExpertMagicNumber(g_magic);
    trade.SetTypeFillingBySymbol(SYM);
    SymbolSelect(SYM,true);
    LoadState();
    int sec=MathMax(1,TimerSeconds);
    EventSetTimer(sec);
-   Notify(StringFormat("Aurvex v3.12-merged on %s strat=%s magic=%d orbHourUTC=%d minRangeMult=%.2f pdhlMinRangeMult=%.2f pdhlBackScan=%s base=%.2f serverOffsetH=%d journal=%s",
+   Notify(StringFormat("Aurvex v3.13-merged on %s strat=%s magic=%d orbHourUTC=%d minRangeMult=%.2f pdhlMinRangeMult=%.2f pdhlBackScan=%s base=%.2f serverOffsetH=%d journal=%s",
           SYM,STRAT,(int)g_magic,OrbRangeHourUTC,MinRangeMedMult,PdhlMinRangeMedMult,
           (PdhlUseBackScan?"on":"off"),g_initBal,(int)(ServerUtcOffset()/3600),
           (JournalTrades?"on":"off")));
@@ -1099,7 +1123,7 @@ void OnTimer()
    if(HasPosition(SYM))
    {
       g_tradedToday=true; SaveTradeDayState();
-      DeletePendings(SYM); ManageTrailing(); return;
+      DeletePendings(SYM); JournalOnFill(); ManageTrailing(); return;  // v3.13: retry journal if the fill-event write missed
    }
    if(g_tradedToday){ DeletePendings(SYM); return; }
    if(IsNewsBlackout(SYM)){ DeletePendings(SYM); return; }
