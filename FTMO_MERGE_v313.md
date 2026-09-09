@@ -109,3 +109,59 @@ proxy-data ceiling; live will be lower and only KAPI-1 tells the truth. Going li
 without a demo means the new plumbing (persistence, DST, fill-capture) is
 first-running on real money — reviewed correct, but watch day one. Protect your
 runway; treat the fee as a bounded, repeatable cost.
+
+---
+
+# FTMO'ya yükleme adımları (v3.13 final) — baştan sona
+
+## A. Hesap ve dosya
+1. FTMO **$25k 2-Step Challenge, Standard, MT5** hesabın hazır olsun (kredentials: Login/Password/Server).
+2. MT5: **Dosya → Veri Klasörünü Aç → MQL5 → Experts** → `AurvexFTMO_v3_13_final.mq5` dosyasını içine kopyala.
+3. **MetaEditor** aç → dosyayı aç → **F7 (Derle)**. **`0 errors, 0 warnings`** görmeli. Hata çıkarsa metnini gönder (canlıya geçme).
+4. MT5'te **$25k** hesabına giriş yap (Dosya → Ticaret Hesabına Giriş).
+
+## B. Grafikleri aç (H1)
+`XAUUSD`, `XAGUSD`, `BTCUSD`, `GER40.cash`, `JP225.cash`.
+**NAS100/US100 AÇMA** — ölçülen ölü ağırlık. **XAGAUD/XAUEUR AÇMA** — yanlış enstrüman.
+
+## C. Her grafiğe EA'yı şu inputlarla ekle
+Her grafik ortak: `AccountSize=25000`, `Magic=770077`, `PhaseTargetPct=10`,
+`JournalTrades=true`, `PdhlUseBackScan=false`, `AutoPdhlSession=true`,
+`AccountWideEmergencyFlatten=true`, de-risk defaultları. "Allow Algo Trading" tikli.
+
+| grafik | RiskPct | TrailStopR | ForceStrategy | MinRangeMedMult | PdhlMinRangeMedMult |
+|---|---|---|---|---|---|
+| XAUUSD | 0.35 | 0 | AUTO | **1.0** | 0 |
+| XAGUSD | 0.35 | 0 | AUTO | 0 | 0 |
+| BTCUSD | 0.30 | 0.3 | **ORB** | 0 | 0 |
+| GER40.cash | 0.25 | 0.5 | AUTO | 0 | 0 |
+| JP225.cash | **0.45** | 0.5 | AUTO | 0 | **1.0** |
+
+> **Not:** Bu config gold + JP225 filtrelerini AÇIK başlatır (OOS-doğrulanmış, sadece işlem eler, risk eklemez). Eğer önce saf-baseline görmek istersen ikisini de 0 yapıp sonra aç.
+
+## D. Aç ve DOĞRULA
+1. Üst araç çubuğu **"Algo Trading"** yeşil.
+2. Her grafik köşesinde EA adı + **😊**.
+3. **Toolbox → Uzmanlar (Experts)** her grafik için bir satır:
+   `Aurvex v3.13-merged on <SYM> ... magic=... journal=on ... base=25000.00 serverOffsetH=3`
+   - `base=25000.00` her satırda (10000/100000 ise DUR, AccountSize düzelt).
+   - `serverOffsetH=3` (FTMO UTC+3).
+4. **İlk günü gözünle izle:** giriş oluyor mu, `MQL5/Files`'da journal CSV beliriyor mu, stoplar doğru mu.
+5. Terminali bir kez kapat-aç → state korunuyor mu (restart-safe doğrulaması).
+
+## E. Makineyi ayakta tut
+Metal açılış aralığı **01:00 UTC** — makine gece açık olmalı. Ucuz **VPS** (veya FTMO'nun ücretsiz VPS'i) laptop kapanınca setup kaçmasın diye değer.
+
+## F. KAPI-1 (15-30 işlemden sonra)
+1. MT5 History → sağ tık → Report → HTML kaydet.
+2. `MQL5/Files`'daki journal CSV'lerini + HTML raporu bana gönder.
+3. Gerçek fill'lerle her enstrümanın edge'ini + spread'ini break-even eşikleriyle okuruz.
+
+## G. KAPI-1 SONRASI — kâr genişlemesi (BTC multi-session)
+KAPI-1 BTC'nin canlı spread'ini onaylarsa: **3 BTCUSD grafiği** aç, `OrbRangeHourUTC` = `0`/`3`/`13`, her biri `ForceStrategy=ORB`, `TrailStopR=0.3`, **`RiskPct=0.10`** (3×0.10 = aynı 0.30 toplam risk). Grafikler otomatik bağımsız (magic = 770077/770080/770090). Bu, aynı riskle ~3× BTC işlemi + düşük-korelasyon = daha yüksek geçiş/daha düşük bust (proxy: reach 98.2→99.4, bust 1.8→0.6). Saat 13 en güçlüsü.
+
+## Sert kurallar
+1. Elle işlem açma/kapatma yok — EA yönetir; elle kapatma edge'i bozar ve KAPI-1 verisini kirletir.
+2. Kaybı geri almak için risk artırma yok — modest edge'in kayıp serileri normaldir.
+3. Challenge ortasında yeni enstrüman/tinkering yok.
+4. Guard'a güven — −%9'da durur (−%10'dan önce).

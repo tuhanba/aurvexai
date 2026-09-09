@@ -213,6 +213,30 @@ number is ~3 points below the quoted "pass" number** (e.g. a "97.7% pass" is
 are unaffected; only the absolute levels carry this ~3pt optimism, on top of the
 proxy-data optimism. KAPI-1 remains the arbiter of the absolute.
 
+## 7. The one real profit lever: BTC multi-session (parallel low-correlation streams)
+
+The portfolio math says an uncorrelated positive stream helps more than improving the
+existing edge. Testing second-session ORB (`scripts/`): metals have **no** viable
+parallel session (gold/silver are negative at every hour but 00:00 UTC — their edge is
+time-specific), but **BTC does** — hours 8 (+0.088) and **13 (+0.150, stronger than
+hour 0's +0.023)**, all with **low correlation to hour 0** (0.02–0.13).
+
+Quantified at the account level (TEST, honest reach-+10% metric), running BTC as 3
+sessions (0/3/13 at 0.10 each = the same 0.30 total risk) vs one session (0.30):
+
+| BTC config | daily mean | std | reach +10% | bust | BTC trade-days |
+|---|---|---|---|---|---|
+| single (0.30 @ h0) | +0.117% | 1.116% | 98.2% | 1.8% | 728 |
+| **multi (0/3/13 @0.10)** | **+0.130%** | **1.091%** | **99.4%** | **0.6%** | **2183** |
+
+Same total risk, but **higher mean, lower variance, lower bust, ~3× the trades** —
+the ideal free lunch from time-diversification (mean up because hour 13 is strong,
+variance down because the sessions are near-independent). This is the single genuine
+"increase profit potential" lever left, and it is **already built** (`OrbRangeHourUTC`,
+per-session magic). Enable after KAPI-1 confirms BTC's live spread (crypto spread is
+the closest-to-margin leg). Numbers are proxy-optimistic ceilings; KAPI-1 is the
+arbiter. Metals stay single-session — no parallel exists for them.
+
 ## Bottom line
 
 No new entry edge was found (FBR joins the rejected pile). The gains from these
