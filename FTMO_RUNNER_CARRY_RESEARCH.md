@@ -39,3 +39,23 @@ gerekir (silver >=2R runner'da 1 gün carry, BE-stop). v3.14 adayı — ama önc
 - Küçük taşınan-işlem örneklemi (~30 test) -> geniş CI. Daha çok veri = daha net karar.
 - Sonraki gün ORB fırsatı: carry sırasında o enstrümanın yeni ORB'u bloklanır
   (fırsat maliyeti); ilk testte ölçülmedi, sonraki adım.
+
+## DERİNLEŞTİRME (2026-09-15) — VERDICT: REDDEDİLDİ
+
+Brief'in tam kontrol listesi (`scripts/ftmo_silver_carry_deep.py`):
+- **Eşik x taşıma x stop (24 varyant):** hepsi pozitif, thr>=3 K=1 CI sıfırı geçiyor
+  (+1.13). AMA bu sadece TEST %40 dilimi.
+- **Tam örneklem (n=89) carry katkısı: −0.019R (SIFIR).** +0.7R sadece test döneminde.
+- **En iyi 1 işlem çıkarılınca: −0.17R (NEGATİF)**; top-3/5/10 çıkar: −0.43/−0.61/−0.96.
+  → Tüm "edge" birkaç dev işleme bağımlı.
+- **Yıllara göre:** 2024 −1.02, 2025 +0.47, 2026 +0.27 (tutarsız).
+- **Walk-forward:** fold'lar −1.36/−0.42/+0.06/+1.64/+0.17 (2/5 negatif, fold4 domine).
+- **Long/short:** long −0.25R, short +0.25R (asimetrik).
+- **Net-per-all-trades:** carry katkısı ~0 → Sistem A ≈ base (fayda yok); Sistem B
+  (taşırken ORB atla) < base (kaçan ORB fırsatı) → ikisi de başarısız.
+
+**Sonuç:** Silver Runner Carry **REDDEDİLDİ** — kabul kriterlerinin hiçbirini
+sağlamıyor (fold tutarlılığı yok, birkaç işleme bağımlı, tam örneklemde ~0).
+Test-only +0.7R, küçük-örneklem + dev-işlem yanılsamasıydı. Gold zaten reddedilmişti.
+**Hipotez B (her iki metal): kapandı.** UTC-flatten silver'ın kuyruğunu kesiyor
+ama taşımak, birkaç şanslı işlem dışında, sistematik kazanç EKLEMİYOR.
