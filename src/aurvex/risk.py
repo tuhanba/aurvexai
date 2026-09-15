@@ -100,7 +100,11 @@ def normalize_stop(cfg: Config, side: str, entry: float, stop: float,
                    cfg.strategy_profile == "ichimoku_trend")
     is_bandwalk = (profile_of(setup_type) == "band_walk" or
                    cfg.strategy_profile == "band_walk")
-    if is_bandwalk:
+    is_orb = (profile_of(setup_type) in ("orb", "pdhl")
+              or cfg.strategy_profile in ("orb", "pdhl"))
+    if is_orb:
+        max_stop = cfg.max_stop_dist_pct_orb
+    elif is_bandwalk:
         max_stop = cfg.max_stop_dist_pct_bw
     elif is_ichimoku:
         max_stop = cfg.max_stop_dist_pct_ich
@@ -407,6 +411,21 @@ class RiskManager:
             # contract intact; TP1 (fraction 1.0) closes the position fully first,
             # so the zero-fraction TP2/TP3 never realise anything.
             tp = entry + sign * r * cfg.rev_tp_r
+            return [
+                TPTarget(price=tp, fraction=1.0),
+                TPTarget(price=tp, fraction=0.0),
+                TPTarget(price=tp, fraction=0.0),
+            ]
+        is_orb = (profile_of(setup_type) in ("orb", "pdhl") or
+                  cfg.strategy_profile in ("orb", "pdhl"))
+        if is_orb:
+            # ORB/PDHL exits: the structural stop plus either a fixed-R
+            # target (orb_target_r > 0) or — when orb_target_r <= 0 — ride to the
+            # session close (the executor's "SESSION" exit), modelled here as an
+            # unreachable target so the 3-slot TP contract stays intact and the
+            # position is only closed by the stop or the session-close exit.
+            tp_r = cfg.orb_target_r if cfg.orb_target_r > 0 else 1000.0
+            tp = entry + sign * r * tp_r
             return [
                 TPTarget(price=tp, fraction=1.0),
                 TPTarget(price=tp, fraction=0.0),

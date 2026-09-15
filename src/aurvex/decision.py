@@ -140,6 +140,32 @@ class DecisionEngine:
             d.reason = f"risk:{rr.reason}"
             return d
 
+        # 3b) FTMO compliance gate (rule-compliance only — never an alpha veto).
+        #     Lives in the SHARED brain so paper/live/backtest honour it
+        #     identically (parity). OFF unless FTMO_MODE_ENABLED *and* the engine
+        #     supplied an account state, so the default path is byte-identical.
+        #     Uses PORTFOLIO worst-case: this candidate's max_loss plus the loss
+        #     if every open position also stopped, vs the FTMO daily/overall
+        #     floors, the day's risk budget, the mode halt and the weekend rule.
+        if cfg.ftmo_mode_enabled and pf.ftmo_state is not None:
+            from .ftmo import compliance as ftmo_comp
+            cres = ftmo_comp.evaluate(
+                pf.ftmo_state,
+                candidate_max_loss=rr.max_loss,
+                open_worst_case_loss=pf.ftmo_open_worst_case,
+                mode_allows_new_risk=pf.ftmo_mode_allows_new_risk,
+                near_weekend_close=pf.ftmo_near_weekend,
+            )
+            d.metadata["ftmo_code"] = cres.code
+            d.metadata["ftmo_mode"] = pf.ftmo_mode
+            d.metadata["ftmo_health"] = pf.ftmo_health
+            if not cres.allowed:
+                d.decision = REJECT
+                d.failed_stage = "ftmo_compliance"
+                d.reject_reason = cres.reason
+                d.reason = f"ftmo:{cres.code}"
+                return d
+
         # 4) ALLOW with full sizing.
         d.decision = ALLOW
         d.risk_pct = rr.risk_pct

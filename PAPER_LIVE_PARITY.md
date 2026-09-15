@@ -119,6 +119,30 @@ holds by the same construction as reversion_v1:
 - Exit uses the existing TIME_STOP_BARS mechanism (executor-level, mode-
   agnostic). `decide()` itself is unchanged.
 
+## FTMO Mode compliance gate (2026-07-27) — parity reasoning
+
+FTMO Mode adds one branch to `DecisionEngine.decide()` (step 3b), yet parity is
+preserved by construction:
+
+- **On the shared path.** The gate lives inside `decide()`, so paper, live and
+  backtest all evaluate the SAME candidate against the SAME FTMO account state
+  and get the SAME Decision. It is not an executor concern and has no
+  paper-only/live-only branch.
+- **Default is byte-identical.** The gate runs only when
+  `FTMO_MODE_ENABLED=true` AND the engine attached a `PortfolioView.ftmo_state`.
+  Both are off/absent by default, so the standard build's `decide()` output is
+  unchanged (proved by `tests/test_ftmo_gate.py::test_parity_gate_skipped_when_flag_off`
+  and the unchanged full suite).
+- **Rule-compliance, not alpha.** It is a hard *risk-rule* veto (remaining daily
+  loss, overall max loss, day budget, survival-mode halt, weekend-flat), never a
+  macro/ML/score/regime alpha veto — consistent with the non-negotiables.
+- **Inputs are mode-agnostic money numbers.** The account state is fed
+  `balance`/`equity` from the shared `accounting` reconciler — identical across
+  executors — so the gate cannot diverge between paper and live.
+- **Sizing untouched.** The gate only allows/denies an already-sized candidate;
+  it never alters notional, leverage, stop or targets, so the risk model stays
+  the single source of sizing truth.
+
 ## Going live (Stage 3 — built 2026-07-03, disarmed by default)
 
 The real order adapter now exists (`live_orders.py`), wired as an

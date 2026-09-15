@@ -426,6 +426,24 @@ class BaseExecutor:
                     trade.close_price = close
                     trade.close_reason = "TKCROSS"
                     events.append(FillEvent("TKCROSS", close, frac, net, True))
+
+        # 6) Session-close exit (orb): a day-trade must be flat by the session
+        #    end. When a bar opens a LATER session than the entry bar (session =
+        #    UTC day shifted by ORB_SESSION_START), close everything at this
+        #    bar's close (reason "SESSION"). Only fires for the orb profile, so
+        #    parity for every other strategy is preserved.
+        if (bar_ts is not None and profile_of(trade.setup_type) in ("orb", "pdhl")
+                and trade.status == OPEN):
+            sh = int(getattr(self.cfg, "orb_session_start", 0)) * 3_600_000
+            entry_ts = int(trade.metadata.get("entry_bar_ts", 0) or 0)
+            if entry_ts and ((bar_ts - sh) // 86_400_000) > ((entry_ts - sh) // 86_400_000):
+                frac = trade.remaining_fraction
+                net = self._close_fraction(trade, close, frac)
+                trade.status = CLOSED
+                trade.close_time = close_ts
+                trade.close_price = close
+                trade.close_reason = "SESSION"
+                events.append(FillEvent("SESSION", close, frac, net, True))
         return events
 
     def force_close(self, trade: Trade, price: float, reason: str = "MANUAL") -> FillEvent:

@@ -508,6 +508,16 @@ class Storage:
         row = self.conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
         return json.loads(row["value"]) if row else default
 
+    def set_ftmo_state(self, state: Dict[str, Any]) -> None:
+        """Persist the FTMO account-state blob (CE(S)T day-open baseline +
+        high-water + budgets). Stored in ``meta`` — additive, no schema change.
+        Restoring this on boot is essential: losing the day-open baseline would
+        silently reset the FTMO daily-loss budget mid-day."""
+        self.set_meta("ftmo_account_state", state)
+
+    def get_ftmo_state(self, default: Any = None) -> Any:
+        return self.get_meta("ftmo_account_state", default)
+
     def ensure_balance(self, initial: float) -> float:
         bal = self.get_meta("balance")
         if bal is None:
