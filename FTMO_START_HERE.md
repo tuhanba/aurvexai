@@ -28,11 +28,13 @@ sonrası gerçek-fill analizi) beklemede.
 ### R&D dalgası (Challenge vs Funded + Governor — en güncel)
 8. **FTMO_RUNNER_CARRY_RESEARCH.md** — Runner Carry (gold+silver) → REDDEDİLDİ.
 9. **FTMO_FUNDED_GROWTH_RESEARCH.md** — Funded Mode: profit-funded scaling +
-   payout guard → KABUL (challenge'dan ayrı objective).
-10. **FTMO_RISK_GOVERNOR_AND_BTC_AUDIT.md** — hesap-düzeyi risk governor tasarımı
-    + BTC multi-session auditi (netting/hedging kritik bulgusu).
-11. **FTMO_V314_ARCHITECTURE.md** — tüm hipotezlerin kabul/reddet/kararsız tablosu
-    + önerilen v3.14 mimarisi + geri-alma planı (üretim kodu HENÜZ değişmedi).
+   payout guard → **KOŞULLU ADAY** (kabul değil; proxy seri, küçük etki,
+   parametreler keskin tanımlı değil, canlı funded doğrulaması gerekli).
+10. **FTMO_RISK_GOVERNOR_AND_BTC_AUDIT.md** — **dinamik** hesap-düzeyi risk
+    governor tasarımı (min-of-headrooms + OCO çift-tetikleme) + BTC multi-session
+    auditi (hesap türü **KARARSIZ** — kanıtlanana kadar).
+11. **FTMO_V314_ARCHITECTURE.md** — kabul/reddet/kararsız tablosu + proxy-vs-canlı
+    doğrulama tablosu + v3.14 mimarisi + geri-alma planı (üretim kodu HENÜZ değişmedi).
 
 ## KOD
 - **mql5/AurvexFTMO_v3_13_final.mq5** — final EA (hardened; F7 ile derle).
