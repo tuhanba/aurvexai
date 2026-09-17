@@ -37,6 +37,11 @@ sonrası gerçek-fill analizi) beklemede.
     doğrulama tablosu + v3.14 mimarisi + geri-alma planı (üretim kodu HENÜZ değişmedi).
 
 ## KOD
+- **mql5/AurvexFTMO_v3_14_safety_candidate.mq5** — v3.13 + ADD-ONLY güvenlik
+  katmanı (ACCOUNT_MARGIN_MODE log + dinamik-headroom Risk Governor + OCO çift-bacak
+  + restart reconciliation + fail-closed). **default-OFF → v3.13 ile birebir.**
+  Production'a KURULMADI; KAPI-1 + demo sonrası karar. Bkz. `FTMO_V314_SAFETY_CANDIDATE.md`.
+  Python parity: `src/aurvex/ftmo/risk_governor.py` + `tests/test_ftmo_governor.py` (16 test).
 - **mql5/AurvexFTMO_v3_13_final.mq5** — final EA (hardened; F7 ile derle).
 - **mql5/AurvexFTMO.mq5** — v2.8 (canlıda olan; input isimleri farklı: PdhlSessionStartUTC).
 - **scripts/ftmo_*.py** — tüm araştırma scriptleri (reproducible; PYTHONPATH=src:scripts).
