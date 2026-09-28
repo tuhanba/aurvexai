@@ -48,13 +48,18 @@ sonrası gerçek-fill analizi) beklemede.
 - **data/cache/ftmo/** — Yahoo proxy verisi (gitignored; taze container'da yeniden çekilir).
 
 ## MEVCUT DURUM
-- **EA:** v3.13 (hardened, 2 inceleme geçti: risk-mult sınırı, ORB midnight, margin
-  order-type, journal retry, JP225 seans fix).
-- **Config:** 1.3× risk (kullanıcının bilinçli seçimi). RiskPct: XAU 0.46, XAG 0.46,
-  BTC 0.39, GER40 0.33, JP225 0.59. **NAS100/US100 KAPALI** (ölü ağırlık).
-  Filtreler (MinRangeMedMult/PdhlMinRangeMedMult) şimdilik **KAPALI** (veri toplama).
-- **Canlı:** $25k, ~yatay, KAPI-1 için işlem biriktiriyor.
-- **Branch:** `claude/ftmo-mode-architecture-qtob0m`.
+- **KAPI-1 YAPILDI (2026-09-28):** ilk 31 canlı işlem analiz edildi
+  (`FTMO_KAPI1_FINDINGS.md`) — net −%2.5. Karar: **BTCUSD çıkarıldı** (komisyon
+  öldürüyor), evren **4 enstrüman** (XAU/XAG/GER40/JP225), doğrulanmış vol-filtreleri
+  **açıldı** (gold + JP225). Canlıda hâlâ v3.11 → bugünkü operasyonel adım: **BTC + US100
+  grafiğini kaldır.**
+- **EA:** v3.13 (hardened) + v3.14 safety candidate (governor, default-OFF, demo bekliyor).
+- **Config:** 1.3× risk (kullanıcı seçimi; **1.0× öneriliyor**). RiskPct: XAU 0.46,
+  XAG 0.46, GER40 0.33, JP225 0.59. **BTC + NAS100/US100 KAPALI.** Filtreler: XAU
+  MinRangeMedMult=1.0, JP225 PdhlMinRangeMedMult=1.0 (KAPI-1'de açıldı).
+- **Canlı:** $25k gerçek FTMO Challenge; −%2.5 (kontrollü, zemine uzak). KAPI-2 için
+  yeni config'le veri biriktiriliyor.
+- **Branch:** `ftmo-final`.
 
 ## GUARDRAIL'LER (kanıtlanmış — tekrarlama)
 - ❌ **Yeni giriş-edge'i / filtre / "akıllı giriş" arama** — kanıtlandı: hangi

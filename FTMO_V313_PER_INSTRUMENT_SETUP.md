@@ -1,9 +1,13 @@
-# v3.13 — enstrüman enstrüman tam kurulum (giriş/çıkış saatleri dahil)
+# v3.13 — enstrüman enstrüman tam kurulum (giriş/çıkış saatleri dahil) — KAPI-1 SONRASI
+
+> **KAPI-1 (2026-09-28):** BTCUSD **çıkarıldı** (komisyon öldürüyor — bkz.
+> `FTMO_KAPI1_FINDINGS.md` / `FTMO_V313_INPUTS.md`). Evren **4 enstrüman**.
+> Risk **1.3×** (kullanıcı tercihi; 1.0× taban parantezde).
 
 EA: `AurvexFTMO_v3_13_final.mq5`. Hepsi **H1 (1 saatlik)** grafik. Saatler **UTC**.
 FTMO sunucusu UTC+3 ama EA otomatik çeviriyor — sen UTC düşün, log `serverOffsetH=3` göstermeli.
 
-**Ortak çıkış kuralları (5 enstrümanda da aynı):**
+**Ortak çıkış kuralları (4 enstrümanda da aynı):**
 - **Stop-loss** vurursa (aşağıda her enstrümanın stopu yazılı).
 - **Trailing stop** (varsa) tetiklenirse.
 - **Seans kapanışı: 00:00 UTC** — yeni UTC günü başında EA pozisyonu kapatır (flatten).
@@ -21,24 +25,15 @@ FTMO sunucusu UTC+3 ama EA otomatik çeviriyor — sen UTC düşün, log `server
 - **Trailing:** YOK (0) — fat-tail koşucusunu seans kapanışına kadar bırak.
 - **Çıkış:** 00:00 UTC seans kapanışı / stop / Cuma 20:00.
 - **Girişler:**
-  `AccountSize=25000, RiskPct=0.35, TrailStopR=0, ForceStrategy=AUTO, MinRangeMedMult=1.0, PdhlMinRangeMedMult=0, PhaseTargetPct=10` — gerisi default.
+  `AccountSize=25000, RiskPct=0.46, TrailStopR=0, ForceStrategy=AUTO, MinRangeMedMult=1.0, PdhlMinRangeMedMult=0, PhaseTargetPct=10` — gerisi default. (RiskPct 1.3×; taban 0.35.)
 
 ## 2) XAGUSD (Gümüş) — ORB
 - **Strateji / aralık / giriş / stop / çıkış:** Altınla AYNI (00:00–01:00 UTC aralık, 01:00 UTC sonrası kırılım, stop = karşı uç, trail yok, 00:00 UTC kapanış).
 - **Filtre:** KAPALI (gümüşte fayda yok — sadece altında var). `minRangeMult=0.00`.
 - **Girişler:**
-  `AccountSize=25000, RiskPct=0.35, TrailStopR=0, ForceStrategy=AUTO, MinRangeMedMult=0, PdhlMinRangeMedMult=0, PhaseTargetPct=10` — gerisi default.
+  `AccountSize=25000, RiskPct=0.46, TrailStopR=0, ForceStrategy=AUTO, MinRangeMedMult=0, PdhlMinRangeMedMult=0, PhaseTargetPct=10` — gerisi default. (RiskPct 1.3×; taban 0.35.)
 
-## 3) BTCUSD (Bitcoin) — ORB
-- **Strateji / aralık / giriş:** Altınla aynı mantık (00:00–01:00 UTC aralık, 01:00 UTC sonrası kırılım). **Hafta içi**; EA hafta sonu bloklar.
-- **Stop:** aralığın karşı ucu.
-- **Trailing:** **0.3R** — BTC'nin dağılımı küçük bir trail'i seviyor + geniş kripto spread'inde edge'i canlı tutuyor.
-- **ÖNEMLİ:** `ForceStrategy=ORB` ZORUNLU — AUTO, BTC'yi PDHL'e atar (negatif).
-- **Çıkış:** 00:00 UTC kapanış / stop / 0.3R trailing / Cuma 20:00.
-- **Girişler:**
-  `AccountSize=25000, RiskPct=0.30, TrailStopR=0.3, ForceStrategy=ORB, MinRangeMedMult=0, PdhlMinRangeMedMult=0, PhaseTargetPct=10` — gerisi default.
-
-## 4) GER40.cash (DAX) — PDHL
+## 3) GER40.cash (DAX) — PDHL
 - **Strateji:** Previous-Day High/Low breakout (dünün — takvim önceki günün — yüksek/alçağı).
 - **Giriş SAATİ (otomatik, DST'li):** sadece Frankfurt nakit seansında armlar:
   - **Yaz (CEST): 07:00–15:30 UTC**
@@ -49,9 +44,9 @@ FTMO sunucusu UTC+3 ama EA otomatik çeviriyor — sen UTC düşün, log `server
 - **Trailing:** 0.5R.
 - **Çıkış:** 00:00 UTC kapanış / stop / 0.5R trailing / Cuma 20:00. (Seans kapanınca pozisyon stop+trail korumasıyla tutulur, gece flatten 00:00 UTC'de.)
 - **Girişler:**
-  `AccountSize=25000, RiskPct=0.25, TrailStopR=0.5, ForceStrategy=AUTO, MinRangeMedMult=0, PdhlMinRangeMedMult=0, PhaseTargetPct=10` — gerisi default.
+  `AccountSize=25000, RiskPct=0.33, TrailStopR=0.5, ForceStrategy=AUTO, MinRangeMedMult=0, PdhlMinRangeMedMult=0, PhaseTargetPct=10` — gerisi default. (RiskPct 1.3×; taban 0.25.)
 
-## 5) JP225.cash (Nikkei) — PDHL
+## 4) JP225.cash (Nikkei) — PDHL
 - **Strateji:** Previous-Day High/Low breakout.
 - **Giriş SAATİ:** sadece **00:00–06:00 UTC** (Tokyo nakit; Japonya DST yok, sabit). Otomatik.
 - **Giriş:** bu pencerede dünün aralığının ilk kırılımında. Pazartesi işlem yok.
@@ -60,15 +55,18 @@ FTMO sunucusu UTC+3 ama EA otomatik çeviriyor — sen UTC düşün, log `server
 - **Trailing:** 0.5R.
 - **Çıkış:** 00:00 UTC kapanış / stop / 0.5R trailing / Cuma 20:00.
 - **Girişler:**
-  `AccountSize=25000, RiskPct=0.45, TrailStopR=0.5, ForceStrategy=AUTO, MinRangeMedMult=0, PdhlMinRangeMedMult=1.0, PhaseTargetPct=10` — gerisi default.
+  `AccountSize=25000, RiskPct=0.59, TrailStopR=0.5, ForceStrategy=AUTO, MinRangeMedMult=0, PdhlMinRangeMedMult=1.0, PhaseTargetPct=10` — gerisi default. (RiskPct 1.3×; taban 0.45.)
 
 ---
 
 ## Açmayacakların
+- **BTCUSD** — **KAPI-1'de çıkarıldı** (2026-09-28): 9 canlı işlem net −$291, PF 0.16,
+  komisyon −$97.89 (~$11/işlem). Maliyet deterministik olarak modest edge'i yiyor.
+  Daha çok canlı veri + düşük-komisyon broker olmadan açma.
 - **NAS100 / US100** — ölçülen ölü ağırlık (herhangi gerçek spread'de negatif). Açma.
 - **XAGAUD, XAUEUR** ve diğer quote-varyantları — farklı enstrüman (FX overlay), doğrulanmadı.
 
-## "Gerisi default" ne demek (5 grafikte de dokunma)
+## "Gerisi default" ne demek (4 grafikte de dokunma)
 OrbHours=1, OrbRangeHourUTC=0, PdhlStopATR=1.5, PdhlUseBackScan=false, NearTargetPct=1.5,
 NearTargetMult=0.5, RequireAccountSize=true, LossBufferPct=1.0, Derisk (3/0.6/6/0.35),
 MaxSingleRiskMult=2.0, MaxSpreadPoints=0, MaxSpreadToStopPct=12.5, UseFreezeLevelGuard=true,
@@ -82,4 +80,4 @@ NewsFailClosed=true, DrawLevels=true, JournalTrades=true, Magic=770077, Telegram
 `Aurvex v3.13-merged on <SYM> ... magic=770077 orbHourUTC=0 minRangeMult=X pdhlMinRangeMult=Y base=25000.00 serverOffsetH=3 journal=on`
 - **base=25000.00** her satırda. Değilse AccountSize yanlış → DUR.
 - XAUUSD: `minRangeMult=1.00`. JP225: `pdhlMinRangeMult=1.00`. Diğerleri 0.00.
-- BTC satırında `strat=ORB`. Metaller `strat=ORB`, GER40/JP225 `strat=PDHL`.
+- Metaller `strat=ORB`, GER40/JP225 `strat=PDHL`. (BTC yok — çıkarıldı.)
