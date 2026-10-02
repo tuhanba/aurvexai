@@ -162,6 +162,10 @@ input double PhaseBufferMinPct       = 0.20;   // min profit buffer ABOVE target
 input double PhaseBufferCostMult     = 2.0;    // buffer also >= this x realized phase commission+swap (cost-derived, logged)
 input bool   RequireDedicatedAccount = false;  // OnInit: refuse to start if non-Aurvex positions/orders exist
 input bool   FailClosedIfBaselineUnknown = true; // if the FTMO day baseline can't be rebuilt, block NEW entries (fail-closed)
+// DecisionJournal: logs EVERY decision (ARM or SKIP + reason) to CSV — captures the
+// REJECTED signals the read-only collector cannot see. DEFAULT OFF; behaviour-neutral
+// (pure logging). Demo-verify the live build before enabling.
+input bool   DecisionJournalEnabled  = false;  // log setup/filter/spread/target-risk/decision+reason
 
 CTrade trade;
 string SYM, STRAT;
@@ -1157,6 +1161,28 @@ bool IsNewsBlackout(string sym)
 }
 
 //--------------------------- journal ---------------------------------//
+// v3.15 DecisionJournal: one row per decision (ARM/SKIP + reason). Pure logging,
+// no behaviour change; default OFF. Captures rejected signals the collector can't see.
+void JournalDecision(string decision,string reason,double hi,double lo,double targetRisk)
+{
+   if(!DecisionJournalEnabled) return;
+   double bid=SymbolInfoDouble(SYM,SYMBOL_BID), ask=SymbolInfoDouble(SYM,SYMBOL_ASK);
+   double px=(bid>0&&ask>0)?(bid+ask)/2.0:bid;
+   double sprPct=(px>0&&ask>0&&bid>0)?(ask-bid)/px*100.0:0;
+   int dg=(int)SymbolInfoInteger(SYM,SYMBOL_DIGITS);
+   string fn="AurvexFTMO_decisions_"+SYM+"_"+(string)g_magic+".csv";
+   int h=FileOpen(fn,FILE_READ|FILE_WRITE|FILE_TXT|FILE_ANSI);
+   if(h==INVALID_HANDLE) return;
+   if(FileSize(h)==0)
+      FileWriteString(h,"utc_time\tsymbol\tstrat\tdecision\treason\thi\tlo\tspread_pct\ttarget_risk_money\triskmult\r\n");
+   FileSeek(h,0,SEEK_END);
+   FileWriteString(h,StringFormat("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%.4f\t%.2f\t%.3f\r\n",
+      TimeToString(TimeGMT(),TIME_DATE|TIME_MINUTES),SYM,STRAT,decision,reason,
+      DoubleToString(hi,dg),DoubleToString(lo,dg),sprPct,targetRisk,RiskMultiplier()));
+   FileClose(h);
+}
+double TargetRiskMoney(){ return g_initBal*RiskPct/100.0*RiskMultiplier(); }
+
 void JournalOnFill()
 {
    if(!JournalTrades || g_journaled) return;
@@ -1502,6 +1528,7 @@ void OnTimer()
       if(DrawLevels) DrawSetup(hi,lo,lo,hi);
       if(px<lo || px>hi)
       {
+         JournalDecision("SKIP","already_broken",hi,lo,TargetRiskMoney());
          g_tradedToday=true; SaveTradeDayState(); DeletePendings(SYM);
          Notify(SYM+" ORB already broken before arming; skip day."); return;
       }
@@ -1511,6 +1538,7 @@ void OnTimer()
          double med=OrbMedianRangePct(SYM,OrbRangeHourUTC,OrbHours,today,20);
          if(med>0 && todayRp<MinRangeMedMult*med)
          {
+            JournalDecision("SKIP","low_vol_filter",hi,lo,TargetRiskMoney());
             g_tradedToday=true; SaveTradeDayState();
             Notify(SYM+" ORB opening range "+DoubleToString(todayRp*100,3)+"% < "+
                    DoubleToString(MinRangeMedMult,2)+"x median "+DoubleToString(med*100,3)+"% — skip (low-vol day)");
@@ -1525,6 +1553,7 @@ void OnTimer()
          g_ctxMedPct=(med0>0)?med0*100.0:-1;
          g_ctxSpreadPct=(px>0&&ask>0&&bid>0)?(ask-bid)/px*100.0:0;
       }
+      JournalDecision("ARM","orb_breakout",hi,lo,TargetRiskMoney());
       EnsureStops(SYM,hi,lo,lo,hi,"AurvexORB312");
    }
    else
@@ -1537,6 +1566,7 @@ void OnTimer()
       if(DrawLevels) DrawSetup(ph,ph-d,pl,pl+d);
       if(px<pl || px>ph)
       {
+         JournalDecision("SKIP","already_broken",ph,pl,TargetRiskMoney());
          g_tradedToday=true; SaveTradeDayState(); DeletePendings(SYM);
          Notify(SYM+" PDHL already broken before arming; skip day."); return;
       }
@@ -1545,6 +1575,7 @@ void OnTimer()
          double refRp,medRp;
          if(PrevDayRangePctMed(SYM,today,20,refRp,medRp) && medRp>0 && refRp<PdhlMinRangeMedMult*medRp)
          {
+            JournalDecision("SKIP","low_vol_filter",ph,pl,TargetRiskMoney());
             g_tradedToday=true; SaveTradeDayState();
             Notify(SYM+" PDHL prior-day range "+DoubleToString(refRp*100,3)+"% < "+
                    DoubleToString(PdhlMinRangeMedMult,2)+"x median "+DoubleToString(medRp*100,3)+"% — skip (low-vol day)");
@@ -1559,6 +1590,7 @@ void OnTimer()
          g_ctxMedPct=PrevDayRangePctMed(SYM,today,20,refRp2,medRp2)?medRp2*100.0:-1;
          g_ctxSpreadPct=(px>0&&ask>0&&bid>0)?(ask-bid)/px*100.0:0;
       }
+      JournalDecision("ARM","pdhl_breakout",ph,pl,TargetRiskMoney());
       EnsureStops(SYM,ph,ph-d,pl,pl+d,"AurvexPDHL312");
    }
 }
