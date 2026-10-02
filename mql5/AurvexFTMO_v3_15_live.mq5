@@ -344,6 +344,18 @@ long ServerUtcOffset()
    long diff=(long)TimeTradeServer()-(long)TimeGMT();
    return (long)(MathRound((double)diff/3600.0)*3600.0);
 }
+// Single UTC clock for ALL strategy time/hour calculations. In the Strategy Tester
+// TimeGMT() returns the modeled SERVER time (no real GMT), which made "now in UTC" use
+// server time and mismatch the bar conversion (bars use r.time - ServerUtcOffset()).
+// NowUtc() converts server->UTC via the SAME offset in the tester (set
+// TesterServerUtcOffsetHours to the broker's real offset) and returns TimeGMT()
+// UNCHANGED in live -> live behaviour is byte-identical.
+datetime NowUtc()
+{
+   if((bool)MQLInfoInteger(MQL_TESTER))
+      return (datetime)((long)TimeTradeServer()-ServerUtcOffset());
+   return TimeGMT();
+}
 
 //--------------------------- strategy/session ------------------------//
 string DetectStrategy()
@@ -1177,7 +1189,7 @@ void JournalDecision(string decision,string reason,double hi,double lo,double ta
       FileWriteString(h,"utc_time\tsymbol\tstrat\tdecision\treason\thi\tlo\tspread_pct\ttarget_risk_money\triskmult\r\n");
    FileSeek(h,0,SEEK_END);
    FileWriteString(h,StringFormat("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%.4f\t%.2f\t%.3f\r\n",
-      TimeToString(TimeGMT(),TIME_DATE|TIME_MINUTES),SYM,STRAT,decision,reason,
+      TimeToString(NowUtc(),TIME_DATE|TIME_MINUTES),SYM,STRAT,decision,reason,
       DoubleToString(hi,dg),DoubleToString(lo,dg),sprPct,targetRisk,RiskMultiplier()));
    FileClose(h);
 }
@@ -1209,7 +1221,7 @@ void JournalOnFill()
                 "ref_range_pct","trail_med_pct","spread_arm_pct","spread_fill_pct",
                 "gain_pct","dd_pct","riskmult");
    FileSeek(h,0,SEEK_END);
-   FileWrite(h,TimeToString(TimeGMT(),TIME_DATE|TIME_MINUTES),SYM,STRAT,
+   FileWrite(h,TimeToString(NowUtc(),TIME_DATE|TIME_MINUTES),SYM,STRAT,
              (isLong?"long":"short"),
              DoubleToString(entry,dg),DoubleToString(sl,dg),DoubleToString(vol,2),
              DoubleToString(g_ctxHi,dg),DoubleToString(g_ctxLo,dg),
@@ -1290,7 +1302,7 @@ void ManageTrailing()
 //--------------------------- lifecycle/state -------------------------//
 void LoadState()
 {
-   datetime today=UtcDayStart(TimeGMT());
+   datetime today=UtcDayStart(NowUtc());
    double v=0;
    g_utcTradeDay=today;
    if(GVGet(SymPrefix()+"UTC_DAY",v) && (datetime)(long)v==today)
@@ -1304,7 +1316,7 @@ void LoadState()
       g_tradedToday=false; g_fridayFlat=false; g_journaled=false;
       SaveTradeDayState();
    }
-   g_ftmoDay=FtmoDayStart(TimeGMT());
+   g_ftmoDay=FtmoDayStart(NowUtc());
    g_ftmoOpenBal=ReconstructFtmoOpenBalance(g_ftmoDay);
    double savedFtmoDay=0, guardDay=0, guardAll=0;
    if(GVGet(FtmoPrefix()+"FTMO_DAY",savedFtmoDay) && (datetime)(long)savedFtmoDay==g_ftmoDay)
@@ -1446,7 +1458,7 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    if(dealType!=DEAL_TYPE_BUY && dealType!=DEAL_TYPE_SELL) return;
 
    g_tradedToday=true;
-   g_utcTradeDay=UtcDayStart(TimeGMT());
+   g_utcTradeDay=UtcDayStart(NowUtc());
    SaveTradeDayState();
    DeletePendings(SYM);
 
@@ -1468,7 +1480,7 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
 
 void OnTick()
 {
-   if(FtmoDayStart(TimeGMT())!=g_ftmoDay) RefreshFtmoDay(TimeGMT());
+   if(FtmoDayStart(NowUtc())!=g_ftmoDay) RefreshFtmoDay(NowUtc());
    if(!LossGuardOk()){ EmergencyFlatten(); g_tradedToday=true; SaveTradeDayState(); return; }
    PhaseCompleteProcess();   // v3.15: after emergency flatten (loss guard has priority)
    if(HasPosition(SYM))
@@ -1480,7 +1492,7 @@ void OnTick()
 
 void OnTimer()
 {
-   datetime nowGmt=TimeGMT();
+   datetime nowGmt=NowUtc();
    RefreshFtmoDay(nowGmt);
    datetime today=UtcDayStart(nowGmt);
    if(today!=g_utcTradeDay)
