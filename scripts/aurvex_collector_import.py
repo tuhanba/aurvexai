@@ -21,12 +21,16 @@ the generated report/DB.
 import argparse, glob, json, os, re, sqlite3, sys
 from datetime import datetime, timezone
 
+SCHEMA_VERSION = "1.2"
+
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS import_state(path TEXT PRIMARY KEY, off INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS ticks(
-  id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, tick_msc INTEGER, collect_msc INTEGER,
-  broker_time TEXT, utc_time TEXT, bid REAL, ask REAL, last REAL, volume INTEGER,
-  volume_real REAL, flags INTEGER);
+  id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, tick_msc INTEGER, seq INTEGER,
+  collect_msc INTEGER, broker_time TEXT, utc_time TEXT, bid REAL, ask REAL, last REAL,
+  volume INTEGER, volume_real REAL, flags INTEGER,
+  UNIQUE(symbol, tick_msc, seq));
 CREATE INDEX IF NOT EXISTS ix_ticks_sym_msc ON ticks(symbol, tick_msc);
 CREATE TABLE IF NOT EXISTS deals(
   deal_ticket INTEGER PRIMARY KEY, collect_utc TEXT, deal_time_msc INTEGER, deal_date TEXT,
@@ -51,6 +55,52 @@ CREATE TABLE IF NOT EXISTS health(
 """
 
 TICK_RE = re.compile(r"^ticks_(?P<sym>.+)_(?P<date>\d{8})\.csv$")
+
+# Exact v1.2 headers. A file whose header does not match is SKIPPED with a note —
+# never parsed by position into the v1.2 schema (no silent wrong-schema append).
+EXPECTED_HEADERS = {
+    "ticks": ["collect_msc", "tick_msc", "seq", "broker_time", "utc_time", "bid", "ask",
+              "last", "volume", "volume_real", "flags"],
+    "deals": ["collect_utc", "deal_time_msc", "deal_ticket", "order_ticket", "position_id",
+              "magic", "symbol", "deal_type", "entry_type", "volume", "price", "sl_planned",
+              "commission", "swap", "fee", "profit", "ea_version", "owner"],
+    "positions": ["collect_utc", "ticket", "position_id", "magic", "symbol", "pos_type",
+                  "volume", "price_open", "sl", "tp", "price_current", "swap", "profit", "owner"],
+    "account": ["collect_utc", "broker_time", "utc_time", "balance", "equity", "margin",
+                "free_margin", "margin_level", "open_risk_est", "open_risk_known", "connected",
+                "server"],
+    "symbols": ["collect_utc", "symbol", "point", "digits", "tick_size", "tick_value",
+                "volume_min", "volume_step", "volume_max", "currency_profit", "spread_points",
+                "stops_level", "freeze_level"],
+    "health": ["collect_utc", "event", "detail"],
+}
+
+
+def _kind(name):
+    if TICK_RE.match(name):
+        return "ticks"
+    for k in ("deals", "positions", "account", "symbols", "health"):
+        if name.startswith(k + "_"):
+            return k
+    return None
+
+
+def ensure_schema(con):
+    """Create the v1.2 schema on a fresh DB; refuse an old (v1.0/v1.1) DB loudly rather
+    than migrating silently. Returns nothing; raises SystemExit on a version mismatch."""
+    existing = {r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    if "schema_meta" not in existing and (existing & {"ticks", "deals", "account"}):
+        raise SystemExit("Old v1.0/v1.1 DB detected (no schema_meta). Use a FRESH v1.2 --db "
+                         "path; there is no silent migration (schema changed: ticks.seq, "
+                         "deals.deal_time_msc, account.open_risk_known).")
+    con.executescript(SCHEMA)
+    row = con.execute("SELECT value FROM schema_meta WHERE key='version'").fetchone()
+    if row is None:
+        con.execute("INSERT INTO schema_meta(key,value) VALUES('version',?)", (SCHEMA_VERSION,))
+    elif row[0] != SCHEMA_VERSION:
+        raise SystemExit(f"DB schema {row[0]} != importer {SCHEMA_VERSION}; use a fresh v1.2 DB.")
+    con.commit()
 
 
 def _num(v, cast=float, default=None):
@@ -97,26 +147,33 @@ def _set_off(cur, path, off):
 
 def import_file(cur, path):
     name = os.path.basename(path)
+    kind = _kind(name)
+    if kind is None:
+        return 0, None
     try:
         lines, is_first, new_off = _read_new_complete_lines(cur, path)
     except (OSError, PermissionError) as e:    # missing/locked file -> skip gracefully
         return 0, f"skip {name}: {e}"
     if is_first and lines:
+        header = lines[0].split("\t")
+        if header != EXPECTED_HEADERS[kind]:   # old/unknown schema -> never import by position
+            return 0, f"skip {name}: header mismatch (old/unknown schema); offset NOT advanced"
         lines = lines[1:]                      # drop header (only present at offset 0)
     n = 0
-    m = TICK_RE.match(name)
-    if m:
-        sym = m.group("sym")
+    if kind == "ticks":
+        sym = TICK_RE.match(name).group("sym")
         for r in lines:
             r = r.split("\t")
-            if len(r) < 10:
+            if len(r) < 11:
                 continue
-            cur.execute("INSERT INTO ticks(symbol,collect_msc,tick_msc,broker_time,utc_time,bid,ask,"
-                        "last,volume,volume_real,flags) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                        (sym, _num(r[0], int), _num(r[1], int), r[2], r[3], _num(r[4]), _num(r[5]),
-                         _num(r[6]), _num(r[7], int), _num(r[8]), _num(r[9], int)))
-            n += 1
-    elif name.startswith("deals_"):
+            cur.execute("INSERT OR IGNORE INTO ticks(symbol,collect_msc,tick_msc,seq,broker_time,"
+                        "utc_time,bid,ask,last,volume,volume_real,flags) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (sym, _num(r[0], int), _num(r[1], int), _num(r[2], int), r[3], r[4],
+                         _num(r[5]), _num(r[6]), _num(r[7]), _num(r[8], int), _num(r[9]),
+                         _num(r[10], int)))
+            n += cur.rowcount                  # OR IGNORE: counts only rows that were new
+    elif kind == "deals":
         for r in lines:
             r = r.split("\t")
             if len(r) < 18:
@@ -133,7 +190,7 @@ def import_file(cur, path):
                  _num(r[5], int), r[6], r[7], r[8], _num(r[9]), _num(r[10]), r[11], comm, swap, fee,
                  profit, net, r[16], r[17]))
             n += cur.rowcount
-    elif name.startswith("positions_"):
+    elif kind == "positions":
         for r in lines:
             r = r.split("\t")
             if len(r) < 14:
@@ -145,7 +202,7 @@ def import_file(cur, path):
                          _num(r[6]), _num(r[7]), _num(r[8]), _num(r[9]), _num(r[10]), _num(r[11]),
                          _num(r[12]), r[13]))
             n += 1
-    elif name.startswith("account_"):
+    elif kind == "account":
         for r in lines:
             r = r.split("\t")
             if len(r) < 12:
@@ -156,7 +213,7 @@ def import_file(cur, path):
                         (r[0], r[1], r[2], _num(r[3]), _num(r[4]), _num(r[5]), _num(r[6]),
                          _num(r[7]), _num(r[8]), _num(r[9], int), _num(r[10], int), r[11]))
             n += 1
-    elif name.startswith("symbols_"):
+    elif kind == "symbols":
         for r in lines:
             r = r.split("\t")
             if len(r) < 13:
@@ -168,7 +225,7 @@ def import_file(cur, path):
                          _num(r[7]), _num(r[8]), r[9], _num(r[10], int), _num(r[11], int),
                          _num(r[12], int)))
             n += 1
-    elif name.startswith("health_"):
+    elif kind == "health":
         for r in lines:
             r = r.split("\t")
             if len(r) < 3:
@@ -184,14 +241,21 @@ def import_file(cur, path):
 def import_dir(db_path, csv_dir):
     os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
     con = sqlite3.connect(db_path)
-    con.executescript(SCHEMA)
+    ensure_schema(con)                         # refuses an old DB rather than migrating silently
     cur = con.cursor()
     total, notes = 0, []
     for path in sorted(glob.glob(os.path.join(csv_dir, "*.csv"))):
+        name = os.path.basename(path)
+        # Each file is one SAVEPOINT: on any error, that file's rows AND its offset bump
+        # roll back together, so the next run re-reads it cleanly (no half-imported file).
+        cur.execute("SAVEPOINT f")
         try:
             n, note = import_file(cur, path)
-        except Exception as e:                 # never let one bad file abort the batch
-            n, note = 0, f"error {os.path.basename(path)}: {e}"
+            cur.execute("RELEASE SAVEPOINT f")
+        except Exception as e:
+            cur.execute("ROLLBACK TO SAVEPOINT f")
+            cur.execute("RELEASE SAVEPOINT f")
+            n, note = 0, f"error {name}: {e}; rolled back (rows+offset)"
         total += n
         if note:
             notes.append(note)

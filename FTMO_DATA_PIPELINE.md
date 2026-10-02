@@ -28,16 +28,36 @@
 - Günlük dosya döndürme (dosya adında tarih); append-close yazım (handle sızıntısı yok);
   health log (disconnect, tick-cap, day_rollover, start/stop).
 
-### Collector CSV şeması (tab-separated, `MQL5/Files/AurvexCollector/`)
+### Collector CSV şeması (tab-separated, `MQL5/Files/AurvexCollector/v12/`)
+> **v1.2:** çıktı **versiyonlu alt-klasör** `v12/`'de — değişen şema eski (v1.0/v1.1)
+> dosyalara **asla karışmaz**. Migration = burada sıfırdan başla; eski dosyaya append etme.
 | dosya | kolonlar |
 |---|---|
-| `ticks_<SYM>_<YYYYMMDD>.csv` | collect_msc, tick_msc, broker_time, utc_time, bid, ask, last, volume, volume_real, flags |
+| `ticks_<SYM>_<YYYYMMDD>.csv` | collect_msc, tick_msc, **seq**, broker_time, utc_time, bid, ask, last, volume, volume_real, flags |
 | `deals_<YYYYMMDD>.csv` | collect_utc, **deal_time_msc**, deal_ticket, order_ticket, position_id, magic, symbol, deal_type, entry_type, volume, price, sl_planned(=unknown), commission, swap, fee, profit, ea_version(=unknown), owner(ours/foreign) |
 | `positions_<YYYYMMDD>.csv` | collect_utc, ticket, position_id, magic, symbol, pos_type, volume, price_open, sl, tp, price_current, swap, profit, owner |
 | `account_<YYYYMMDD>.csv` | collect_utc, broker_time, utc_time, balance, equity, margin, free_margin, margin_level, open_risk_est, **open_risk_known**(0/1), connected, server |
 | `symbols_<YYYYMMDD>.csv` | collect_utc, symbol, point, digits, tick_size, tick_value, volume_min, volume_step, volume_max, currency_profit, spread_points, stops_level, freeze_level |
 | `health_<YYYYMMDD>.csv` | collect_utc, event, detail |
 | `checkpoint.csv` | key, value (tick_<SYM>=msc:count, last_deal_time_msc) |
+
+### v1.2 düzeltmeleri (ikinci review)
+1. **Crash-replay dedup:** her tick'e **ms-içi `seq`** (0-based) verilir → kimlik
+   `(symbol, tick_msc, seq)`; collector checkpoint öncesi çökerse yeniden yazılan
+   tick'ler importer'da `UNIQUE(symbol,tick_msc,seq)` ile tekilleşir. Aynı-ms, **aynı
+   fiyatlı** meşru tick'ler farklı seq ile korunur (yalnız timestamp/fiyat UNIQUE değil).
+2. **SAVEPOINT/dosya:** her dosya bir SAVEPOINT; hata olursa o dosyanın satırları **ve**
+   offset'i **birlikte rollback** → sonraki çalıştırmada temiz yeniden okunur.
+3. **Atomik yazım:** `AppendBatch` **tam payload** yazımını doğrular; eksik yazımda
+   bozuk kuyruğu `\n` ile kapatır, cursor ilerlemez. **Checkpoint**: temp dosya → doğrula
+   → **atomik `FileMove`**; restart'ta `.tmp`'den kurtarma. Tüm `FileOpen` **FILE_SHARE_READ|WRITE**
+   (importer eşzamanlı okur).
+4. **Bounded backlog:** `CopyTicksRange` **sonlu pencere** (`TickWindowSec`), poll başına
+   `MaxWindowsPerPoll` pencere → uzun kesinti sonrası tüm geçmiş tek çağrıda belleğe
+   alınmaz; **boş pencerede de cursor ilerler** (gap atlanır).
+5. **Migration:** çıktı `v12/` klasöründe; importer **schema_meta=1.2** tutar ve
+   **eski DB'yi reddeder** (sessiz migration yok); header uyuşmayan dosya **atlanır**
+   (eski şema sessizce append edilmez).
 
 ### v1.1 düzeltmeleri (Sprint-1 review)
 1. **Importer byte-offset:** yalnız `\n` ile biten kayıtlar tüketilir; yarım satırda cursor ilerlemez (crash/replay güvenli).
@@ -69,13 +89,13 @@
 2. **5. bir grafik aç** (herhangi sembol, H1), collector'ı sürükle. `CollectSymbols`
    default 4 sembol. **Algo Trading açık.** (İşlem açmaz; sadece okur.)
 3. 4 işlem EA'sına **dokunma** — ayrı grafiklerde çalışmaya devam.
-4. Çıktı: `MQL5/Files/AurvexCollector/`. Konum: `File → Open Data Folder`.
+4. Çıktı: `MQL5/Files/AurvexCollector/v12/`. Konum: `File → Open Data Folder`.
 
 **Importer (Python, otomatik):**
 1. Python 3 kurulu (ücretsiz). Ek paket gerekmez (stdlib: sqlite3/csv/json).
 2. Elle: yukarıdaki komut. `--dir` = collector'ın `AurvexCollector` klasörü.
 3. **Otomatik (Task Scheduler):** "Create Task" → Trigger: her 15 dk / oturum açılışında
-   → Action: `python.exe C:\...\scripts\aurvex_collector_import.py --dir "C:\Users\<you>\AppData\Roaming\MetaQuotes\Terminal\<id>\MQL5\Files\AurvexCollector" --db C:\aurvex\aurvex_live.db --report C:\aurvex\reports`.
+   → Action: `python.exe C:\...\scripts\aurvex_collector_import.py --dir "C:\Users\<you>\AppData\Roaming\MetaQuotes\Terminal\<id>\MQL5\Files\AurvexCollector\v12" --db C:\aurvex\aurvex_live.db --report C:\aurvex\reports`.
    "Run whether user is logged on or not" + "If the task fails, restart every 1 min".
 4. MT5 ve importer bağımsız; MT5 yazarken importer okur (append-only, güvenli).
 
@@ -84,18 +104,20 @@
 
 ---
 
-## 4. Doğrulama sonuçları (v1.1)
+## 4. Doğrulama sonuçları (v1.2)
 | test | sonuç |
 |---|---|
-| Tick cursor: fresh'ten tüm aynı-ms tick korunur | **PASS** |
-| Tick cursor: resume'da mükerrer yok; kısmi same-ms prefix doğru | **PASS** |
+| Tick cursor: aynı-ms tick'ler farklı **seq** ile korunur | **PASS** |
+| Tick cursor: resume mükerrer yok; kısmi same-ms prefix seq devam eder | **PASS** |
 | Tick cursor: başlangıç sabit (multi-ms regression) | **PASS** |
-| Byte-offset: **yarım satır tüketilmez**, tamamlanınca alınır, truncate yok | **PASS** |
-| Deals: DEAL_TIME_MSC → **gerçekleşme tarihi**; **net=profit+comm+swap+fee** | **PASS** (net 18.2) |
-| Deal dedup (overlap tekrar yazımı) | **PASS** |
-| Eksik/kilitli dosya → batch abort olmaz | **PASS** |
-| open_risk unknown bayrağı → rapor "UNKNOWN" | **PASS** |
-| Tüm suite (FTMO + collector) | **PASS** (147) |
+| **Crash-replay:** yeniden yazılan tick'ler (symbol,msc,seq) ile tekilleşir; yeni seq eklenir | **PASS** |
+| **SAVEPOINT:** dosya-ortası hata → satır+offset birlikte rollback; iyi dosya aktarılır | **PASS** |
+| Byte-offset: yarım satır tüketilmez, tamamlanınca alınır, truncate yok | **PASS** |
+| **Header mismatch (eski şema):** atlanır, offset ilerlemez, not düşülür | **PASS** |
+| **Eski DB reddi (schema_meta yok):** SystemExit (sessiz migration yok) | **PASS** |
+| Deals: DEAL_TIME_MSC → gerçekleşme tarihi; net=profit+comm+swap+fee | **PASS** (net 18.2) |
+| Deal dedup / eksik dosya / open_risk unknown | **PASS** |
+| Tüm suite (FTMO + collector) | **PASS** (152) |
 | **MQL5 collector F7 derleme** | **NOT OBSERVED** (derleyici yok — operatör) |
 | **Canlı tick akışı / Windows dosya paylaşımı / kesinti / disk hatası / restart sürekliliği** | **NOT OBSERVED** (terminal/OS yok — operatör demo'da) |
 

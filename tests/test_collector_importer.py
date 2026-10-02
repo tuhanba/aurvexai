@@ -23,7 +23,7 @@ imp = importlib.util.module_from_spec(_SPEC)
 sys.modules["aurvex_collector_import"] = imp
 _SPEC.loader.exec_module(imp)
 
-TH = ["collect_msc", "tick_msc", "broker_time", "utc_time", "bid", "ask", "last",
+TH = ["collect_msc", "tick_msc", "seq", "broker_time", "utc_time", "bid", "ask", "last",
       "volume", "volume_real", "flags"]
 DH = ["collect_utc", "deal_time_msc", "deal_ticket", "order_ticket", "position_id", "magic",
       "symbol", "deal_type", "entry_type", "volume", "price", "sl_planned", "commission",
@@ -48,30 +48,36 @@ def _write(path, header, rows, mode="w", terminate=True):
             f.write(_line(r) + ("\r\n" if (terminate or not last) else ""))
 
 
-# ======================= tick-cursor reference (regression #2) ===============
-def test_tick_cursor_keeps_all_same_ms_from_fresh():
+# ======================= tick-cursor reference (regression #1,#2) ============
+def test_tick_cursor_keeps_all_same_ms_with_distinct_seq():
     written, nm, nc = collect_new_ticks(0, 0, [100, 100, 100, 101])
-    assert written == [100, 100, 100, 101]          # all same-ms kept
+    assert written == [(100, 0), (100, 1), (100, 2), (101, 0)]   # same-ms kept, seq distinct
     assert (nm, nc) == (101, 1)
 
 
 def test_tick_cursor_resume_no_duplicate():
-    # resumed at (100,3): the three 100-ms ticks were already written -> skip them
     written, nm, nc = collect_new_ticks(100, 3, [100, 100, 100, 101])
-    assert written == [101]
+    assert written == [(101, 0)]
     assert (nm, nc) == (101, 1)
 
 
-def test_tick_cursor_partial_same_ms_prefix():
+def test_tick_cursor_partial_same_ms_prefix_seq_continues():
+    # 2 already written at ms 100 -> the 3rd gets seq=2 (stable across replay)
     written, nm, nc = collect_new_ticks(100, 2, [100, 100, 100, 101])
-    assert written == [100, 101]                    # only the 3rd 100-ms tick is new
+    assert written == [(100, 2), (101, 0)]
     assert (nm, nc) == (101, 1)
+
+
+def test_tick_cursor_replay_reproduces_same_seq():
+    # crash before checkpoint: cursor still (0,0); re-scan yields IDENTICAL (msc,seq) pairs
+    first, _, _ = collect_new_ticks(0, 0, [100, 100, 101])
+    replay, _, _ = collect_new_ticks(0, 0, [100, 100, 101])
+    assert first == replay == [(100, 0), (100, 1), (101, 0)]
 
 
 def test_tick_cursor_start_is_constant_across_multi_ms():
-    # regression: mutating the start cursor mid-scan used to corrupt same-ms compares
     written, nm, nc = collect_new_ticks(0, 0, [100, 100, 101, 101, 102])
-    assert written == [100, 100, 101, 101, 102]
+    assert written == [(100, 0), (100, 1), (101, 0), (101, 1), (102, 0)]
     assert (nm, nc) == (102, 1)
 
 
@@ -81,9 +87,9 @@ def test_partial_trailing_line_not_consumed(tmp_path):
     db = str(tmp_path / "live.db")
     p = str(csv_dir / "ticks_XAUUSD_20261002.csv")
     # one complete tick line + a partial (no trailing newline) second line
-    _write(p, TH, [[1, MSC_1002 + 1, "b", "2026.10.02 10:00:00", 1, 2, 0, 1, 1.0, 6]])
+    _write(p, TH, [[1, MSC_1002 + 1, 0, "b", "2026.10.02 10:00:00", 1, 2, 0, 1, 1.0, 6]])
     with open(p, "a", encoding="latin-1", newline="") as f:
-        f.write(_line([2, MSC_1002 + 2, "b", "2026.10.02 10:00:00", 1, 2, 0, 1, 1.0, 6]))  # NO newline
+        f.write(_line([2, MSC_1002 + 2, 0, "b", "2026.10.02 10:00:00", 1, 2, 0, 1, 1.0, 6]))  # NO newline
     imp.import_dir(db, str(csv_dir))
     con = sqlite3.connect(db)
     assert con.execute("SELECT COUNT(*) FROM ticks").fetchone()[0] == 1   # partial NOT imported
@@ -91,7 +97,7 @@ def test_partial_trailing_line_not_consumed(tmp_path):
     con.close()
     # complete the partial line + add another; re-import
     with open(p, "a", encoding="latin-1", newline="") as f:
-        f.write("\r\n" + _line([3, MSC_1002 + 3, "b", "2026.10.02 10:00:01", 1, 2, 0, 1, 1.0, 6]) + "\r\n")
+        f.write("\r\n" + _line([3, MSC_1002 + 3, 0, "b", "2026.10.02 10:00:01", 1, 2, 0, 1, 1.0, 6]) + "\r\n")
     imp.import_dir(db, str(csv_dir))
     con = sqlite3.connect(db)
     assert con.execute("SELECT COUNT(*) FROM ticks").fetchone()[0] == 3   # formerly-partial + new
@@ -134,7 +140,7 @@ def test_missing_file_does_not_abort(tmp_path):
     csv_dir = tmp_path / "csv"; csv_dir.mkdir()
     db = str(tmp_path / "live.db")
     good = str(csv_dir / "ticks_XAGUSD_20261002.csv")
-    _write(good, TH, [[1, MSC_1002, "b", "2026.10.02 10:00:00", 30, 30.1, 0, 1, 1.0, 6]])
+    _write(good, TH, [[1, MSC_1002, 0, "b", "2026.10.02 10:00:00", 30, 30.1, 0, 1, 1.0, 6]])
     # point importer at a dir with a good file; a vanished file mid-run is simulated by
     # import_file raising -> import_dir must swallow it and still import the good file.
     n, notes = imp.import_dir(db, str(csv_dir))
@@ -157,3 +163,87 @@ def test_open_risk_unknown_flag(tmp_path):
     con.close()
     _, mp = imp.build_report(db, rep, date="2026.10.02")
     assert "UNKNOWN" in open(mp).read()
+
+
+# ======================= crash-replay seq dedup (#1) =========================
+def test_crash_replay_seq_dedup(tmp_path):
+    csv_dir = tmp_path / "csv"; csv_dir.mkdir()
+    db = str(tmp_path / "live.db")
+    p = str(csv_dir / "ticks_XAUUSD_20261002.csv")
+    # two legitimate same-ms, SAME-PRICE ticks -> distinct seq 0,1 keeps both
+    _write(p, TH, [[1, MSC_1002, 0, "b", "2026.10.02 10:00:00", 2650.1, 2650.4, 0, 1, 1.0, 6],
+                   [1, MSC_1002, 1, "b", "2026.10.02 10:00:00", 2650.1, 2650.4, 0, 1, 1.0, 6]])
+    imp.import_dir(db, str(csv_dir))
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT COUNT(*) FROM ticks").fetchone()[0] == 2
+    con.close()
+    # crash BEFORE checkpoint -> collector re-wrote the SAME two ticks (same seq)
+    _write(p, TH, [[2, MSC_1002, 0, "b", "2026.10.02 10:00:00", 2650.1, 2650.4, 0, 1, 1.0, 6],
+                   [2, MSC_1002, 1, "b", "2026.10.02 10:00:00", 2650.1, 2650.4, 0, 1, 1.0, 6]],
+           mode="a")
+    imp.import_dir(db, str(csv_dir))
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT COUNT(*) FROM ticks").fetchone()[0] == 2    # replay deduped
+    con.close()
+    # a genuinely new same-ms tick (seq 2) is still added
+    _write(p, TH, [[3, MSC_1002, 2, "b", "2026.10.02 10:00:00", 2650.1, 2650.4, 0, 1, 1.0, 6]],
+           mode="a")
+    imp.import_dir(db, str(csv_dir))
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT COUNT(*) FROM ticks").fetchone()[0] == 3
+    con.close()
+
+
+# ======================= SAVEPOINT rollback on mid-file error (#2) ===========
+def test_savepoint_rollback_on_midfile_error(tmp_path, monkeypatch):
+    csv_dir = tmp_path / "csv"; csv_dir.mkdir()
+    db = str(tmp_path / "live.db")
+    good = str(csv_dir / "ticks_XAGUSD_20261002.csv")   # sorts before XAUUSD
+    bad = str(csv_dir / "ticks_XAUUSD_20261002.csv")
+    _write(good, TH, [[1, MSC_1002, 0, "b", "2026.10.02 10:00:00", 30, 30.1, 0, 1, 1.0, 6]])
+    _write(bad, TH, [[1, MSC_1002, 0, "b", "2026.10.02 10:00:00", 2650, 2650.4, 0, 1, 1.0, 6]])
+    orig = imp.import_file
+
+    def flaky(cur, path):
+        if "XAUUSD" in path:
+            cur.execute("INSERT INTO ticks(symbol,tick_msc,seq) VALUES('XAUUSD',999,0)")
+            raise RuntimeError("boom mid-file")
+        return orig(cur, path)
+
+    monkeypatch.setattr(imp, "import_file", flaky)
+    n, notes = imp.import_dir(db, str(csv_dir))
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT COUNT(*) FROM ticks WHERE symbol='XAGUSD'").fetchone()[0] == 1
+    assert con.execute("SELECT COUNT(*) FROM ticks WHERE symbol='XAUUSD'").fetchone()[0] == 0  # rolled back
+    # the bad file's offset did NOT advance (its SAVEPOINT rolled back rows+offset)
+    assert con.execute("SELECT COUNT(*) FROM import_state WHERE path=?", (bad,)).fetchone()[0] == 0
+    con.close()
+    assert any("rolled back" in x for x in notes)
+
+
+# ======================= header mismatch -> skipped, not appended (#6) =======
+def test_header_mismatch_skipped(tmp_path):
+    csv_dir = tmp_path / "csv"; csv_dir.mkdir()
+    db = str(tmp_path / "live.db")
+    p = str(csv_dir / "ticks_XAUUSD_20261002.csv")
+    old_th = ["collect_msc", "tick_msc", "broker_time", "utc_time", "bid", "ask", "last",
+              "volume", "volume_real", "flags"]                 # v1.1 header (no seq)
+    _write(p, old_th, [[1, MSC_1002, "b", "2026.10.02 10:00:00", 1, 2, 0, 1, 1.0, 6]])
+    n, notes = imp.import_dir(db, str(csv_dir))
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT COUNT(*) FROM ticks").fetchone()[0] == 0   # not imported
+    assert con.execute("SELECT COUNT(*) FROM import_state WHERE path=?", (p,)).fetchone()[0] == 0
+    con.close()
+    assert any("header mismatch" in x for x in notes)
+
+
+# ======================= old v1.0/v1.1 DB refused (#6) =======================
+def test_old_db_refused(tmp_path):
+    import pytest
+    db = str(tmp_path / "old.db")
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE ticks(id INTEGER)")   # old-style DB, no schema_meta
+    con.commit(); con.close()
+    csv_dir = tmp_path / "csv"; csv_dir.mkdir()
+    with pytest.raises(SystemExit):
+        imp.import_dir(db, str(csv_dir))

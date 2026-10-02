@@ -11,13 +11,16 @@ from typing import List, Tuple
 
 
 def collect_new_ticks(start_msc: int, start_cnt: int, tick_mscs: List[int]
-                      ) -> Tuple[List[int], int, int]:
+                      ) -> Tuple[List[Tuple[int, int]], int, int]:
     """Given the resume cursor (start_msc, start_cnt) and the ascending tick millisecond
     stamps from CopyTicksRange, return (written, new_msc, new_cnt):
-      * written      — the tick_mscs that should be written this scan,
+      * written      — list of (tick_msc, seq) to write this scan; seq is the 0-based
+                       index of the tick within its millisecond, so (symbol, msc, seq) is
+                       a stable identity that dedupes crash-replayed re-writes while
+                       keeping legitimately distinct same-ms (even same-price) ticks,
       * (new_msc, new_cnt) — the advanced cursor to persist AFTER a verified write.
     The start cursor is read-only during the scan (the bug being fixed was mutating it)."""
-    written: List[int] = []
+    written: List[Tuple[int, int]] = []
     skip = start_cnt                 # same-ms ticks at start_msc already written
     new_msc, new_cnt = start_msc, start_cnt
     for msc in tick_mscs:
@@ -26,9 +29,9 @@ def collect_new_ticks(start_msc: int, start_cnt: int, tick_mscs: List[int]
         if msc == start_msc and skip > 0:
             skip -= 1
             continue
-        written.append(msc)
-        if msc > new_msc:
-            new_msc, new_cnt = msc, 1
-        else:                        # msc == new_msc -> another tick in the same ms
-            new_cnt += 1
+        if msc > new_msc:            # new ms -> seq restarts at 0
+            new_msc, new_cnt = msc, 0
+        seq = new_cnt                # 0-based index within this ms
+        new_cnt += 1
+        written.append((msc, seq))
     return written, new_msc, new_cnt
