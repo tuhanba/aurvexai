@@ -1,51 +1,49 @@
 //+------------------------------------------------------------------+
-//| AurvexCollector.mq5  — READ-ONLY live data collector              |
+//| AurvexCollector.mq5  — READ-ONLY live data collector (v1.1)       |
 //| Runs on a SEPARATE (5th) chart alongside the trading EAs.          |
 //| Collects ticks + deals/positions + account/symbol state for the    |
-//| four symbols into daily CSVs (MQL5/Files). It has ZERO trade        |
-//| authority: no CTrade, no OrderSend, no position/pending functions.  |
+//| four symbols into daily CSVs (MQL5/Files). ZERO trade authority:    |
+//| no CTrade, no OrderSend, no position/pending functions.             |
 //| ⚠ UNCOMPILED SKELETON — F7 compile + verify in MT5 before relying.  |
-//|   Does not touch or slow the trading EAs (own chart thread, bounded |
-//|   batches, buffered append-close writes).                           |
+//|                                                                    |
+//| v1.1 corrections (Sprint-1 review):                                 |
+//|  - tick cursor: start (msc,count) held CONSTANT during the scan;    |
+//|    the NEW cursor is computed separately; ALL same-ms ticks kept.   |
+//|  - cursor/checkpoint advance ONLY after a verified batch write.     |
+//|  - ticks read in bounded ranges, written in one batch per poll.     |
+//|  - deals: overlap scan + ticket dedup; read via HistoryDealGet*     |
+//|    (ticket form) WITHOUT HistoryDealSelect, so the history list is   |
+//|    never reset mid-scan; a delayed small ticket is NOT skipped.      |
+//|  - DEAL_TIME_MSC captured (report is by execution time).            |
+//|  - open risk that can't be computed (no SL / calc fail) -> unknown. |
 //+------------------------------------------------------------------+
 #property copyright "Aurvex / read-only collector"
-#property version   "1.00"
+#property version   "1.10"
 #property strict
-// NOTE: #include <Trade/Trade.mqh> is intentionally NOT included. This EA must
-// never be able to send an order.
+// #include <Trade/Trade.mqh> intentionally OMITTED — this EA can never trade.
 
-input string CollectSymbols      = "XAUUSD,XAGUSD,GER40.cash,JP225.cash"; // comma list
-input int    TickTimerSeconds    = 1;      // how often to pull ticks (seconds)
-input int    StateTimerSeconds   = 15;     // how often to snapshot account/positions/symbols
-input int    TicksPerPollMax     = 5000;   // safety cap per symbol per poll
-input int    HistoryBackfillDays = 60;     // on first start, backfill deals this many days
+input string CollectSymbols      = "XAUUSD,XAGUSD,GER40.cash,JP225.cash";
+input int    TickTimerSeconds    = 1;      // tick poll period (s)
+input int    StateTimerSeconds   = 15;     // account/positions/symbols snapshot period (s)
+input int    TicksPerPollMax     = 2000;   // bounded: max ticks written per symbol per poll
+input int    TickMaxLookbackSec  = 120;    // first/empty-cursor read starts this far back
+input int    HistoryBackfillDays = 60;     // first start: backfill deals this many days
+input int    ReconcileOverlapDays= 3;      // re-scan this overlap each reconcile (dedup handles repeats)
 input long   OurMagic            = 770077; // tag deals/positions as "ours" (base Aurvex magic)
-input string FilePrefix          = "AurvexCollector"; // CSV name prefix
-input bool   VerboseHealth       = true;   // log flush/health details
+input string FilePrefix          = "AurvexCollector";
+input bool   VerboseHealth       = true;
 
-//--- parsed symbols
-string   g_syms[];
-int      g_nSym=0;
-//--- per-symbol tick cursor (restart-safe, persisted to checkpoint file)
-long     g_lastMsc[];      // last tick time_msc written
+string   g_syms[]; int g_nSym=0;
+long     g_lastMsc[];      // per-symbol tick cursor: last written tick time_msc
 int      g_lastMscCnt[];   // how many ticks at exactly g_lastMsc already written (dedup)
-//--- deal cursor
-ulong    g_lastDealTicket=0;
+long     g_lastDealTimeMsc=0;   // reconcile anchor (max deal execution time processed)
+ulong    g_seen[]; int g_seenN=0;  // in-session written deal tickets (sorted) for dedup
 datetime g_lastStateSnap=0;
 datetime g_curDay=0;
-//--- write buffers (flushed append-close)
-string   g_tickBuf[];      // one entry per line, prefixed "SYM\tLINE" so we route to the right file
-int      g_tickBufN=0;
-string   g_dealBuf[];
-int      g_dealBufN=0;
 
-//------------------------------- utils --------------------------------//
-string DayStr(datetime t){ return TimeToString(t,TIME_DATE); } // yyyy.mm.dd
-string DayTag(datetime t)
-{
-   MqlDateTime d; TimeToStruct(t,d);
-   return StringFormat("%04d%02d%02d",d.year,d.mon,d.day);
-}
+//------------------------------- time/util ----------------------------//
+datetime UtcDayStart0(datetime t){ return (datetime)((long)t/86400*86400); }
+string DayTag(datetime t){ MqlDateTime d; TimeToStruct(t,d); return StringFormat("%04d%02d%02d",d.year,d.mon,d.day); }
 string FileDir(){ return FilePrefix+"/"; }
 string TickFile(string sym){ return FileDir()+"ticks_"+sym+"_"+DayTag(TimeGMT())+".csv"; }
 string DealFile(){ return FileDir()+"deals_"+DayTag(TimeGMT())+".csv"; }
@@ -54,20 +52,28 @@ string AcctFile(){ return FileDir()+"account_"+DayTag(TimeGMT())+".csv"; }
 string SymFile(){ return FileDir()+"symbols_"+DayTag(TimeGMT())+".csv"; }
 string HealthFile(){ return FileDir()+"health_"+DayTag(TimeGMT())+".csv"; }
 string CheckpointFile(){ return FileDir()+"checkpoint.csv"; }
+long NowMsc(){ return (long)TimeGMT()*1000; }
 
-long NowMsc(){ return (long)TimeGMT()*1000; }   // collection timestamp (ms, UTC) best-effort
+const string TICK_HDR="collect_msc\ttick_msc\tbroker_time\tutc_time\tbid\task\tlast\tvolume\tvolume_real\tflags";
+const string DEAL_HDR="collect_utc\tdeal_time_msc\tdeal_ticket\torder_ticket\tposition_id\tmagic\tsymbol\tdeal_type\tentry_type\tvolume\tprice\tsl_planned\tcommission\tswap\tfee\tprofit\tea_version\towner";
+const string POS_HDR="collect_utc\tticket\tposition_id\tmagic\tsymbol\tpos_type\tvolume\tprice_open\tsl\ttp\tprice_current\tswap\tprofit\towner";
+const string ACCT_HDR="collect_utc\tbroker_time\tutc_time\tbalance\tequity\tmargin\tfree_margin\tmargin_level\topen_risk_est\topen_risk_known\tconnected\tserver";
+const string SYM_HDR="collect_utc\tsymbol\tpoint\tdigits\ttick_size\ttick_value\tvolume_min\tvolume_step\tvolume_max\tcurrency_profit\tspread_points\tstops_level\tfreeze_level";
 
-// append a single tab-separated line to a file, creating header if new.
-// Robust (open-append-close); FILE_TXT so we write our own raw lines/separators.
-void AppendLine(string file,string header,string line)
+// verified write: returns true only if bytes were actually written+flushed.
+bool AppendBatch(string file,string header,string payload)
 {
-   int h=FileOpen(file,FILE_READ|FILE_WRITE|FILE_TXT|FILE_ANSI,'\t');
-   if(h==INVALID_HANDLE){ Print("Collector: FileOpen failed ",file," err=",GetLastError()); return; }
+   if(StringLen(payload)==0) return true;
+   int h=FileOpen(file,FILE_READ|FILE_WRITE|FILE_TXT|FILE_ANSI);
+   if(h==INVALID_HANDLE){ Print("Collector FileOpen fail ",file," err=",GetLastError()); return false; }
    if(FileSize(h)==0) FileWriteString(h,header+"\r\n");
    FileSeek(h,0,SEEK_END);
-   FileWriteString(h,line+"\r\n");
+   uint w=FileWriteString(h,payload);
+   FileFlush(h);
    FileClose(h);
+   return (w>0);
 }
+void AppendLine(string file,string header,string line){ AppendBatch(file,header,line+"\r\n"); }
 void Health(string ev,string detail)
 {
    AppendLine(HealthFile(),"collect_utc\tevent\tdetail",
@@ -78,38 +84,38 @@ void Health(string ev,string detail)
 //------------------------------- checkpoint ---------------------------//
 void SaveCheckpoint()
 {
-   int h=FileOpen(CheckpointFile(),FILE_WRITE|FILE_TXT|FILE_ANSI,'\t');
+   int h=FileOpen(CheckpointFile(),FILE_WRITE|FILE_TXT|FILE_ANSI);
    if(h==INVALID_HANDLE) return;
    FileWriteString(h,"key\tvalue\r\n");
    for(int i=0;i<g_nSym;i++)
       FileWriteString(h,StringFormat("tick_%s\t%I64d:%d\r\n",g_syms[i],g_lastMsc[i],g_lastMscCnt[i]));
-   FileWriteString(h,StringFormat("last_deal_ticket\t%I64u\r\n",g_lastDealTicket));
+   FileWriteString(h,StringFormat("last_deal_time_msc\t%I64d\r\n",g_lastDealTimeMsc));
    FileClose(h);
 }
 void LoadCheckpoint()
 {
-   int h=FileOpen(CheckpointFile(),FILE_READ|FILE_TXT|FILE_ANSI,'\t');
-   if(h==INVALID_HANDLE) return;   // first run: cursors stay 0
+   int h=FileOpen(CheckpointFile(),FILE_READ|FILE_TXT|FILE_ANSI);
+   if(h==INVALID_HANDLE) return;
    bool first=true;
    while(!FileIsEnding(h))
    {
-      string ln=FileReadString(h);          // FILE_TXT: one full line
-      if(first){ first=false; continue; }   // skip header
+      string ln=FileReadString(h);
+      if(first){ first=false; continue; }
       if(StringLen(ln)==0) continue;
       string f[]; if(StringSplit(ln,'\t',f)<2) continue;
       string k=f[0], v=f[1];
       if(StringFind(k,"tick_")==0)
       {
          string sym=StringSubstr(k,5);
-         int idx=-1; for(int i=0;i<g_nSym;i++) if(g_syms[i]==sym){ idx=i; break; }
-         if(idx>=0)
+         for(int i=0;i<g_nSym;i++) if(g_syms[i]==sym)
          {
             int colon=StringFind(v,":");
-            if(colon>0){ g_lastMsc[idx]=(long)StringToInteger(StringSubstr(v,0,colon));
-                         g_lastMscCnt[idx]=(int)StringToInteger(StringSubstr(v,colon+1)); }
+            if(colon>0){ g_lastMsc[i]=(long)StringToInteger(StringSubstr(v,0,colon));
+                         g_lastMscCnt[i]=(int)StringToInteger(StringSubstr(v,colon+1)); }
+            break;
          }
       }
-      else if(k=="last_deal_ticket") g_lastDealTicket=(ulong)StringToInteger(v);
+      else if(k=="last_deal_time_msc") g_lastDealTimeMsc=(long)StringToInteger(v);
    }
    FileClose(h);
 }
@@ -118,40 +124,59 @@ void LoadCheckpoint()
 void PollTicks(int i)
 {
    string sym=g_syms[i];
+   long startMsc=g_lastMsc[i]; int startCnt=g_lastMscCnt[i];   // CONSTANT during this scan
    MqlTick ticks[];
-   ulong from=(g_lastMsc[i]>0)?(ulong)g_lastMsc[i]:(ulong)((long)(TimeGMT()-60)*1000);
+   ulong from=(startMsc>0)?(ulong)startMsc:(ulong)((long)(TimeGMT()-TickMaxLookbackSec)*1000);
    int n=CopyTicksRange(sym,ticks,COPY_TICKS_ALL,from,0);
    if(n<=0) return;
-   int written=0, skipAtLast=g_lastMscCnt[i];
+   long newMsc=startMsc; int newCnt=startCnt;   // computed SEPARATELY from the start cursor
+   int skip=startCnt, written=0;
+   string batch="";
    for(int k=0;k<n && written<TicksPerPollMax;k++)
    {
       long msc=ticks[k].time_msc;
-      if(msc<g_lastMsc[i]) continue;                          // older than cursor
-      if(msc==g_lastMsc[i])                                   // same-ms: skip ones already written
-      {
-         if(skipAtLast>0){ skipAtLast--; continue; }
-      }
-      string line=StringFormat("%I64d\t%I64d\t%s\t%s\t%.8f\t%.8f\t%.8f\t%I64d\t%.4f\t%u",
+      if(msc<startMsc) continue;                       // older than cursor
+      if(msc==startMsc && skip>0){ skip--; continue; } // same-ms already-written prefix
+      batch+=StringFormat("%I64d\t%I64d\t%s\t%s\t%.8f\t%.8f\t%.8f\t%I64d\t%.4f\t%u\r\n",
          NowMsc(),msc,
          TimeToString(ticks[k].time,TIME_DATE|TIME_SECONDS),
          TimeToString((datetime)(msc/1000),TIME_DATE|TIME_SECONDS),
          ticks[k].bid,ticks[k].ask,ticks[k].last,
          (long)ticks[k].volume,ticks[k].volume_real,ticks[k].flags);
-      AppendLine(TickFile(sym),
-        "collect_msc\ttick_msc\tbroker_time\tutc_time\tbid\task\tlast\tvolume\tvolume_real\tflags",line);
-      // advance cursor + same-ms counter
-      if(msc>g_lastMsc[i]){ g_lastMsc[i]=msc; g_lastMscCnt[i]=1; }
-      else g_lastMscCnt[i]++;
+      if(msc>newMsc){ newMsc=msc; newCnt=1; } else newCnt++;   // msc==newMsc -> same-ms count up
       written++;
    }
-   if(written>0 && VerboseHealth && written>=TicksPerPollMax)
-      Health("tick_cap",StringFormat("%s hit per-poll cap %d; will catch up next poll",sym,TicksPerPollMax));
+   if(written==0) return;
+   if(AppendBatch(TickFile(sym),TICK_HDR,batch))
+   {
+      g_lastMsc[i]=newMsc; g_lastMscCnt[i]=newCnt;   // advance ONLY after verified write
+      if(written>=TicksPerPollMax && VerboseHealth)
+         Health("tick_cap",StringFormat("%s hit cap %d; catching up next poll",sym,TicksPerPollMax));
+   }
+   else Health("tick_write_fail",sym);                // cursor unchanged -> retried next poll
 }
 
-//------------------------------- deals --------------------------------//
-void WriteDeal(ulong tk)
+//------------------------------- deals (overlap + dedup) --------------//
+bool SeenTicket(ulong tk)
 {
-   if(!HistoryDealSelect(tk)) return;
+   int lo=0,hi=g_seenN-1;
+   while(lo<=hi){ int mid=(lo+hi)/2; if(g_seen[mid]==tk) return true; if(g_seen[mid]<tk) lo=mid+1; else hi=mid-1; }
+   return false;
+}
+void AddSeenTicket(ulong tk)
+{
+   if(g_seenN>=ArraySize(g_seen)) ArrayResize(g_seen,g_seenN+256);
+   int lo=0,hi=g_seenN-1;
+   while(lo<=hi){ int mid=(lo+hi)/2; if(g_seen[mid]<tk) lo=mid+1; else hi=mid-1; }
+   for(int i=g_seenN;i>lo;i--) g_seen[i]=g_seen[i-1];
+   g_seen[lo]=tk; g_seenN++;
+}
+// reads via HistoryDealGet*(ticket,...) — requires the ticket to be inside the active
+// HistorySelect() range; does NOT call HistoryDealSelect (no list reset). Returns true
+// if the row was written (so the caller marks the ticket seen only on success).
+bool WriteDealByTicket(ulong tk)
+{
+   long tmsc  =HistoryDealGetInteger(tk,DEAL_TIME_MSC);
    long order =HistoryDealGetInteger(tk,DEAL_ORDER);
    long posid =HistoryDealGetInteger(tk,DEAL_POSITION_ID);
    long magic =HistoryDealGetInteger(tk,DEAL_MAGIC);
@@ -164,71 +189,66 @@ void WriteDeal(ulong tk)
    double swap =HistoryDealGetDouble(tk,DEAL_SWAP);
    double fee  =HistoryDealGetDouble(tk,DEAL_FEE);
    double profit=HistoryDealGetDouble(tk,DEAL_PROFIT);
+   if(StringLen(sym)==0 && vol<=0) return false;   // not a tradable deal (balance op etc.) -> skip
    string dtypeS=(dtype==DEAL_TYPE_BUY)?"buy":(dtype==DEAL_TYPE_SELL)?"sell":"other";
    string entryS=(entry==DEAL_ENTRY_IN)?"in":(entry==DEAL_ENTRY_OUT)?"out":
                  (entry==DEAL_ENTRY_INOUT)?"inout":(entry==DEAL_ENTRY_OUT_BY)?"out_by":"na";
-   // collector CANNOT know the original planned SL or the trading EA version -> unknown
-   string line=StringFormat("%s\t%I64u\t%I64d\t%I64d\t%I64d\t%s\t%s\t%s\t%.2f\t%.8f\t%s\t%.2f\t%.2f\t%.2f\t%.2f\t%s\t%s",
-      TimeToString(TimeGMT(),TIME_DATE|TIME_SECONDS),tk,order,posid,magic,sym,dtypeS,entryS,
+   // original planned SL and trading-EA version are NOT observable here -> unknown (not guessed)
+   string line=StringFormat("%s\t%I64d\t%I64u\t%I64d\t%I64d\t%I64d\t%s\t%s\t%s\t%.2f\t%.8f\t%s\t%.2f\t%.2f\t%.2f\t%.2f\t%s\t%s",
+      TimeToString(TimeGMT(),TIME_DATE|TIME_SECONDS),tmsc,tk,order,posid,magic,sym,dtypeS,entryS,
       vol,price,"unknown",comm,swap,fee,profit,"unknown",
       (magic>=OurMagic && magic<=OurMagic+23)?"ours":"foreign");
-   AppendLine(DealFile(),
-     "collect_utc\tdeal_ticket\torder_ticket\tposition_id\tmagic\tsymbol\tdeal_type\tentry_type\tvolume\tprice\tsl_planned\tcommission\tswap\tfee\tprofit\tea_version\towner",line);
+   bool ok=AppendBatch(DealFile(),DEAL_HDR,line+"\r\n");
+   if(ok && tmsc>g_lastDealTimeMsc) g_lastDealTimeMsc=tmsc;
+   return ok;
 }
-// reconcile: scan history since the last processed ticket's time window and write new deals
 void ReconcileDeals(datetime fromGmt)
 {
-   long off=0; // deals are selected by SERVER time; use a wide window to be safe
-   datetime fromSrv=(datetime)((long)fromGmt);
-   if(!HistorySelect(fromSrv-86400,TimeTradeServer()+86400))
-   { Health("deal_reconcile_fail","HistorySelect failed"); return; }
+   datetime from=fromGmt-(datetime)ReconcileOverlapDays*86400;
+   if(!HistorySelect(from,TimeTradeServer()+86400)){ Health("deal_reconcile_fail","HistorySelect"); return; }
    int total=HistoryDealsTotal();
-   ulong maxTk=g_lastDealTicket;
-   for(int i=0;i<total;i++)
+   for(int i=0;i<total;i++)                        // index order; do NOT reset the list
    {
       ulong tk=HistoryDealGetTicket(i);
-      if(tk==0 || tk<=g_lastDealTicket) continue;
-      WriteDeal(tk);
-      if(tk>maxTk) maxTk=tk;
+      if(tk==0 || SeenTicket(tk)) continue;        // dedup: a repeat in the overlap is skipped
+      if(WriteDealByTicket(tk)) AddSeenTicket(tk);  // a delayed SMALL ticket is still captured
    }
-   if(maxTk>g_lastDealTicket){ g_lastDealTicket=maxTk; SaveCheckpoint(); }
+   SaveCheckpoint();
 }
 
 //------------------------------- state snapshots ----------------------//
-double OpenRiskEst()
+double OpenRiskEst(bool &known)
 {
-   double tot=0;
+   known=true; double tot=0;
    for(int i=PositionsTotal()-1;i>=0;i--)
    {
       ulong tk=PositionGetTicket(i); if(tk==0) continue;
       double sl=PositionGetDouble(POSITION_SL);
-      if(sl<=0) continue;                           // unknown risk -> skip (not guessed)
+      if(sl<=0){ known=false; continue; }          // uncomputable -> mark unknown (not guessed)
       string sym=PositionGetString(POSITION_SYMBOL);
       double vol=PositionGetDouble(POSITION_VOLUME);
       long pt=PositionGetInteger(POSITION_TYPE);
       double cur=(pt==POSITION_TYPE_BUY)?SymbolInfoDouble(sym,SYMBOL_BID):SymbolInfoDouble(sym,SYMBOL_ASK);
-      double pnl=0;
-      ENUM_ORDER_TYPE side=(pt==POSITION_TYPE_BUY)?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
-      if(OrderCalcProfit(side,sym,vol,cur,sl,pnl)) tot+=(pnl<0?-pnl:0);
+      double pnl=0; ENUM_ORDER_TYPE side=(pt==POSITION_TYPE_BUY)?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
+      if(OrderCalcProfit(side,sym,vol,cur,sl,pnl)) tot+=(pnl<0?-pnl:0); else known=false;
    }
    return tot;
 }
 void SnapshotAccount()
 {
-   string line=StringFormat("%s\t%s\t%s\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%d\t%s",
+   bool known; double risk=OpenRiskEst(known);
+   string line=StringFormat("%s\t%s\t%s\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%d\t%d\t%s",
      TimeToString(TimeGMT(),TIME_DATE|TIME_SECONDS),
      TimeToString(TimeTradeServer(),TIME_DATE|TIME_SECONDS),
      TimeToString(TimeGMT(),TIME_DATE|TIME_SECONDS),
      AccountInfoDouble(ACCOUNT_BALANCE),AccountInfoDouble(ACCOUNT_EQUITY),
      AccountInfoDouble(ACCOUNT_MARGIN),AccountInfoDouble(ACCOUNT_MARGIN_FREE),
-     AccountInfoDouble(ACCOUNT_MARGIN_LEVEL),OpenRiskEst(),
+     AccountInfoDouble(ACCOUNT_MARGIN_LEVEL),risk,(known?1:0),
      (int)TerminalInfoInteger(TERMINAL_CONNECTED),AccountInfoString(ACCOUNT_SERVER));
-   AppendLine(AcctFile(),
-     "collect_utc\tbroker_time\tutc_time\tbalance\tequity\tmargin\tfree_margin\tmargin_level\topen_risk_est\tconnected\tserver",line);
+   AppendLine(AcctFile(),ACCT_HDR,line);
 }
 void SnapshotPositions()
 {
-   string hdr="collect_utc\tticket\tposition_id\tmagic\tsymbol\tpos_type\tvolume\tprice_open\tsl\ttp\tprice_current\tswap\tprofit\towner";
    for(int i=PositionsTotal()-1;i>=0;i--)
    {
       ulong tk=PositionGetTicket(i); if(tk==0) continue;
@@ -242,12 +262,11 @@ void SnapshotPositions()
         PositionGetDouble(POSITION_PRICE_CURRENT),PositionGetDouble(POSITION_SWAP),
         PositionGetDouble(POSITION_PROFIT),
         (magic>=OurMagic && magic<=OurMagic+23)?"ours":"foreign");
-      AppendLine(PosFile(),hdr,line);
+      AppendLine(PosFile(),POS_HDR,line);
    }
 }
 void SnapshotSymbols()
 {
-   string hdr="collect_utc\tsymbol\tpoint\tdigits\ttick_size\ttick_value\tvolume_min\tvolume_step\tvolume_max\tcurrency_profit\tspread_points\tstops_level\tfreeze_level";
    for(int i=0;i<g_nSym;i++)
    {
       string s=g_syms[i];
@@ -259,14 +278,13 @@ void SnapshotSymbols()
         SymbolInfoDouble(s,SYMBOL_VOLUME_MAX),SymbolInfoString(s,SYMBOL_CURRENCY_PROFIT),
         (int)SymbolInfoInteger(s,SYMBOL_SPREAD),
         (int)SymbolInfoInteger(s,SYMBOL_TRADE_STOPS_LEVEL),(int)SymbolInfoInteger(s,SYMBOL_TRADE_FREEZE_LEVEL));
-      AppendLine(SymFile(),hdr,line);
+      AppendLine(SymFile(),SYM_HDR,line);
    }
 }
 
 //------------------------------- lifecycle ----------------------------//
 int OnInit()
 {
-   // parse symbols
    string parts[]; int n=StringSplit(CollectSymbols,',',parts);
    if(n<=0){ Print("Collector: no symbols"); return INIT_PARAMETERS_INCORRECT; }
    ArrayResize(g_syms,n); ArrayResize(g_lastMsc,n); ArrayResize(g_lastMscCnt,n);
@@ -276,50 +294,41 @@ int OnInit()
       string s=parts[i]; StringTrimLeft(s); StringTrimRight(s);
       if(StringLen(s)==0) continue;
       g_syms[g_nSym]=s; g_lastMsc[g_nSym]=0; g_lastMscCnt[g_nSym]=0;
-      SymbolSelect(s,true);
-      g_nSym++;
+      SymbolSelect(s,true); g_nSym++;
    }
    ArrayResize(g_syms,g_nSym);
    LoadCheckpoint();
    g_curDay=UtcDayStart0(TimeGMT());
-   // backfill deals on first start
-   ReconcileDeals(TimeGMT()-(datetime)HistoryBackfillDays*86400);
-   SnapshotSymbols();
-   SnapshotAccount();
-   int sec=MathMax(1,TickTimerSeconds);
-   EventSetTimer(sec);
-   Health("start",StringFormat("symbols=%d backfillDays=%d tickTimer=%ds",g_nSym,HistoryBackfillDays,sec));
+   datetime dealFrom=(g_lastDealTimeMsc>0)?(datetime)(g_lastDealTimeMsc/1000):(TimeGMT()-(datetime)HistoryBackfillDays*86400);
+   ReconcileDeals(dealFrom);
+   SnapshotSymbols(); SnapshotAccount();
+   EventSetTimer(MathMax(1,TickTimerSeconds));
+   Health("start",StringFormat("symbols=%d backfillDays=%d overlapDays=%d",g_nSym,HistoryBackfillDays,ReconcileOverlapDays));
    return INIT_SUCCEEDED;
 }
-datetime UtcDayStart0(datetime t){ return (datetime)((long)t/86400*86400); }
-
 void OnDeinit(const int reason){ SaveCheckpoint(); EventKillTimer(); Health("stop","reason="+(string)reason); }
 
 void OnTimer()
 {
-   if(!(bool)TerminalInfoInteger(TERMINAL_CONNECTED))
-   { Health("disconnected","terminal not connected; will resume"); return; }
-   // daily rollover marker
+   if(!(bool)TerminalInfoInteger(TERMINAL_CONNECTED)){ Health("disconnected","not connected; will resume"); return; }
    datetime day=UtcDayStart0(TimeGMT());
    if(day!=g_curDay){ g_curDay=day; SnapshotSymbols(); Health("day_rollover",DayTag(TimeGMT())); }
-   // ticks for all symbols
    for(int i=0;i<g_nSym;i++) PollTicks(i);
    SaveCheckpoint();
-   // periodic state snapshot
    if(TimeGMT()-g_lastStateSnap>=StateTimerSeconds)
    {
       SnapshotAccount(); SnapshotPositions();
-      ReconcileDeals(TimeGMT()-2*86400);   // rolling reconcile window for missed events
+      datetime anchor=(g_lastDealTimeMsc>0)?(datetime)(g_lastDealTimeMsc/1000):(TimeGMT()-(datetime)ReconcileOverlapDays*86400);
+      ReconcileDeals(anchor);
       g_lastStateSnap=TimeGMT();
    }
 }
-// capture fills immediately (collector sees ALL account deals, not just this chart)
 void OnTradeTransaction(const MqlTradeTransaction &trans,const MqlTradeRequest &request,const MqlTradeResult &result)
 {
    if(trans.type!=TRADE_TRANSACTION_DEAL_ADD || trans.deal==0) return;
-   if(trans.deal<=g_lastDealTicket) return;
-   WriteDeal(trans.deal);
-   g_lastDealTicket=trans.deal;
-   SaveCheckpoint();
+   if(SeenTicket(trans.deal)) return;
+   // make the deal readable by ticket via a bounded HistorySelect (not HistoryDealSelect)
+   if(!HistorySelect(TimeTradeServer()-86400,TimeTradeServer()+86400)) return;
+   if(WriteDealByTicket(trans.deal)){ AddSeenTicket(trans.deal); SaveCheckpoint(); }
 }
 //+------------------------------------------------------------------+

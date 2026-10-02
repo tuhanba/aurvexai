@@ -32,12 +32,21 @@
 | dosya | kolonlar |
 |---|---|
 | `ticks_<SYM>_<YYYYMMDD>.csv` | collect_msc, tick_msc, broker_time, utc_time, bid, ask, last, volume, volume_real, flags |
-| `deals_<YYYYMMDD>.csv` | collect_utc, deal_ticket, order_ticket, position_id, magic, symbol, deal_type, entry_type, volume, price, sl_planned(=unknown), commission, swap, fee, profit, ea_version(=unknown), owner(ours/foreign) |
+| `deals_<YYYYMMDD>.csv` | collect_utc, **deal_time_msc**, deal_ticket, order_ticket, position_id, magic, symbol, deal_type, entry_type, volume, price, sl_planned(=unknown), commission, swap, fee, profit, ea_version(=unknown), owner(ours/foreign) |
 | `positions_<YYYYMMDD>.csv` | collect_utc, ticket, position_id, magic, symbol, pos_type, volume, price_open, sl, tp, price_current, swap, profit, owner |
-| `account_<YYYYMMDD>.csv` | collect_utc, broker_time, utc_time, balance, equity, margin, free_margin, margin_level, open_risk_est, connected, server |
+| `account_<YYYYMMDD>.csv` | collect_utc, broker_time, utc_time, balance, equity, margin, free_margin, margin_level, open_risk_est, **open_risk_known**(0/1), connected, server |
 | `symbols_<YYYYMMDD>.csv` | collect_utc, symbol, point, digits, tick_size, tick_value, volume_min, volume_step, volume_max, currency_profit, spread_points, stops_level, freeze_level |
 | `health_<YYYYMMDD>.csv` | collect_utc, event, detail |
-| `checkpoint.csv` | key, value (tick_<SYM>=msc:count, last_deal_ticket) |
+| `checkpoint.csv` | key, value (tick_<SYM>=msc:count, last_deal_time_msc) |
+
+### v1.1 düzeltmeleri (Sprint-1 review)
+1. **Importer byte-offset:** yalnız `\n` ile biten kayıtlar tüketilir; yarım satırda cursor ilerlemez (crash/replay güvenli).
+2. **Tick cursor:** tarama boyunca başlangıç (msc,count) **sabit**; yeni cursor ayrı hesaplanır → aynı-ms tick'lerin tamamı korunur. (regression testi: `tests/test_collector_importer.py::test_tick_cursor_*`)
+3. **Deal reconcile:** overlap taraması + ticket dedup; `HistoryDealGet*(ticket,...)` ile okunur, **`HistoryDealSelect` yok** (liste sıfırlanmaz); gecikmiş küçük ticket atlanmaz.
+4. **Verified-write gating:** tick cursor/checkpoint **yalnız yazım doğrulandıktan sonra** ilerler; aksi halde retried.
+5. **DEAL_TIME_MSC:** eklendi; günlük rapor **gerçekleşme tarihine** göre, **net = profit+commission+swap+fee**.
+6. **Bounded reads + batch write:** tick'ler sınırlı aralıkta okunur (`TickMaxLookbackSec`, `TicksPerPollMax`), poll başına tek batch yazılır.
+7. **open_risk unknown:** SL'siz/hesaplanamayan pozisyonda `open_risk_known=0` (tahmin yok); rapor "UNKNOWN" işaretler.
 
 ---
 
@@ -75,18 +84,20 @@
 
 ---
 
-## 4. Doğrulama sonuçları
+## 4. Doğrulama sonuçları (v1.1)
 | test | sonuç |
 |---|---|
-| Importer: ilk import (ticks/deals/account/health) | **PASS** (8 satır) |
-| Aynı ms'te 2 tick korunuyor | **PASS** (2 kayıt) |
-| Noktalı sembol (GER40.cash) dosya adından çözülüyor | **PASS** |
-| Re-run (aynı dosyalar) → 0 yeni satır (idempotent cursor) | **PASS** |
-| Append (+1 tick, +1 yeni deal, +1 **mükerrer** deal) → sadece 2 yeni, dup ignore | **PASS** (ticks 5, deals 3) |
-| owner ours/foreign ayrımı + günlük rapor (JSON+MD) | **PASS** |
-| FTMO Python suite (governor+phase-lock dahil) | **PASS** (139) |
+| Tick cursor: fresh'ten tüm aynı-ms tick korunur | **PASS** |
+| Tick cursor: resume'da mükerrer yok; kısmi same-ms prefix doğru | **PASS** |
+| Tick cursor: başlangıç sabit (multi-ms regression) | **PASS** |
+| Byte-offset: **yarım satır tüketilmez**, tamamlanınca alınır, truncate yok | **PASS** |
+| Deals: DEAL_TIME_MSC → **gerçekleşme tarihi**; **net=profit+comm+swap+fee** | **PASS** (net 18.2) |
+| Deal dedup (overlap tekrar yazımı) | **PASS** |
+| Eksik/kilitli dosya → batch abort olmaz | **PASS** |
+| open_risk unknown bayrağı → rapor "UNKNOWN" | **PASS** |
+| Tüm suite (FTMO + collector) | **PASS** (147) |
 | **MQL5 collector F7 derleme** | **NOT OBSERVED** (derleyici yok — operatör) |
-| **4 sembolde canlı tick akışı / işlem mutabakatı / restart sürekliliği** | **NOT OBSERVED** (terminal yok — operatör demo'da) |
+| **Canlı tick akışı / Windows dosya paylaşımı / kesinti / disk hatası / restart sürekliliği** | **NOT OBSERVED** (terminal/OS yok — operatör demo'da) |
 
 ## 5. Başarı ölçütü (iş emri) — durum
 - Dört sembolde veri akışı → kod hazır; **canlı akış operatör demo'sunda doğrulanacak.**
