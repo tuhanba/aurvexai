@@ -117,19 +117,33 @@ def _date_from_msc(msc):
         return None
 
 
+def _read_commit(path):
+    """Committed length published by the collector in '<path>.commit'. Bytes BEYOND this
+    are an uncommitted (failed/partial) batch and must never be read. -1 = no sidecar."""
+    try:
+        with open(path + ".commit", "rb") as f:
+            s = f.read().strip()
+        return int(s) if s else -1
+    except (OSError, ValueError):
+        return -1
+
+
 def _read_new_complete_lines(cur, path):
-    """Byte-offset read: return (lines, is_first_read, new_offset). Only data up to the
-    LAST newline is consumed; a partial trailing line is left for next time."""
+    """Byte-offset read capped at the collector's committed length: return
+    (lines, is_first_read, new_offset). Only committed, newline-terminated data is
+    consumed, so a partial/uncommitted trailing batch is never imported."""
     size = os.path.getsize(path)
+    commit = _read_commit(path)
+    end = size if commit < 0 else min(size, max(0, commit))
     row = cur.execute("SELECT off FROM import_state WHERE path=?", (path,)).fetchone()
     off = row[0] if row else 0
     if off > size:                       # file shrank/rotated unexpectedly -> restart it
         off = 0
-    if off == size:
+    if off >= end:
         return [], off == 0, off
     with open(path, "rb") as f:
         f.seek(off)
-        data = f.read()
+        data = f.read(end - off)         # never read past the committed boundary
     nl = data.rfind(b"\n")
     if nl == -1:                         # no complete line yet
         return [], off == 0, off
@@ -138,6 +152,27 @@ def _read_new_complete_lines(cur, path):
     text = consumed.decode("latin-1", "replace")
     lines = [ln.rstrip("\r") for ln in text.split("\n") if ln.strip() != ""]
     return lines, off == 0, new_off
+
+
+def validate_checkpoint(text, symbols, schema=SCHEMA_VERSION):
+    """Mirror of the collector's ValidateCheckpointFile: a checkpoint is valid only with
+    the right schema line, a tick_ entry for EVERY expected symbol, and last_deal_time_msc.
+    (An invalid temp must not replace the last good checkpoint.)"""
+    schema_ok = deal_ok = False
+    tick_syms = set()
+    for ln in text.splitlines():
+        f = ln.split("\t")
+        if len(f) < 2:
+            continue
+        if f[0] == "schema":
+            schema_ok = (f[1] == schema)
+        elif f[0].startswith("tick_"):
+            s = f[0][5:]
+            if s in symbols:
+                tick_syms.add(s)
+        elif f[0] == "last_deal_time_msc":
+            deal_ok = True
+    return schema_ok and deal_ok and tick_syms == set(symbols)
 
 
 def _set_off(cur, path, off):

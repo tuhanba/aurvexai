@@ -71,25 +71,49 @@ const string POS_HDR="collect_utc\tticket\tposition_id\tmagic\tsymbol\tpos_type\
 const string ACCT_HDR="collect_utc\tbroker_time\tutc_time\tbalance\tequity\tmargin\tfree_margin\tmargin_level\topen_risk_est\topen_risk_known\tconnected\tserver";
 const string SYM_HDR="collect_utc\tsymbol\tpoint\tdigits\ttick_size\ttick_value\tvolume_min\tvolume_step\tvolume_max\tcurrency_profit\tspread_points\tstops_level\tfreeze_level";
 
-// verified write: returns true only if the FULL payload was written+flushed.
-// FILE_SHARE_READ|WRITE lets the Python importer read while we write. On a partial
-// write (e.g. disk full) we terminate the broken tail with a newline so the importer
-// treats it as one malformed line (skipped) rather than merging it into the next batch,
-// and we return false so the cursor is NOT advanced (the batch is retried next poll;
-// re-written ticks are deduped by (symbol,tick_msc,seq)).
+// --- committed-length (staging/commit) protocol -----------------------------
+// A data file is only ever read by the importer UP TO its committed length, held in a
+// "<file>.commit" sidecar. A batch is written at the committed offset (overwriting any
+// uncommitted tail left by a prior failed write); only after the FULL payload is written
+// is .commit advanced. So a partially-written batch — even one that happens to end with a
+// full column count — stays BEYOND .commit and is never published to the importer. We
+// never append a newline to a partial payload to make it "look valid".
+long ReadCommit(string cf)
+{
+   int h=FileOpen(cf,FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
+   if(h==INVALID_HANDLE) return -1;
+   string s=(FileIsEnding(h)?"":FileReadString(h));
+   FileClose(h);
+   return (StringLen(s)>0)?(long)StringToInteger(s):-1;
+}
+bool WriteCommitAtomic(string cf,long val)
+{
+   string tmp=cf+".tmp";
+   int h=FileOpen(tmp,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
+   if(h==INVALID_HANDLE) return false;
+   FileWriteString(h,IntegerToString(val));
+   FileFlush(h); FileClose(h);
+   return FileMove(tmp,0,cf,FILE_REWRITE);
+}
 bool AppendBatch(string file,string header,string payload)
 {
    if(StringLen(payload)==0) return true;
+   string cf=file+".commit";
+   long committed=ReadCommit(cf);
    int h=FileOpen(file,FILE_READ|FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
    if(h==INVALID_HANDLE){ Print("Collector FileOpen fail ",file," err=",GetLastError()); return false; }
-   if(FileSize(h)==0) FileWriteString(h,header+"\r\n");
-   FileSeek(h,0,SEEK_END);
+   if(committed<0)
+   {   // new file (or lost sidecar): write header if empty, commit the full current size
+      if(FileSize(h)==0) FileWriteString(h,header+"\r\n");
+      committed=(long)FileSize(h);
+   }
+   FileSeek(h,committed,SEEK_SET);          // overwrite any uncommitted partial tail
    uint want=(uint)StringLen(payload);
    uint w=FileWriteString(h,payload);
-   if(w<want) FileWriteString(h,"\r\n");   // close the corrupt partial line
    FileFlush(h);
    FileClose(h);
-   return (w>=want);
+   if(w<want) return false;                 // partial: .commit NOT advanced -> batch hidden, retried
+   return WriteCommitAtomic(cf,committed+(long)want);
 }
 void AppendLine(string file,string header,string line){ AppendBatch(file,header,line+"\r\n"); }
 void Health(string ev,string detail)
@@ -100,8 +124,31 @@ void Health(string ev,string detail)
 }
 
 //------------------------------- checkpoint ---------------------------//
-// atomic checkpoint: write to a temp file, verify non-empty, then FileMove over the
-// real file. On restart LoadCheckpoint recovers from the .tmp if a move was interrupted.
+// validate a checkpoint file: correct schema line, a tick_ entry for EVERY configured
+// symbol, and the last_deal_time_msc line. A temp that fails this must NOT replace the
+// last good checkpoint. (Content/schema/symbol-completeness, not just non-empty.)
+bool ValidateCheckpointFile(string path)
+{
+   int h=FileOpen(path,FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
+   if(h==INVALID_HANDLE) return false;
+   bool schemaOk=false, dealOk=false; int tickCount=0;
+   while(!FileIsEnding(h))
+   {
+      string ln=FileReadString(h); if(StringLen(ln)==0) continue;
+      string f[]; if(StringSplit(ln,'\t',f)<2) continue;
+      if(f[0]=="schema") schemaOk=(f[1]==COLLECTOR_SCHEMA);
+      else if(StringFind(f[0],"tick_")==0)
+      {
+         string sym=StringSubstr(f[0],5);
+         for(int i=0;i<g_nSym;i++) if(g_syms[i]==sym){ tickCount++; break; }
+      }
+      else if(f[0]=="last_deal_time_msc") dealOk=true;
+   }
+   FileClose(h);
+   return (schemaOk && dealOk && tickCount==g_nSym);
+}
+// atomic checkpoint: write temp -> VALIDATE full content -> FileMove over the real file.
+// An invalid/incomplete temp is deleted and the last good checkpoint is left intact.
 void SaveCheckpoint()
 {
    string tmp=CheckpointFile()+".tmp";
@@ -112,9 +159,9 @@ void SaveCheckpoint()
       FileWriteString(h,StringFormat("tick_%s\t%I64d:%d\r\n",g_syms[i],g_lastMsc[i],g_lastMscCnt[i]));
    FileWriteString(h,StringFormat("last_deal_time_msc\t%I64d\r\n",g_lastDealTimeMsc));
    FileFlush(h);
-   ulong sz=FileSize(h);
    FileClose(h);
-   if(sz==0){ FileDelete(tmp); return; }                 // never replace with an empty file
+   if(!ValidateCheckpointFile(tmp))                       // reject an invalid temp
+   { FileDelete(tmp); Health("checkpoint_invalid","temp failed validation; kept last good"); return; }
    if(!FileMove(tmp,0,CheckpointFile(),FILE_REWRITE))
       Print("Collector checkpoint move failed err=",GetLastError());
 }

@@ -41,6 +41,18 @@
 | `health_<YYYYMMDD>.csv` | collect_utc, event, detail |
 | `checkpoint.csv` | key, value (tick_<SYM>=msc:count, last_deal_time_msc) |
 
+### v1.2 dar düzeltmeler (üçüncü review)
+- **Committed-length (staging/commit) protokolü:** her data dosyasının yanında bir
+  **`<dosya>.commit`** sidecar'ı yayımlanan (tam yazılmış) bayt uzunluğunu tutar.
+  Batch, committed offset'e yazılır (önceki başarısız yazımın kuyruğunu üzerine yazar);
+  **yalnız payload tam yazıldıktan sonra** `.commit` ilerler (atomik temp+rename).
+  Importer dosyayı **yalnız `.commit`'e kadar** okur → yarım/başarısız batch, **kolon
+  sayısı tam görünse bile** asla yayımlanmaz. **Partial payload'a newline eklenmez.**
+- **Checkpoint doğrulama:** temp checkpoint, move'dan önce **içerik+şema+her sembol
+  kaydı** için doğrulanır; geçersiz temp **son sağlam checkpoint'i değiştirmez** (silinir).
+- Regression: son-alanda-kesilen-ama-kolon-tam satır (`test_uncommitted_partial_not_published`);
+  checkpoint doğrulama (`test_checkpoint_validation`).
+
 ### v1.2 düzeltmeleri (ikinci review)
 1. **Crash-replay dedup:** her tick'e **ms-içi `seq`** (0-based) verilir → kimlik
    `(symbol, tick_msc, seq)`; collector checkpoint öncesi çökerse yeniden yazılan
@@ -117,9 +129,11 @@
 | **Eski DB reddi (schema_meta yok):** SystemExit (sessiz migration yok) | **PASS** |
 | Deals: DEAL_TIME_MSC → gerçekleşme tarihi; net=profit+comm+swap+fee | **PASS** (net 18.2) |
 | Deal dedup / eksik dosya / open_risk unknown | **PASS** |
-| Tüm suite (FTMO + collector) | **PASS** (152) |
+| **Committed protokol:** son-alanda kesik ama kolon-tam satır yayımlanmaz; batch tamamlanınca görünür | **PASS** |
+| **Checkpoint doğrulama:** şema/eksik-sembol/boş reddedilir, geçerli kabul | **PASS** |
+| Tüm suite (FTMO + collector) | **PASS** (154) |
 | **MQL5 collector F7 derleme** | **NOT OBSERVED** (derleyici yok — operatör) |
-| **Canlı tick akışı / Windows dosya paylaşımı / kesinti / disk hatası / restart sürekliliği** | **NOT OBSERVED** (terminal/OS yok — operatör demo'da) |
+| **Gerçek disk-dolum/crash kurtarma, canlı akış, Windows paylaşım/kesinti, restart** | **NOT OBSERVED** (terminal/OS — operatör; kanıtlanana kadar PASS değil) |
 
 ## 5. Başarı ölçütü (iş emri) — durum
 - Dört sembolde veri akışı → kod hazır; **canlı akış operatör demo'sunda doğrulanacak.**

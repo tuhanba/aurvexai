@@ -247,3 +247,49 @@ def test_old_db_refused(tmp_path):
     csv_dir = tmp_path / "csv"; csv_dir.mkdir()
     with pytest.raises(SystemExit):
         imp.import_dir(db, str(csv_dir))
+
+
+# ============ uncommitted partial batch is never published (narrow #1) ========
+def test_uncommitted_partial_not_published(tmp_path):
+    csv_dir = tmp_path / "csv"; csv_dir.mkdir()
+    db = str(tmp_path / "live.db")
+    p = str(csv_dir / "ticks_XAUUSD_20261002.csv")
+    # committed part: header + one full line; publish its byte length in the .commit sidecar
+    _write(p, TH, [[1, MSC_1002, 0, "b", "2026.10.02 10:00:00", 2650.1, 2650.4, 0, 1, 1.0, 6]])
+    commit_len = os.path.getsize(p)
+    with open(p + ".commit", "w") as f:
+        f.write(str(commit_len))
+    # append an UNCOMMITTED batch BEYOND commit: FULL column count (11) + trailing newline,
+    # but the last field is truncated garbage — the exact "looks valid" trap.
+    with open(p, "a", encoding="latin-1", newline="") as f:
+        f.write(_line([2, MSC_1002, 1, "b", "2026.10.02 10:00:00", 2650.1, 2650.4, 0, 1, 1.0, "fla"]) + "\r\n")
+    imp.import_dir(db, str(csv_dir))
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT COUNT(*) FROM ticks").fetchone()[0] == 1   # uncommitted NOT imported
+    con.close()
+    # collector overwrites the bad tail with a good batch and advances .commit
+    with open(p, "r+b") as f:
+        f.truncate(commit_len)
+    with open(p, "a", encoding="latin-1", newline="") as f:
+        f.write(_line([3, MSC_1002, 1, "b", "2026.10.02 10:00:00", 2650.1, 2650.4, 0, 1, 1.0, 6]) + "\r\n")
+    with open(p + ".commit", "w") as f:
+        f.write(str(os.path.getsize(p)))
+    imp.import_dir(db, str(csv_dir))
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT COUNT(*) FROM ticks").fetchone()[0] == 2   # good batch now visible
+    # and the truncated 'fla' flags value never entered the DB
+    assert con.execute("SELECT COUNT(*) FROM ticks WHERE flags IS NULL").fetchone()[0] == 0
+    con.close()
+
+
+# ============ checkpoint content/schema/symbol validation (narrow #2) =========
+def test_checkpoint_validation():
+    syms = ["XAUUSD", "XAGUSD"]
+    good = "schema\t1.2\r\ntick_XAUUSD\t100:1\r\ntick_XAGUSD\t200:0\r\nlast_deal_time_msc\t5\r\n"
+    assert imp.validate_checkpoint(good, syms) is True
+    assert imp.validate_checkpoint(good.replace("1.2", "1.1"), syms) is False   # wrong schema
+    assert imp.validate_checkpoint(
+        "schema\t1.2\r\ntick_XAUUSD\t100:1\r\nlast_deal_time_msc\t5\r\n", syms) is False  # missing symbol
+    assert imp.validate_checkpoint(
+        "schema\t1.2\r\ntick_XAUUSD\t100:1\r\ntick_XAGUSD\t200:0\r\n", syms) is False      # no last_deal
+    assert imp.validate_checkpoint("", syms) is False                           # empty
