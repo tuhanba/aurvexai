@@ -165,3 +165,47 @@ reddinin gün-sayısını verir. Export edip at: `ORB already broken before armi
 2. **Trail=0 raporunu** (GER40+JP225) at → birebir 0.5-vs-0 flip tablosu çıkarayım.
 3. **XAG Journal log'u** export et → pre-break vs spread-guard gün-sayısı.
 4. Sonuçlar sembol-bazında; toplama.
+
+---
+
+# EK-2 — TrailStopR sweep sonuçları (0.3 / 0.5 / 0.75) + robustluk
+
+## Sonuç tablosu (aynı dönem, aynı girişler)
+| sembol | trail | net | win | avgW | avgL | maxW | remove-top-1 |
+|---|---|---|---|---|---|---|---|
+| GER40 | 0.3 | −247.20 | 8/14 | +56.5 | −116.6 | +157.5 | — |
+| GER40 | **0.5** (mevcut) | **−303.81** | 8/14 | +49.4 | −116.6 | +133.6 | — |
+| GER40 | 0.75 | −220.20 | 8/14 | +59.9 | −116.6 | +137.8 | — |
+| JP225 | 0.3 | −248.50 | 5/8 | +44.1 | −156.3 | +105.6 | **−354.1** |
+| JP225 | **0.5** (mevcut) | **−227.66** | 5/8 | +48.2 | −156.3 | +109.3 | **−337.0** |
+| JP225 | 0.75 | **−89.73** | 4/8 | +133.7 | −156.1 | +339.4 | **−429.1** |
+
+## Okuma (dürüst, overfit tuzağına düşmeden)
+1. **Kaybedenler üç trail'de de BİREBİR AYNI** (−115..−168, tam −1R başlangıç stop'u).
+   Trailing yalnız kazananın ne kadarını yakaladığını değiştiriyor; kaybı etkilemiyor.
+   Yani kazanç/kayıp asimetrisi (avgL ≫ avgW) **trail ile çözülmüyor.**
+2. **0.5 belirgin optimal DEĞİL** — GER40'ta 0.3 ve 0.75 ikisi de 0.5'i geçti; ama fark
+   ~tek-işlem gürültüsü (~$80) ve **hepsi net-negatif.**
+3. **JP225 0.75 (−89.7) cazip görünüyor AMA tamamen TEK işleme bağlı:** 2026-10-01 +339.4
+   runner. **Remove-top-1 → 0.75 net −429.1 (üçünün EN KÖTÜSÜ; 0.5'in −337'sinden beter).**
+   Klasik monster-bağımlılık / overfit. **0.75'i benimseme.**
+4. **Gevşek trail = daha çok flip-to-loss:** 2026-09-24 işlemi 0.3→+25, 0.5→+1.6,
+   **0.75→−155.6** (tam dönüş −1R). Önceki turda anlattığım flip mekanizması **veriyle teyit.**
+5. **Tüm trail değerlerinde her iki endeks net-negatif** bu ayda. Trail ikinci-derece;
+   birinci-derece sorun endeks PDHL kitabının bu ayda para kaybetmesi.
+
+## KARAR
+- **TrailStopR=0.5 kalsın; 0.3/0.75'e geçme.** JP225 0.75 tek-runner overfit (remove-top-1
+  onu en kötü yapıyor); GER40 farkları tek-işlem gürültüsü. **Tek aylık, tek-DST, ayrı-sembol
+  veriyle hiçbir trail değişikliği gerekçelenmiyor.** Canlıya dokunma.
+- **Single-variable trail tuning TÜKENDİ** — daha fazla trail değeri denemek overfit üretir.
+
+## Sonraki adım (bulgulara göre — artık trail değil, DOĞRULAMA)
+Asıl soru: endeks PDHL'in **herhangi bir pozitif beklentisi var mı**, yoksa (scalp/BTC gibi)
+yapısal negatif mi? Bunu tek ay söyleyemez. Bu yüzden sıradaki iş **parametre tweak değil,
+çok-aylık OOS doğrulama** (§4 planı):
+1. §4 tuning/validation pencerelerini DST'ye göre böl (yaz offset 3 / kış offset 2).
+2. Her endeksi **birkaç ay** OOS koş; trail=0.5 sabit. Net-pozitif mi, remove-top-N'e
+   dayanıklı mı, yıl/çeyrek tutarlı mı?
+3. Endeks OOS'ta yapısal negatifse: trail/stop tweak kurtarmaz → endeks ağırlığını/varlığını
+   sorgula (dürüst, KAPI-1 BTC gibi). Pozitifse: o zaman stop/trail ince-ayarı anlamlı.
