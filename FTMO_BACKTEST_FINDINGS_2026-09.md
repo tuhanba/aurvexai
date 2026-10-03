@@ -103,3 +103,65 @@ işlem sayısı, kazanç/kayıp ort, max DD, en büyük tek kazanç/kayıp.
    skip satırlarından hangisi baskın?
 3. Sonuçları **sembol-bazında** tut; toplama.
 4. (Sonra) §4 tuning/validation pencerelerini DST'ye göre böl.
+
+---
+
+# EK — Trail A/B sonucu + XAG orders analizi (ikinci tur)
+
+## A. Trail=0 iki endekste de DAHA KÖTÜ → trailing kalıyor
+Operatör testi: GER40 ve JP225'te TrailStopR=0, 0.5'e göre **daha kötü.** Bu nedenle
+**"trailing'i kaldır" önerisi KAPATILDI.** TrailStopR=0.5 endekslerde korunuyor.
+
+**Mekanizma (0.5 verisinden + deterministik mantık — neden 0 kötü):**
+- Giriş mantığı trailing'den bağımsız → 0.5 ve 0 run'larında **aynı girişler**.
+- 0.5'te kazananlar: fiyat ≥0.5R lehe gidip trailing'i armlıyor, sonra geri-çekilmede
+  trailing stop küçük kârı **bankalıyor**.
+- 0'da aynı giriş: trailing yok → pozisyon ya 00:00 UTC seans-kapanışına kadar tutulur,
+  **ya da** fiyat girişin altına/üstüne −1R'ye kadar dönerse **tam −1R kayıp** olur.
+- **Flip eden işlemler (0.5 kazanç → 0 kayıp):** lehe hareketten (trailing'i armlayan ~0.5R)
+  SONRA fiyatın girişi geçip −1R başlangıç stop'una kadar **tam geri dönmesi**. 0.5 kârı
+  dönüşten önce kilitledi; 0 tüm dönüşü yedi. 0.5 verisindeki küçük-trailing-kazançları
+  (+1.6, +7.2, +8.2, +20.6, +24.9, +32.2) birincil flip adayları (trail'i zar zor armlayıp
+  geri çekilmişler).
+
+> **Tam eşleştirme için Trail=0 raporunun deal'leri gerekli** (bende yalnız 0.5 var).
+> Trail=0 GER40+JP225 raporunu atarsan, giriş-zamanına göre eşleştirip her flip işlemin
+> 0.5-çıkış vs 0-çıkış fiyatını yan yana tablolarım.
+
+## B. Sonraki TEK-DEĞİŞKENLİ deney (bulgulara göre) — TrailStopR sweep
+Bulgu: trailing dönüşlere karşı koruyor (0.5>0). Soru: 0.5 optimal mi, yoksa **daha sıkı**
+bir trail flip'leri daha erken yakalayıp daha az mı kaybettirir? (Daha gevşek → Trail=0'a
+yaklaşır, ki daha kötü olduğunu gördük.) → Hipotez **daha sıkı trail** yönünü işaret ediyor.
+
+**Tek değişken: TrailStopR ∈ {0.3, 0.5(baseline), 0.75}**, gerisi aynı (dönem, offset=3,
+AvoidNews=false). Hazır .set: `TEST_trail03_*`, `TEST_trail075_*` (+ mevcut 0.5).
+Karşılaştır: net, işlem sayısı, kazanç/kayıp ort, flip sayısı, max DD. **Tuning penceresinde
+seç, ayrı pencerede doğrula** (§4). Trail tuning overfit riski taşır — tek ayı kanıt sayma.
+
+## C. XAG tek-işlem nedeni — ORDERS tablosundan (log olmadan büyük ölçüde çözüldü)
+XAG raporunun **emir (orders)** tablosu nedeni gösterdi:
+1. **Çoğu gün (09-02…09-21 vb.) HİÇ emir yok** → EA o günler **armlamadan önce** çıktı
+   → "ORB zaten arming'den önce kırıldı" (gümüşün küçük 00:00–01:00 aralığı 01:00 UTC'ye
+   kadar kırılıyor) veya aralık oluşmadı. (Kesin ayrım için Journal log'u.)
+2. **Armlayan günlerde (09-01, 09-22) ONLARCA OCO emri PLACE/CANCEL churn'ü, hiç fill yok.**
+   AvoidNews=false (news bloğu yok), pozisyon yok, tradedToday yok → tek flap kaynağı
+   **SpreadAllowed** (`if(!SpreadAllowed){DeletePendings;return;}`). Yani **spread guard
+   (MaxSpreadToStopPct=12.5) gümüşün spread'ini, küçük ORB stop mesafesinin %12.5'ine karşı
+   sürekli reddediyor** → emirler place-cancel churn'üne giriyor, fiyat emirler canlıyken
+   kırmıyor → fill yok.
+3. Yalnız **09-28** (gümüşte büyük düşüş) bir sell-stop doldu → tek işlem +202.
+
+**Önemli çerçeve (aceleyle gevşetme):** Spread guard'ın gümüşü reddetmesi muhtemelen
+**DOĞRU risk-kaçınması** — spread, küçük stop'a göre büyükse o işlem zaten maliyet-ölümlü
+(KAPI-1'deki BTC gibi). Yani düşük frekans kısmen guard'ın **işini yapması**. `MaxSpreadToStopPct`'yi
+gevşetmek maliyet-ölümlü gümüş işlemleri ekleyebilir — veri olmadan yapma.
+
+**Kesinleştirme:** Journal log'u hâlâ (1) pre-break vs no-range ve (2) spread-guard
+reddinin gün-sayısını verir. Export edip at: `ORB already broken before arming`,
+`spread guard: spread ... > 12.5% of stop`, `insufficient free margin` satır sayıları.
+
+## Güncel operatör adımları
+1. **TrailStopR sweep (6 run):** GER40+JP225 × {0.3, 0.5, 0.75}. Netleri + flip sayılarını at.
+2. **Trail=0 raporunu** (GER40+JP225) at → birebir 0.5-vs-0 flip tablosu çıkarayım.
+3. **XAG Journal log'u** export et → pre-break vs spread-guard gün-sayısı.
+4. Sonuçlar sembol-bazında; toplama.
