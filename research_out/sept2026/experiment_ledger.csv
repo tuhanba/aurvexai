@@ -1,0 +1,10 @@
+ingested_at,file_sha,file,ea,symbol,period_from,period_to,offset,AvoidNews,AccountSize,RiskPct,TrailStopR,MinRangeMedMult,PdhlMinRangeMedMult,MaxSpreadToStopPct,net,trades,wins,losses,avg_win,avg_loss,max_win,net_ex_top1,status
+2026-10-03T01:39:10Z,6bd35389d8611967,96f46f50-ger03.html,Aurvex_v314_test_utc,GER40.cash,2026.09.01,2026.10.02,3,false,25000.0,0.46,0.3,0.0,0.0,12.5,-247.2,14,8,6,56.51,-116.55,157.48,-404.68,comparable
+2026-10-03T01:39:10Z,4aef05f4146beb9c,712c23e4-GER40.html,Aurvex_v314_test_utc,GER40.cash,2026.09.01,2026.10.02,3,false,25000.0,0.46,0.5,0.0,0.0,12.5,-303.81,14,8,6,49.43,-116.55,133.57,-437.38,comparable
+2026-10-03T01:39:10Z,66e12360dc618f80,b321ae84-ger075.html,Aurvex_v314_test_utc,GER40.cash,2026.09.01,2026.10.02,3,false,25000.0,0.46,0.75,0.0,0.0,12.5,-220.2,14,8,6,59.88,-116.55,137.75,-357.95,comparable
+2026-10-03T01:39:10Z,b69697a0c009cec8,8893dd40-jp03.html,Aurvex_v314_test_utc,JP225.cash,2026.09.01,2026.10.02,3,false,25000.0,0.59,0.3,0.0,1.0,12.5,-248.5,8,5,3,44.05,-156.26,105.58,-354.08,comparable
+2026-10-03T01:39:10Z,c898e1e63e4bf9a8,ed1f9413-JP225.html,Aurvex_v314_test_utc,JP225.cash,2026.09.01,2026.10.02,3,false,25000.0,0.59,0.5,0.0,1.0,12.5,-227.66,8,5,3,48.22,-156.26,109.34,-337.0,comparable
+2026-10-03T01:39:10Z,e6f7ba0153a451ac,abee0ba2-jp075.html,Aurvex_v314_test_utc,JP225.cash,2026.09.01,2026.10.02,3,false,25000.0,0.59,0.75,0.0,1.0,12.5,-89.73,8,4,4,133.67,-156.1,339.38,-429.11,comparable
+2026-10-03T01:39:10Z,be98754b4122b806,0454e085-XAUGUSD.html,Aurvex_v314_test_utc,XAGUSD,2026.09.01,2026.10.02,3,false,25000.0,0.46,0.0,0.0,0.0,12.5,202.3,1,1,0,202.3,0.0,202.3,0.0,standalone
+2026-10-03T01:39:10Z,d610bf9f072ce449,b7ffd390-ReportTester-541438670.html,Aurvex_v314_test_utc,XAUUSD,2026.09.01,2026.10.02,3,false,25000,0.46,0,1,0.0,12.5,304.67,9,4,5,187.27,-88.88,296.79,7.88,standalone
+2026-10-03T01:39:10Z,7f130160f58bb1d4,65a2ccf2-Trade_report-541438670_2026-09-28_13-13.html,,,,,,,,,,,,,0.0,0,0,0,0.0,0.0,0.0,0.0,rejected:missing symbol;missing period_from;missing period_to;missing TesterServerUtcOffsetHours;missing AvoidNews

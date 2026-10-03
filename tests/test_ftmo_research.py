@@ -297,6 +297,7 @@ def test_collector_empty_db_produces_no_stats(tmp_path):
 def _batch_ns(tmp_path, sets_dir, periods, symbols="GER40.cash"):
     return types.SimpleNamespace(ea="Advisors\\EA.ex5", symbols=symbols, sets=str(sets_dir),
                                  periods=periods, tf="H1", deposit="25000", leverage="100",
+                                 mt5_path="C:\\MT5Tester", dev_period="2026.09.01:2026.10.02",
                                  out=str(tmp_path / "bout"))
 
 
@@ -352,3 +353,19 @@ def test_batch_ini_and_runner_emitted(tmp_path):
     assert "ExpertParameters=GER40_cash_20260330_20260630.set" in ini
     bat = (tmp_path / "bout" / "run_all.bat").read_text()
     assert "terminal64.exe" in bat and "/config:" in bat
+    assert "C:\\MT5Tester" in bat                     # separate tester path is explicit
+    assert "offset=+3" in bat                          # offset shown in the run line
+
+
+def test_batch_flags_examined_vs_oos(tmp_path):
+    sets = tmp_path / "sets"
+    _make_base_set(sets, "GER40.cash")
+    # one OOS window (V1 winter) + one that overlaps the Sept dev window
+    ns = _batch_ns(tmp_path, sets, "2026.01.05:2026.03.27,2026.09.10:2026.09.20")
+    ar.cmd_batch(ns)
+    man = (tmp_path / "bout" / "MANIFEST.md").read_text()
+    assert "OOS (not previously examined)" in man
+    assert "EXAMINED (overlaps in-sample dev window)" in man
+    oos_ini = (tmp_path / "bout" / "ini" / "GER40_cash_20260105_20260327.ini").read_text()
+    assert "OOS (not previously examined)" in oos_ini
+    assert "TesterServerUtcOffsetHours=2" in oos_ini
