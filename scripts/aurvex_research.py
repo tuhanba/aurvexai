@@ -20,6 +20,8 @@ Nothing here edits live settings or the trading EA. Read-only inputs only.
 """
 import argparse, csv, datetime as dt, glob, hashlib, json, os, re, sqlite3, sys
 
+COLLECTOR_SCHEMA_VERSION = "1.2"   # must match AurvexCollector importer SCHEMA_VERSION
+
 # ----------------------------- MT5 HTML report parsing -----------------------
 _LBL = {
     "expert": ("uzman:", "expert:"),
@@ -64,29 +66,73 @@ def _last_sunday(year, month):
     return d
 
 
+def _is_summer(d):
+    return _last_sunday(d.year, 3) <= d < _last_sunday(d.year, 10)
+
+
 def expected_offset(period_from, period_to):
-    """EET/EEST (FTMO server) offset for a date window: +3 in summer (last-Sun-Mar..
-    last-Sun-Oct), +2 in winter. Returns (offset|None, note). None if the window SPANS a
-    DST boundary (a single flat tester offset is then invalid)."""
+    """EET/EEST (FTMO server) offset for a date window: +3 summer (last-Sun-Mar..last-Sun-Oct),
+    +2 winter. Returns (offset|None, note). None if ANY DST transition falls inside the window —
+    a single flat tester offset is then invalid. Scans EVERY Mar/Oct boundary across all years in
+    the range, so a multi-boundary window (e.g. Feb..Nov) is caught even though its endpoints
+    share a regime."""
     try:
         f = dt.date(*map(int, period_from.split(".")))
         t = dt.date(*map(int, period_to.split(".")))
     except (ValueError, AttributeError):
         return None, "period unparseable"
-
-    def is_summer(d):
-        return _last_sunday(d.year, 3) <= d < _last_sunday(d.year, 10)
-    sf, st = is_summer(f), is_summer(t)
-    if sf != st:
-        return None, "period spans a DST boundary (flat tester offset invalid)"
+    if t < f:
+        return None, "period end before start"
+    for y in range(f.year, t.year + 1):
+        for b in (_last_sunday(y, 3), _last_sunday(y, 10)):
+            if f < b <= t:                     # a transition strictly inside the window
+                return None, f"period spans a DST transition ({b.isoformat()}) — flat offset invalid"
+    sf = _is_summer(f)
     return (3 if sf else 2), ("EEST(+3)" if sf else "EET(+2)")
+
+
+# summary-block field regexes (de-tagged Turkish MT5 Strategy-Tester report)
+_SUM_PATTERNS = {
+    "company": r"Şirket:\s*(.+?)\s+Para Birimi:",
+    "currency": r"Para Birimi:\s*([A-Za-z]{3})",
+    "deposit": r"Başlangıç Mevduatı:\s*([0-9][0-9 .,\xa0]*)",
+    "leverage": r"Kaldıraç:\s*1:(\d+)",
+    "quality": r"Tarihin Kalite:\s*([0-9]+%[^Ç]*?)\s+Çubuklar:",
+    "bars": r"Çubuklar:\s*(\d+)",
+    "ticks": r"Tikler:\s*(\d+)",
+    "sum_net": r"Toplam Net Kar:\s*(-?[0-9][0-9 .,\xa0]*)",
+    "gross_profit": r"Brüt kar:\s*(-?[0-9][0-9 .,\xa0]*)",
+    "gross_loss": r"Brüt Zarar:\s*(-?[0-9][0-9 .,\xa0]*)",
+    "sum_trades": r"Toplam İşlem:\s*(\d+)",
+    "sum_deals": r"Tüm İşlemler:\s*(\d+)",
+    "sum_wins": r"Karlı İşlemler \(toplamın %\):\s*(\d+)",
+    "sum_losses": r"Kayıplı İşlemler \(toplamın %\):\s*(\d+)",
+}
+
+
+def _plain(s):
+    import html as _h
+    return re.sub(r"[ \t\r\n\xa0]+", " ", _h.unescape(re.sub(r"<[^>]+>", " ", s))).strip()
+
+
+def _parse_summary(text):
+    out = {}
+    for k, pat in _SUM_PATTERNS.items():
+        m = re.search(pat, text)
+        if not m:
+            continue
+        v = m.group(1).strip()
+        out[k] = v if k in ("company", "currency", "quality") else _num(v)
+    return out
 
 
 def parse_mt5_report(path):
     s = _load(path)
     rows = _rows(s)
+    text = _plain(s)
     rep = {"file": os.path.basename(path), "ea": None, "symbol": None, "server": None,
-           "tf": None, "period_from": None, "period_to": None, "inputs": {}, "errors": []}
+           "tf": None, "period_from": None, "period_to": None, "inputs": {}, "errors": [],
+           "summary": {}, "reconciled": False}
     in_inputs = False
     for c in rows:
         if not c:
@@ -114,15 +160,34 @@ def parse_mt5_report(path):
                 k, v = kv.split("=", 1); rep["inputs"][k.strip()] = v.strip()
             else:
                 in_inputs = False
-    # results from paired in/out deals
-    pairs, cur = [], None
+
+    rep["summary"] = _parse_summary(text)
+    rep["tf"] = rep["tf"]
+    rep["deposit"] = rep["summary"].get("deposit")
+    rep["leverage"] = rep["summary"].get("leverage")
+    rep["quality"] = rep["summary"].get("quality")
+
+    # ---- per-trade net INCLUDING commission + swap (+ profit), paired by position ----
+    # A trade spans its in-deal(s) and the out-deal that closes it; net sums commission(8),
+    # swap(9) and profit(10) over all of them. Reconciliation (below) guards the pairing.
+    trade_nets, acc, open_deals, deals_seen, unmatched = [], 0.0, 0, 0, 0
     for c in rows:
-        if len(c) == 13 and c[3] in ("buy", "sell") and c[4] in ("in", "out"):
+        if len(c) == 13 and c[3] in ("buy", "sell") and c[4] in ("in", "out", "in/out"):
+            deals_seen += 1
+            comm, swap, prof = _num(c[8]) or 0.0, _num(c[9]) or 0.0, _num(c[10]) or 0.0
+            acc += comm + swap + prof
             if c[4] == "in":
-                cur = c
-            elif cur is not None:
-                pairs.append(_num(c[10])); cur = None
-    profs = [p for p in pairs if p is not None]
+                open_deals += 1
+            else:                                   # "out" or "in/out" closes a position
+                if open_deals == 0 and c[4] == "out":
+                    unmatched += 1
+                open_deals = max(0, open_deals - 1)
+                if open_deals == 0:
+                    trade_nets.append(round(acc, 2)); acc = 0.0
+    if open_deals > 0 or abs(acc) > 1e-9:           # a position left open at end of data
+        unmatched += 1
+
+    profs = trade_nets
     wins = [p for p in profs if p > 0]
     losses = [p for p in profs if p < 0]
     rep["net"] = round(sum(profs), 2) if profs else 0.0
@@ -134,46 +199,97 @@ def parse_mt5_report(path):
     rep["max_win"] = round(max(profs), 2) if profs else 0.0
     rep["max_loss"] = round(min(profs), 2) if profs else 0.0
     rep["net_ex_top1"] = round(sum(profs) - max(profs), 2) if profs else 0.0  # monster check
-    # required-field validation
-    for fld in ("symbol", "period_from", "period_to"):
+    rep["deals_parsed"] = deals_seen
+
+    # ---- required-field validation ----
+    for fld in ("symbol", "period_from", "period_to", "ea"):
         if not rep[fld]:
             rep["errors"].append(f"missing {fld}")
     if "TesterServerUtcOffsetHours" not in rep["inputs"]:
         rep["errors"].append("missing TesterServerUtcOffsetHours")
     if "AvoidNews" not in rep["inputs"]:
         rep["errors"].append("missing AvoidNews")
-    # broker-offset vs DST regime
-    if rep["period_from"] and rep["period_to"] and "TesterServerUtcOffsetHours" in rep["inputs"]:
-        exp, note = expected_offset(rep["period_from"], rep["period_to"])
+
+    # ---- tester broker-offset: reject 999 (auto) and check all DST transitions ----
+    if "TesterServerUtcOffsetHours" in rep["inputs"]:
         got = _num(rep["inputs"]["TesterServerUtcOffsetHours"])
-        if exp is None:
-            rep["errors"].append(f"offset-check: {note}")
-        elif got not in (exp, 999):   # 999 = auto (live); tester should pin the real offset
-            rep["errors"].append(f"offset mismatch: TesterServerUtcOffsetHours={got:g} "
-                                 f"but period is {note} (expected {exp})")
+        if got == 999:
+            rep["errors"].append("tester offset not pinned (TesterServerUtcOffsetHours=999 "
+                                 "auto is invalid in the Strategy Tester — pin the real offset)")
+        elif rep["period_from"] and rep["period_to"]:
+            exp, note = expected_offset(rep["period_from"], rep["period_to"])
+            if exp is None:
+                rep["errors"].append(f"offset-check: {note}")
+            elif got != exp:
+                rep["errors"].append(f"offset mismatch: TesterServerUtcOffsetHours={got:g} "
+                                     f"but period is {note} (expected {exp})")
+
+    # ---- data quality ----
+    q = rep["summary"].get("quality")
+    if q is None:
+        rep["errors"].append("missing modelling-quality (Tarihin Kalite)")
+    else:
+        qn = _num(re.sub(r"%.*", "", q))
+        if "gerçek tik" not in q.lower() and "real tick" not in q.lower():
+            rep["errors"].append(f"data quality not real-tick: '{q}'")
+        elif qn is not None and qn < 99:
+            rep["errors"].append(f"modelling quality {qn:g}% < 99%")
+
+    # ---- reconciliation vs the HTML summary (never publish unparseable as a zero result) ----
+    sm = rep["summary"]
+    if rep["trades"] == 0:
+        if sm.get("sum_trades"):
+            rep["errors"].append(f"deals unparseable: summary says {sm['sum_trades']:g} trades "
+                                 "but 0 parsed from the deals table (not published as a 0 result)")
+        else:
+            rep["errors"].append("no parseable deals and no summary trade count "
+                                 "(not published as a 0 result)")
+    else:
+        if unmatched:
+            rep["errors"].append(f"deal pairing anomaly ({unmatched} unmatched) — net/trade "
+                                 "attribution unreliable")
+        if sm.get("sum_net") is not None and abs(rep["net"] - sm["sum_net"]) > 1.0:
+            rep["errors"].append(f"net reconciliation: computed {rep['net']:+.2f} vs summary "
+                                 f"Toplam Net Kar {sm['sum_net']:+.2f}")
+        if sm.get("sum_trades") is not None and rep["trades"] != int(sm["sum_trades"]):
+            rep["errors"].append(f"trade-count reconciliation: computed {rep['trades']} vs "
+                                 f"summary Toplam İşlem {int(sm['sum_trades'])}")
+        if sm.get("sum_wins") is not None and rep["wins"] != int(sm["sum_wins"]):
+            rep["errors"].append(f"win-count reconciliation: computed {rep['wins']} vs "
+                                 f"summary Karlı İşlemler {int(sm['sum_wins'])}")
+        recon_ok = not any("reconciliation" in e or "pairing anomaly" in e for e in rep["errors"])
+        rep["reconciled"] = bool(recon_ok and sm.get("sum_net") is not None)
     return rep
 
 
 # ----------------------------- experiment ledger -----------------------------
-LEDGER_COLS = ["ingested_at", "file_sha", "file", "ea", "symbol", "period_from", "period_to",
-               "offset", "AvoidNews", "AccountSize", "RiskPct", "TrailStopR", "MinRangeMedMult",
-               "PdhlMinRangeMedMult", "MaxSpreadToStopPct", "net", "trades", "wins", "losses",
-               "avg_win", "avg_loss", "max_win", "net_ex_top1", "status"]
+LEDGER_COLS = ["ingested_at", "file_sha", "file", "ea", "symbol", "tf", "period_from", "period_to",
+               "offset", "deposit", "leverage", "quality", "AvoidNews", "AccountSize", "RiskPct",
+               "TrailStopR", "MinRangeMedMult", "PdhlMinRangeMedMult", "MaxSpreadToStopPct",
+               "net", "gross_profit", "gross_loss", "trades", "wins", "losses", "avg_win",
+               "avg_loss", "max_win", "net_ex_top1", "reconciled", "status"]
 
 
 def _ledger_row(rep, sha, status):
     g = rep["inputs"].get
+    sm = rep.get("summary", {})
     return {"ingested_at": dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
             "file_sha": sha, "file": rep["file"], "ea": rep["ea"] or "", "symbol": rep["symbol"] or "",
-            "period_from": rep["period_from"] or "", "period_to": rep["period_to"] or "",
-            "offset": g("TesterServerUtcOffsetHours", ""), "AvoidNews": g("AvoidNews", ""),
+            "tf": rep["tf"] or "", "period_from": rep["period_from"] or "",
+            "period_to": rep["period_to"] or "",
+            "offset": g("TesterServerUtcOffsetHours", ""),
+            "deposit": rep.get("deposit") if rep.get("deposit") is not None else "",
+            "leverage": rep.get("leverage") if rep.get("leverage") is not None else "",
+            "quality": rep.get("quality") or "", "AvoidNews": g("AvoidNews", ""),
             "AccountSize": g("AccountSize", ""), "RiskPct": g("RiskPct", ""),
             "TrailStopR": g("TrailStopR", ""), "MinRangeMedMult": g("MinRangeMedMult", ""),
             "PdhlMinRangeMedMult": g("PdhlMinRangeMedMult", ""),
             "MaxSpreadToStopPct": g("MaxSpreadToStopPct", ""), "net": rep["net"],
+            "gross_profit": sm.get("gross_profit", ""), "gross_loss": sm.get("gross_loss", ""),
             "trades": rep["trades"], "wins": rep["wins"], "losses": rep["losses"],
             "avg_win": rep["avg_win"], "avg_loss": rep["avg_loss"], "max_win": rep["max_win"],
-            "net_ex_top1": rep["net_ex_top1"], "status": status}
+            "net_ex_top1": rep["net_ex_top1"], "reconciled": rep.get("reconciled", False),
+            "status": status}
 
 
 def append_ledger(path, rows):
@@ -207,10 +323,23 @@ def _norm(v):
     return s.lower()
 
 
+def _cell_key(rep):
+    """The experiment CELL: symbol + EA + period + timeframe + deposit + leverage. Runs that
+    differ on any of these are DIFFERENT experiments (e.g. different validation periods) and are
+    kept separate — never compared and never flagged as a mismatch of each other."""
+    return (rep["symbol"], rep["ea"], rep["period_from"], rep["period_to"], rep["tf"],
+            _norm(rep.get("deposit")), _norm(rep.get("leverage")))
+
+
+def _cell_label(rep):
+    return (f"{rep['symbol']} · {rep['ea']} · {rep['period_from']}..{rep['period_to']} · "
+            f"{rep['tf']} · dep {rep.get('deposit')} · lev 1:{rep.get('leverage')}")
+
+
 def _control_sig(rep, vary):
-    """The experiment's controlled context: period + every input EXCEPT --vary, normalized.
-    Two runs with the same signature differ only by the variable under study."""
-    sig = [("period_from", rep["period_from"] or ""), ("period_to", rep["period_to"] or "")]
+    """Within a cell, the controlled context: every input EXCEPT --vary (normalized) plus the
+    data-quality string. Two runs with the same signature differ only by the variable studied."""
+    sig = [("__quality__", _norm(rep.get("quality")))]
     for k in sorted(rep["inputs"]):
         if k != vary:
             sig.append((k, _norm(rep["inputs"][k])))
@@ -218,11 +347,10 @@ def _control_sig(rep, vary):
 
 
 def _sig_diffs(rep, base, vary):
-    """Human-readable, formatting-insensitive differences of rep vs base (excluding --vary)."""
+    """Formatting-insensitive differences of rep vs base within a cell (excluding --vary)."""
     diffs = []
-    if rep["period_from"] != base["period_from"] or rep["period_to"] != base["period_to"]:
-        diffs.append(f"period:{base['period_from']}..{base['period_to']}"
-                     f"→{rep['period_from']}..{rep['period_to']}")
+    if _norm(rep.get("quality")) != _norm(base.get("quality")):
+        diffs.append(f"quality:{base.get('quality')}→{rep.get('quality')}")
     for k in sorted(set(list(rep["inputs"]) + list(base["inputs"]))):
         if k == vary:
             continue
@@ -232,7 +360,7 @@ def _sig_diffs(rep, base, vary):
 
 
 def cmd_reports(a):
-    from collections import Counter
+    from collections import Counter, OrderedDict
     files = sorted(glob.glob(os.path.join(a.dir, "*.htm*")))
     parsed = [parse_mt5_report(p) for p in files]
     os.makedirs(a.out, exist_ok=True)
@@ -242,78 +370,84 @@ def cmd_reports(a):
         rep["_sha"] = sha
         (rejected if rep["errors"] else valid).append(rep)
 
-    # Group valid runs BY SYMBOL (the natural experiment unit). Within a symbol, the majority
-    # controlled signature is the comparable family; a run that also changed another input is a
-    # settings MISMATCH (operator error) and is rejected. A symbol with only one matching run is
-    # "standalone" — no sibling to compare, not an error.
-    by_sym = {}
+    # Group valid runs by experiment CELL (symbol+EA+period+tf+deposit+leverage). Different
+    # periods/EAs/deposits are separate cells, kept apart. WITHIN a cell the majority control
+    # signature is the comparable family; a run that also changed a non-varied input is a settings
+    # MISMATCH (operator error). A cell with one matching run is "standalone" (not an error).
+    by_cell = OrderedDict()
     for rep in valid:
-        by_sym.setdefault(rep["symbol"], []).append(rep)
+        by_cell.setdefault(_cell_key(rep), []).append(rep)
     families, standalone, mismatched = [], [], []
-    for sym in sorted(by_sym):
-        reps = by_sym[sym]
+    for key in by_cell:
+        reps = by_cell[key]
         maj_sig = Counter(_control_sig(r, a.vary) for r in reps).most_common(1)[0][0]
         fam = [r for r in reps if _control_sig(r, a.vary) == maj_sig]
         mis = [r for r in reps if _control_sig(r, a.vary) != maj_sig]
         mismatched += mis
         fam.sort(key=lambda x: _num(x["inputs"].get(a.vary, "0")) or 0.0)
-        (families if len(fam) >= 2 else standalone).append((sym, fam, mis))
+        (families if len(fam) >= 2 else standalone).append((key, fam, mis))
 
     comparable = [r for _, fam, _ in families for r in fam]
     standalone_runs = [r for _, fam, _ in standalone for r in fam]
 
     # ---- settings-check report ----
     se = [f"# Settings check — {a.dir}", "",
-          f"- reports found: {len(parsed)} · comparable: {len(comparable)} · "
+          f"- reports found: {len(parsed)} · comparable: {len(comparable)} "
+          f"({len(families)} cell-famil{'y' if len(families)==1 else 'ies'}) · "
           f"standalone: {len(standalone_runs)} · mismatched(settings error): {len(mismatched)} · "
-          f"rejected(field/offset error): {len(rejected)}", ""]
+          f"rejected(field/offset/reconciliation error): {len(rejected)}", ""]
     if rejected:
-        se += ["## REJECTED — field / offset error (not a usable tester report)"]
+        se += ["## REJECTED — field / offset / data-quality / reconciliation error"]
         for r in rejected:
-            se.append(f"- `{r['file']}` ({r['symbol']}): " + "; ".join(r["errors"]))
+            se.append(f"- `{r['file']}` ({r['symbol'] or '?'}): " + "; ".join(r["errors"]))
         se.append("")
     if mismatched:
-        se += ["## REJECTED — settings mismatch (a non-varied input differs within the symbol)"]
-        base_for = {sym: fam[0] for sym, fam, _ in families}
-        base_for.update({sym: fam[0] for sym, fam, _ in standalone})
-        for sym, fam, mis in families + standalone:
+        se += ["## REJECTED — settings mismatch (a non-varied input differs within the SAME cell)"]
+        base_for = {key: fam[0] for key, fam, _ in families + standalone}
+        for key, fam, mis in families + standalone:
             for r in mis:
-                diffs = _sig_diffs(r, base_for[sym], a.vary)
-                se.append(f"- `{r['file']}` ({sym}): " + (", ".join(diffs) or "differs"))
+                diffs = _sig_diffs(r, base_for[key], a.vary)
+                se.append(f"- `{r['file']}` ({_cell_label(r)}): " + (", ".join(diffs) or "differs"))
         se.append("")
     if standalone:
-        se += ["## STANDALONE — single run for the symbol (kept, but no sibling to compare)"]
-        for sym, fam, _ in standalone:
+        se += ["## STANDALONE — single run for the cell (kept, but no sibling to compare)"]
+        for key, fam, _ in standalone:
             r = fam[0]
-            se.append(f"- `{r['file']}` ({sym}): {a.vary}={r['inputs'].get(a.vary)} — "
-                      "logged to ledger; comparison needs ≥2 runs varying only this input.")
+            se.append(f"- `{r['file']}` ({_cell_label(r)}): {a.vary}={r['inputs'].get(a.vary)} — "
+                      "logged to ledger; comparison needs ≥2 runs in the SAME cell varying only this.")
         se.append("")
     open(os.path.join(a.out, "settings_check.md"), "w", encoding="utf-8").write("\n".join(se) + "\n")
 
-    # ---- comparison report (one table per comparable symbol-family; never from <2) ----
-    cmp_md = [f"# Comparison — vary `{a.vary}`", ""]
+    # ---- comparison report (one table per comparable cell; never from <2) ----
+    cmp_md = [f"# Comparison — vary `{a.vary}`", "",
+              "_Each table is one experiment cell (symbol+EA+period+timeframe+deposit+leverage). "
+              "Different cells — including different validation periods — are never merged, and "
+              "per-symbol results are never summed into a portfolio._", ""]
     if not families:
-        cmp_md += [f"**No comparable family (≥2 runs varying only `{a.vary}`, all else equal).** "
+        cmp_md += [f"**No comparable cell (≥2 runs varying only `{a.vary}`, all else equal).** "
                    "No comparison drawn — no conclusions from missing/incomparable data."]
         if standalone:
             cmp_md += ["", "Standalone runs present (not compared): "
-                       + ", ".join(f"{sym} {fam[0]['inputs'].get(a.vary)}"
-                                   for sym, fam, _ in standalone) + "."]
+                       + ", ".join(f"{_cell_label(fam[0])} [{a.vary}={fam[0]['inputs'].get(a.vary)}]"
+                                   for _, fam, _ in standalone) + "."]
     else:
-        for sym, fam, _ in families:
+        for key, fam, _ in families:
             b = fam[0]
-            cmp_md += [f"## {sym}  (period {b['period_from']}..{b['period_to']}, "
-                       f"offset {b['inputs'].get('TesterServerUtcOffsetHours')}, "
-                       f"AvoidNews={b['inputs'].get('AvoidNews')}, RiskPct={b['inputs'].get('RiskPct')})",
-                       f"| {a.vary} | net | trades | win/n | avgW | avgL | maxW | net_ex_top1 |",
-                       "|---|---|---|---|---|---|---|---|"]
+            cmp_md += [f"## {b['symbol']}  ({b['ea']}, {b['period_from']}..{b['period_to']}, {b['tf']}, "
+                       f"offset +{b['inputs'].get('TesterServerUtcOffsetHours')}, dep {b.get('deposit')}, "
+                       f"lev 1:{b.get('leverage')}, AvoidNews={b['inputs'].get('AvoidNews')}, "
+                       f"RiskPct={b['inputs'].get('RiskPct')}, quality={b.get('quality')})",
+                       f"| {a.vary} | net | trades | win/n | avgW | avgL | maxW | net_ex_top1 | recon |",
+                       "|---|---|---|---|---|---|---|---|---|"]
             for r in fam:
                 cmp_md.append(f"| {r['inputs'].get(a.vary)} | {r['net']:+.2f} | {r['trades']} | "
                               f"{r['wins']}/{r['trades']} | {r['avg_win']:+.2f} | {r['avg_loss']:+.2f} | "
-                              f"{r['max_win']:+.1f} | {r['net_ex_top1']:+.2f} |")
+                              f"{r['max_win']:+.1f} | {r['net_ex_top1']:+.2f} | "
+                              f"{'✓' if r['reconciled'] else '—'} |")
             cmp_md.append("")
-        cmp_md += ["_net_ex_top1 = net minus the single best trade (monster-dependence check). "
-                   "Per-symbol only — these are separate instruments, never summed into a portfolio._"]
+        cmp_md += ["_net_ex_top1 = net minus the single best trade (monster-dependence check); "
+                   "net includes commission + swap and is reconciled (recon ✓) against the report's "
+                   "Toplam Net Kar._"]
     open(os.path.join(a.out, "comparison.md"), "w", encoding="utf-8").write("\n".join(cmp_md) + "\n")
 
     # ---- ledger ----
@@ -342,7 +476,18 @@ def cmd_collector(a):
     if "schema_meta" not in tbls:
         print("collector: not a v1.2 collector DB (no schema_meta) — refusing.", file=sys.stderr)
         return 2
-    md = [f"# Collector data analysis — {os.path.basename(a.db)}", ""]
+    # validate the schema VERSION value, not just the table's presence
+    row = cur.execute("SELECT value FROM schema_meta WHERE key='version'").fetchone()
+    db_ver = row["value"] if row else None
+    if db_ver != COLLECTOR_SCHEMA_VERSION:
+        print(f"collector: schema version {db_ver!r} != expected {COLLECTOR_SCHEMA_VERSION!r} "
+              "— refusing (stale/incompatible DB).", file=sys.stderr)
+        return 2
+    md = [f"# Collector data analysis — {os.path.basename(a.db)}", "",
+          f"- schema version: {db_ver} (validated)",
+          "- ⚠ Scope: this is the LIVE collector's own capture. It is NOT evidence that the "
+          "broker holds historical tick data for a Strategy-Tester backtest — tester history is a "
+          "separate data source and must be confirmed inside MT5 for each symbol/period.", ""]
     # freshness
     now = dt.datetime.utcnow()
     md += ["## Freshness"]
@@ -387,10 +532,16 @@ def cmd_collector(a):
         md += ["| symbol | owner | deals | net |", "|---|---|---|---|"]
         for r in drows:
             md.append(f"| {r['symbol']} | {r['owner']} | {r['n']} | {r['net']} |")
-    openpos = cur.execute("SELECT COUNT(*) FROM positions p WHERE collect_utc="
-                          "(SELECT MAX(collect_utc) FROM positions)").fetchone()[0]
+    # open positions: distinguish "no snapshot ever taken" from "a snapshot showing 0 open (flat)"
+    snap = cur.execute("SELECT MAX(collect_utc) FROM positions").fetchone()[0]
+    if snap is None:
+        md += ["", "- open positions: **no position snapshot recorded** (cannot assert flat)"]
+    else:
+        openpos = cur.execute("SELECT COUNT(*) FROM positions WHERE collect_utc=?", (snap,)).fetchone()[0]
+        state = "0 open — flat" if openpos == 0 else f"{openpos} open"
+        md += ["", f"- open positions (snapshot `{snap}`): {state}"]
     last_deal = cur.execute("SELECT MAX(deal_ticket) FROM deals").fetchone()[0]
-    md += ["", f"- open positions (last snapshot): {openpos}", f"- last_deal_ticket: {last_deal}"]
+    md += [f"- last_deal_ticket: {last_deal if last_deal is not None else 'none'}"]
     # foreign-exposure warning (dedicated-account check)
     foreign = cur.execute("SELECT COUNT(*) FROM deals WHERE owner='foreign'").fetchone()[0]
     if foreign:
@@ -452,12 +603,32 @@ def _parse_date(s):
 
 
 def _overlaps(f1, t1, f2, t2):
-    """True if window [f1,t1] overlaps [f2,t2] (dotted YYYY.MM.DD). Used to label a validation
-    window as previously EXAMINED (overlaps the in-sample development window) or OOS."""
+    """True if window [f1,t1] overlaps [f2,t2] (dotted YYYY.MM.DD)."""
     a1, b1, a2, b2 = _parse_date(f1), _parse_date(t1), _parse_date(f2), _parse_date(t2)
     if None in (a1, b1, a2, b2):
         return False
     return a1 <= b2 and a2 <= b1
+
+
+def _load_ledger(path):
+    if not path or not os.path.exists(path):
+        return None
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def _exam_status(ledger, sym, pf, pt, dev_f, dev_t):
+    """Examination status for a window, evidence-based — NEVER inferred from Sept non-overlap.
+    Overlap with the dev window is flagged (not OOS); a prior run is claimed only if the ledger
+    actually records one; otherwise the status is explicitly UNKNOWN."""
+    if dev_f and dev_t and _overlaps(pf, pt, dev_f, dev_t):
+        return "overlaps in-sample dev window (NOT out-of-sample)"
+    if ledger is None:
+        return "examination status UNKNOWN (no --ledger given to check; confirm with operator)"
+    hit = any(r.get("symbol") == sym and r.get("period_from") == pf and r.get("period_to") == pt
+              for r in ledger)
+    return ("in ledger — previously run (see experiment_ledger.csv)" if hit else
+            "not found in ledger — examination status UNKNOWN (confirm with operator)")
 
 
 def cmd_batch(a):
@@ -471,12 +642,15 @@ def cmd_batch(a):
         periods.append((pf.strip(), pt.strip()))
     dev_f, _, dev_t = (a.dev_period or "").partition(":")
     dev_f, dev_t = dev_f.strip(), dev_t.strip()
+    today = _parse_date(a.today) or dt.date.today()
+    ledger = _load_ledger(a.ledger)
+    cand = a.candidate
     os.makedirs(os.path.join(a.out, "ini"), exist_ok=True)
     os.makedirs(os.path.join(a.out, "sets"), exist_ok=True)
     os.makedirs(os.path.join(a.out, "reports"), exist_ok=True)
-    emitted, skipped, missing = [], [], []
+    emitted, pending, skipped, missing = [], [], [], []
     for sym in symbols:
-        base = os.path.join(a.sets, f"AurvexFTMO_v3_15_{_sym_tag(sym)}.set")
+        base = os.path.join(a.sets, a.set_pattern.format(sym=_sym_tag(sym)))
         if not os.path.exists(base):
             missing.append((sym, base)); continue
         base_lines = _read_set(base)
@@ -484,20 +658,24 @@ def cmd_batch(a):
             off, note = expected_offset(pf, pt)
             if off is None:
                 skipped.append((sym, pf, pt, note)); continue
-            examined = bool(dev_f and dev_t and _overlaps(pf, pt, dev_f, dev_t))
-            seen = ("EXAMINED (overlaps in-sample dev window)" if examined
-                    else "OOS (not previously examined)")
-            tag = f"{_sym_tag(sym)}_{_dottag(pf)}_{_dottag(pt)}"
+            seen = _exam_status(ledger, sym, pf, pt, dev_f, dev_t)
+            tag = f"{cand}_{_sym_tag(sym)}_{_dottag(pf)}_{_dottag(pt)}"
             setname = tag + ".set"
-            _write_set_with_offset(base_lines, off, os.path.join(a.out, "sets", setname))
+            pt_date = _parse_date(pt)
+            is_pending = pt_date is not None and pt_date > today
+            sub = "pending" if is_pending else "."
+            os.makedirs(os.path.join(a.out, sub, "ini"), exist_ok=True)
+            os.makedirs(os.path.join(a.out, sub, "sets"), exist_ok=True)
+            _write_set_with_offset(base_lines, off, os.path.join(a.out, sub, "sets", setname))
             ini = (
                 "; GENERATED by aurvex_research batch — verify key names against YOUR MT5 build.\n"
+                f"; Candidate: {cand}\n"
                 "; Copy sets\\*.set into MQL5\\Profiles\\Tester\\ before running.\n"
-                f"; EA↔set: Expert={a.ea}  <-  ExpertParameters={setname}  (from base "
-                f"AurvexFTMO_v3_15_{_sym_tag(sym)}.set)\n"
-                f"; Period: {pf} .. {pt} ({a.tf})\n"
+                f"; EA<->set: Expert={a.ea}  <-  ExpertParameters={setname}  (from base "
+                f"{os.path.basename(base)})\n"
+                f"; Period: {pf} .. {pt} ({a.tf}){'   [PENDING: future window]' if is_pending else ''}\n"
                 f"; Broker UTC offset: TesterServerUtcOffsetHours={off} ({note}) — pinned in the .set\n"
-                f"; Validation status: {seen}\n"
+                f"; Examination status: {seen}\n"
                 "[Tester]\n"
                 f"Expert={a.ea}\n"
                 f"Symbol={sym}\n"
@@ -516,11 +694,11 @@ def cmd_batch(a):
                 "ReplaceReport=1\n"
                 "ShutdownTerminal=1\n"
                 "Visual=0\n")
-            open(os.path.join(a.out, "ini", tag + ".ini"), "w", encoding="utf-8").write(ini)
-            emitted.append((sym, pf, pt, off, note, tag, seen))
+            open(os.path.join(a.out, sub, "ini", tag + ".ini"), "w", encoding="utf-8").write(ini)
+            (pending if is_pending else emitted).append((sym, pf, pt, off, note, tag, seen))
 
-    # Windows run-loop. MT5 points at the SEPARATE tester terminal (its own install/data folder,
-    # kept apart from the live terminal). The operator confirms/edits this path.
+    # Windows run-loop — RUNNABLE (non-pending) runs only. MT5 points at the SEPARATE tester
+    # terminal (its own install/data folder, kept apart from the live terminal).
     mt5 = a.mt5_path
     bat = ["@echo off",
            "REM Path to the SEPARATE tester MT5 terminal (NOT the live terminal). Edit if needed.",
@@ -538,13 +716,17 @@ def cmd_batch(a):
     open(os.path.join(a.out, "run_all.bat"), "w", encoding="utf-8",
          newline="\r\n").write("\n".join(bat) + "\n")
 
-    man = [f"# Batch tester manifest — {len(emitted)} runs emitted", "",
+    man = [f"# Batch tester manifest — candidate `{cand}` — {len(emitted)} runnable, "
+           f"{len(pending)} pending", "",
+           f"- EA: `{a.ea}` · base-set pattern: `{a.set_pattern}` (in `{a.sets}`)",
            f"- Separate tester terminal: `{mt5}\\terminal64.exe` (edit in `run_all.bat`; keep it",
            "  distinct from the live terminal — this never touches the live install).",
-           f"- In-sample development window (already examined): "
-           f"`{dev_f or '—'}..{dev_t or '—'}` — runs overlapping it are flagged EXAMINED below.",
+           f"- In-sample development window: `{dev_f or '—'}..{dev_t or '—'}` (overlap is flagged, "
+           "not treated as OOS).",
+           f"- Examination status is taken from the ledger ({'loaded: '+a.ledger if ledger is not None else 'NONE given'}); "
+           "it is NEVER inferred from non-overlap with September.",
            "- Broker clock: FTMO server is EET/EEST; each run's offset is pinned per DST regime.", "",
-           "## EA ↔ set ↔ period ↔ offset ↔ validation status",
+           "## EA ↔ set ↔ period ↔ offset ↔ examination status (runnable)",
            "| run | symbol | EA | ExpertParameters (.set) | period | offset | status |",
            "|---|---|---|---|---|---|---|"]
     for sym, pf, pt, off, note, tag, seen in emitted:
@@ -552,21 +734,27 @@ def cmd_batch(a):
                    f"+{off} ({note}) | {seen} |")
     man += ["",
             "## AUTOMATED (produced here, offline, read-only wrt live config)",
-            "- One `.set` per symbol×period derived from the committed base set, with",
-            "  `TesterServerUtcOffsetHours` PINNED per DST regime; live sets untouched.",
+            "- One `.set` per symbol×period derived from the base set, with",
+            "  `TesterServerUtcOffsetHours` PINNED per DST regime; live/base sets untouched.",
             "- One tester `.ini` per run (Model=4 = real ticks, deterministic `Report=` name).",
-            "- `run_all.bat` runs them sequentially with `/config` + `ShutdownTerminal=1`.",
-            "- Post-run analysis + settings/consistency check: the `reports` subcommand.", "",
-            "## OPERATOR-REQUIRED (cannot be automated from here)",
-            "1. Install/point to the SEPARATE tester MT5 and **log into the FTMO/broker account**",
-            "   (real-tick history needs the broker connection).",
-            "2. **Download tick history** for each symbol (Symbols → right-click → refresh) so",
-            "   \"Every tick based on real ticks\" has data for the whole window.",
+            "- `run_all.bat` runs the RUNNABLE set sequentially with `/config` + `ShutdownTerminal=1`.",
+            "- Post-run analysis + settings/consistency/reconciliation check: the `reports` subcommand.",
+            "", "## OPERATOR-REQUIRED (cannot be automated from here)",
+            "1. Install/point to the SEPARATE tester MT5 and **log into the FTMO/broker account**.",
+            "2. **Download tick history** for each symbol so \"Every tick based on real ticks\" has",
+            "   data for the whole window. (The live collector DB is NOT proof of this coverage.)",
             "3. Copy `sets\\*.set` into `MQL5\\Profiles\\Tester\\`, compile the EA into `Advisors\\`.",
             "4. Confirm/edit the `MT5=` path at the top of `run_all.bat`.",
-            "5. Verify the `.ini` keys (`ExpertParameters`, `Model`, `ExecutionMode`) match your",
-            "   build — these differ across MT5 builds and this generator cannot test them here.",
+            "5. Verify the `.ini` keys (`ExpertParameters`, `Model`, `ExecutionMode`) match your build.",
             "6. Run `run_all.bat`, then copy the `reports\\` folder back to the analysis host.", ""]
+    if pending:
+        man += ["## PENDING — future windows set aside (data not yet available; NOT in run_all.bat)",
+                "Configs are generated under `pending/` and run only once the window has fully "
+                "elapsed and history is available.", "",
+                "| run | symbol | period | offset | status |", "|---|---|---|---|---|"]
+        for sym, pf, pt, off, note, tag, seen in pending:
+            man.append(f"| `{tag}` | {sym} | {pf}..{pt} | +{off} ({note}) | {seen} |")
+        man.append("")
     if skipped:
         man += ["## SKIPPED — DST-boundary-spanning (split into two runs with each offset)"]
         for sym, pf, pt, note in skipped:
@@ -579,8 +767,8 @@ def cmd_batch(a):
         man.append("")
     open(os.path.join(a.out, "MANIFEST.md"), "w", encoding="utf-8").write("\n".join(man) + "\n")
 
-    print(f"batch: emitted {len(emitted)} runs | skipped(boundary) {len(skipped)} | "
-          f"missing-set {len(missing)}")
+    print(f"batch[{cand}]: runnable {len(emitted)} | pending(future) {len(pending)} | "
+          f"skipped(boundary) {len(skipped)} | missing-set {len(missing)}")
     print(f"out: {a.out}/ini/*.ini , {a.out}/sets/*.set , {a.out}/run_all.bat , {a.out}/MANIFEST.md")
     return 0
 
@@ -601,9 +789,14 @@ def main():
     c.add_argument("--stale-min", type=float, default=60.0)
     c.set_defaults(func=cmd_collector)
     b = sub.add_parser("batch", help="generate MT5 tester .ini/.set for a validation matrix")
-    b.add_argument("--ea", default="Advisors\\AurvexFTMO_v3_15_live.ex5")
+    b.add_argument("--ea", default="Advisors\\Aurvex_v314_test_utc.ex5",
+                   help="tester EA path; default is the v3.14 tester EA used for initial validation")
+    b.add_argument("--candidate", default="v314_baseline",
+                   help="label for this matrix (e.g. v314_baseline, v315_candidate); tags all outputs")
     b.add_argument("--symbols", required=True, help="comma list, e.g. GER40.cash,JP225.cash")
-    b.add_argument("--sets", required=True, help="dir holding AurvexFTMO_v3_15_<SYMBOL>.set bases")
+    b.add_argument("--sets", required=True, help="dir holding the base .set files")
+    b.add_argument("--set-pattern", dest="set_pattern", default="AurvexFTMO_v3_15_{sym}.set",
+                   help="base-set filename pattern; {sym} is the sanitized symbol")
     b.add_argument("--periods", required=True,
                    help="comma list of from:to, e.g. 2026.01.05:2026.03.27,2026.03.30:2026.06.30")
     b.add_argument("--tf", default=_TF_DEFAULT)
@@ -612,7 +805,10 @@ def main():
     b.add_argument("--mt5-path", dest="mt5_path", default="C:\\Program Files\\MetaTrader 5 Tester",
                    help="folder of the SEPARATE tester terminal64.exe (not the live terminal)")
     b.add_argument("--dev-period", dest="dev_period", default="2026.09.01:2026.10.02",
-                   help="in-sample development window; runs overlapping it are flagged EXAMINED")
+                   help="in-sample dev window; overlap is flagged (not treated as OOS)")
+    b.add_argument("--ledger", default=None,
+                   help="experiment_ledger.csv to check whether a window was already run")
+    b.add_argument("--today", default=None, help="override 'today' (YYYY.MM.DD) for pending detection")
     b.add_argument("--out", default="batch_out")
     b.set_defaults(func=cmd_batch)
     a = ap.parse_args()

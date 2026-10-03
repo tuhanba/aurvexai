@@ -1,4 +1,4 @@
-# Test run report — 2026-10-03
+# Test run report — 2026-10-03 (updated after correctness pass)
 
 Recorded honestly: **test outcomes and the process exit code are reported separately, and this
 run is NOT marked fully successful** because the pytest process intermittently crashes at
@@ -8,13 +8,16 @@ interpreter shutdown.
 
 | Scope | Result |
 |---|---|
-| Full suite (`pytest -q`) | **1078 tests, 0 FAILED, 0 ERROR** — progress reaches `[100%]` |
-| Research pipeline only (`pytest tests/test_ftmo_research.py`) | **21 passed**, process exit code **0** (deterministic, every run) |
+| Full suite (`pytest -q`) | **0 FAILED, 0 ERROR** on every run (progress reaches `[100%]`; ~1085 tests) |
+| Research pipeline only (`pytest tests/test_ftmo_research.py`) | **28 passed**, process exit code **0** (deterministic, every run) |
 
-The research-tool tests cover: MT5 HTML parsing (UTF-16 / Turkish labels / paired in-out
-deals), DST-aware broker-offset validation, per-symbol comparable-family grouping with
-settings-mismatch rejection, numeric normalisation, ledger dedup, the read-only collector
-analyser, and batch `.ini`/`.set` generation incl. the examined-vs-OOS flag.
+The 28 research-tool tests cover: MT5 HTML parsing (UTF-16 / Turkish labels / paired in-out
+deals), **net incl. commission + swap reconciled against the report summary**, unparseable
+deals rejected (not published as zero), DST-aware offset validation (**reject 999**, scan all
+transitions), data-quality checks, **per-cell grouping that keeps different validation periods
+separate**, numeric normalisation, ledger dedup + columns, the read-only collector analyser
+(**schema-version guard**, zero-open vs no-snapshot), and batch generation (v3.14 EA default,
+candidate label, pending future windows, ledger-based examination status).
 
 ## Process exit code (intermittent crash — NOT clean)
 
