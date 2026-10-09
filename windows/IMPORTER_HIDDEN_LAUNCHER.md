@@ -27,11 +27,11 @@ Copy both to e.g. `C:\Users\pc\AurvexData\windows\`.
 
 ## 2. Confirm the paths in `run_importer.cmd`
 
-Batu's locations are filled in. The collector `WATCHDIR`, `DB` and `REPORTDIR` are set to the
-real paths; **two values must still be verified** before the first run:
+Batu's locations are filled in. `PY`, `WATCHDIR`, `DB` and `REPORTDIR` are the real paths; **one
+value must still be verified** before the first run — the exact importer filename under Downloads:
 
 ```
-set "PY=C:\Python311\python.exe"            <CONFIRM>  real python — run:  where python
+set "PY=C:\Users\pc\AppData\Local\Programs\Python\Python312\python.exe"   (confirmed)
 set "IMPORTER=C:\Users\pc\Downloads\aurvex_collector_import.py"   <CONFIRM> exact Downloads path
 set "WATCHDIR=C:\Users\pc\AppData\Roaming\MetaQuotes\Terminal\81A933A9AFC5DE3C23B15CAB19C63850\MQL5\Files\AurvexCollector\v12"
 set "DB=C:\Users\pc\AurvexData\aurvex_live_v12.db"
@@ -39,10 +39,10 @@ set "REPORTDIR=C:\Users\pc\AurvexData\reports"
 set "LOGDIR=C:\Users\pc\AurvexData\logs"
 ```
 
-- **PY** — run `where python` in a normal Command Prompt and paste the real `python.exe` path.
-  The worker uses **`python.exe`** on purpose (not `pythonw.exe`): the VBS already hides the
-  window, and `python.exe` flushes stdout/stderr to the log reliably.
-- **IMPORTER** — the importer is under Downloads; confirm the exact filename/sub-folder.
+- **PY** — confirmed Python 3.12. The worker uses **`python.exe`** on purpose (not `pythonw.exe`):
+  the VBS already hides the window, and `python.exe` flushes stdout/stderr to the log reliably.
+- **IMPORTER** — the importer is under Downloads; confirm the exact filename/sub-folder (e.g. if
+  it sits in a sub-folder of Downloads, add it to the path).
 - **WATCHDIR** — already the real collector v12 folder; re-confirm with MT5 `File → Open Data
   Folder` only if the terminal is reinstalled (the long hex is the terminal id).
 

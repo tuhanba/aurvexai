@@ -4,8 +4,8 @@ REM === AurvexImporter v12 worker — run_importer.cmd =========================
 REM Launched HIDDEN by run_importer_hidden.vbs (no console window). Does the real
 REM work: ATOMIC single-instance lock, logging, exit-code preservation.
 REM ---------------------------------------------------------------------------
-REM Real python.exe path — operator MUST confirm (run:  where python ).
-set "PY=C:\Python311\python.exe"
+REM Real python.exe path (confirmed by operator 2026-10-09).
+set "PY=C:\Users\pc\AppData\Local\Programs\Python\Python312\python.exe"
 REM Importer script under Downloads (confirm exact sub-path / filename).
 set "IMPORTER=C:\Users\pc\Downloads\aurvex_collector_import.py"
 REM Collector v12 output folder (MT5 "File > Open Data Folder").
