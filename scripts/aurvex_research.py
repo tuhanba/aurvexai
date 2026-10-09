@@ -235,8 +235,23 @@ def parse_mt5_report(path):
         elif qn is not None and qn < 99:
             rep["errors"].append(f"modelling quality {qn:g}% < 99%")
 
-    # ---- reconciliation vs the HTML summary (never publish unparseable as a zero result) ----
+    # ---- required summary / monetary fields: reject if missing or corrupt ----
     sm = rep["summary"]
+    REQUIRED_SUMMARY = {"deposit": "Başlangıç Mevduatı", "leverage": "Kaldıraç",
+                        "sum_net": "Toplam Net Kar", "sum_trades": "Toplam İşlem"}
+    for key, label in REQUIRED_SUMMARY.items():
+        v = sm.get(key)
+        if v is None:                                   # absent, or present but not parseable
+            rep["errors"].append(f"missing/corrupt summary field '{label}' — monetary values "
+                                 "cannot be verified (not published)")
+
+    # ---- reconciliation vs the HTML summary (never publish unparseable as a zero result) ----
+    # Net tolerance, justified at cent precision: the summary's Toplam Net Kar is MT5's own
+    # full-precision sum shown to 0.01 (±0.005), and each of the `deals_seen` deal values we sum
+    # is itself shown to 0.01 (±0.005). Worst-case accumulated rounding = 0.005*deals_seen, plus
+    # the summary's own 0.005 and a tiny float epsilon. Anything beyond that is a real discrepancy.
+    net_tol = round(0.005 * (deals_seen + 1) + 1e-6, 4)
+    rep["net_tol"] = net_tol
     if rep["trades"] == 0:
         if sm.get("sum_trades"):
             rep["errors"].append(f"deals unparseable: summary says {sm['sum_trades']:g} trades "
@@ -248,17 +263,21 @@ def parse_mt5_report(path):
         if unmatched:
             rep["errors"].append(f"deal pairing anomaly ({unmatched} unmatched) — net/trade "
                                  "attribution unreliable")
-        if sm.get("sum_net") is not None and abs(rep["net"] - sm["sum_net"]) > 1.0:
+        if sm.get("sum_net") is not None and abs(rep["net"] - sm["sum_net"]) > net_tol:
             rep["errors"].append(f"net reconciliation: computed {rep['net']:+.2f} vs summary "
-                                 f"Toplam Net Kar {sm['sum_net']:+.2f}")
+                                 f"Toplam Net Kar {sm['sum_net']:+.2f} (tol ±{net_tol:.2f})")
         if sm.get("sum_trades") is not None and rep["trades"] != int(sm["sum_trades"]):
             rep["errors"].append(f"trade-count reconciliation: computed {rep['trades']} vs "
                                  f"summary Toplam İşlem {int(sm['sum_trades'])}")
         if sm.get("sum_wins") is not None and rep["wins"] != int(sm["sum_wins"]):
             rep["errors"].append(f"win-count reconciliation: computed {rep['wins']} vs "
                                  f"summary Karlı İşlemler {int(sm['sum_wins'])}")
-        recon_ok = not any("reconciliation" in e or "pairing anomaly" in e for e in rep["errors"])
-        rep["reconciled"] = bool(recon_ok and sm.get("sum_net") is not None)
+    # reconciled ONLY when the net check actually ran against a present summary net and passed
+    # (and no pairing/field error) — never label a report reconciled when it was not reconciled.
+    rep["reconciled"] = bool(sm.get("sum_net") is not None and rep["trades"] > 0
+                             and not any(k in e for e in rep["errors"]
+                                         for k in ("reconciliation", "pairing anomaly",
+                                                   "missing/corrupt summary")))
     return rep
 
 
@@ -522,24 +541,41 @@ def cmd_collector(a):
             md.append(f"- {sym}: {len(big)} gaps; largest {max(g[2] for g in big):.0f} min")
     if not gaps_found and fresh:
         md.append("- none")
-    # reconciliation + per-symbol net (ours)
-    md += ["", "## Deals / reconciliation (ours)"]
+    # per-symbol/owner net TALLY (a sum of our own captured deals — NOT a reconciliation against
+    # an external source; we never call it reconciliation when none was performed)
+    md += ["", "## Deals — per-symbol/owner net tally (ours; not an external reconciliation)"]
     drows = cur.execute("SELECT symbol, owner, COUNT(*) n, ROUND(SUM(net),2) net "
                         "FROM deals GROUP BY symbol, owner ORDER BY symbol").fetchall()
     if not drows:
         md.append("- no deals recorded")
     else:
-        md += ["| symbol | owner | deals | net |", "|---|---|---|---|"]
+        md += ["| symbol | owner | deals | net (sum) |", "|---|---|---|---|"]
         for r in drows:
             md.append(f"| {r['symbol']} | {r['owner']} | {r['n']} | {r['net']} |")
-    # open positions: distinguish "no snapshot ever taken" from "a snapshot showing 0 open (flat)"
-    snap = cur.execute("SELECT MAX(collect_utc) FROM positions").fetchone()[0]
-    if snap is None:
-        md += ["", "- open positions: **no position snapshot recorded** (cannot assert flat)"]
+
+    # Open positions must be correlated with the LATEST ACCOUNT snapshot. A position snapshot
+    # older than the last account snapshot may be stale (positions opened/closed since), so it
+    # cannot prove "flat". Only a position snapshot at/after the account snapshot proves state.
+    # The positions table holds a row only while a position is open, so an empty/old table cannot
+    # by itself prove "flat". We only call positions CURRENT when their latest snapshot is at least
+    # as new as the latest ACCOUNT snapshot; otherwise the state is UNKNOWN (never shown as current,
+    # never asserted flat). This matches the schema: "0 open proven" is not representable here.
+    acc_snap = cur.execute("SELECT MAX(collect_utc) FROM account").fetchone()[0]
+    pos_snap = cur.execute("SELECT MAX(collect_utc) FROM positions").fetchone()[0]
+    md += [""]
+    if pos_snap is None:
+        md.append("- open positions: **UNKNOWN** — no position row ever recorded; the schema "
+                  "stores positions only while open, so flat cannot be proven from this alone")
+    elif acc_snap is not None and pos_snap < acc_snap:
+        md.append(f"- open positions: **UNKNOWN** — latest position snapshot `{pos_snap}` predates "
+                  f"the latest account snapshot `{acc_snap}`; stale (position may have closed), not "
+                  "shown as current and flat not proven")
     else:
-        openpos = cur.execute("SELECT COUNT(*) FROM positions WHERE collect_utc=?", (snap,)).fetchone()[0]
-        state = "0 open — flat" if openpos == 0 else f"{openpos} open"
-        md += ["", f"- open positions (snapshot `{snap}`): {state}"]
+        openpos = cur.execute("SELECT COUNT(*) FROM positions WHERE collect_utc=?",
+                              (pos_snap,)).fetchone()[0]
+        corr = "== account snapshot" if (acc_snap is None or pos_snap == acc_snap) \
+            else f"newer than account snapshot `{acc_snap}`"
+        md.append(f"- open positions (snapshot `{pos_snap}`, {corr}): {openpos} open (current)")
     last_deal = cur.execute("SELECT MAX(deal_ticket) FROM deals").fetchone()[0]
     md += [f"- last_deal_ticket: {last_deal if last_deal is not None else 'none'}"]
     # foreign-exposure warning (dedicated-account check)
@@ -773,6 +809,83 @@ def cmd_batch(a):
     return 0
 
 
+# ----------------------------- derive subcommand -----------------------------
+# Build BASELINE .set files from the inputs of VALIDATED (error-free, reconciled) MT5 reports,
+# recording the source report + sha256 and flagging the news-filter and tester-offset handling.
+# It writes ONLY into --out; it never touches the live/committed sets.
+def cmd_derive(a):
+    files = sorted(glob.glob(os.path.join(a.dir, "*.htm*")))
+    by_sym, invalid_syms = {}, {}
+    for p in files:
+        rep = parse_mt5_report(p)
+        rep["_path"] = p
+        if not rep["symbol"]:
+            continue
+        if rep["errors"]:                              # derive ONLY from validated reports
+            invalid_syms[rep["symbol"]] = invalid_syms.get(rep["symbol"], 0) + 1
+            continue
+        by_sym.setdefault(rep["symbol"], []).append(rep)
+    os.makedirs(a.out, exist_ok=True)
+    all_syms = sorted(set(by_sym) | set(invalid_syms))
+    want = [s.strip() for s in a.symbols.split(",") if s.strip()] if a.symbols else all_syms
+    written, skipped = [], []
+    for sym in want:
+        cands = by_sym.get(sym, [])
+        if not cands:
+            why = (f"only invalid report(s) ({invalid_syms[sym]}) — not validated"
+                   if sym in invalid_syms else "no report found")
+            skipped.append((sym, why)); continue
+        match = [r for r in cands if _norm(r["inputs"].get("TrailStopR")) == _norm(a.trail)]
+        if match:
+            rep = match[0]
+        elif len(cands) == 1:
+            rep = cands[0]
+        else:
+            skipped.append((sym, f"ambiguous ({len(cands)} reports, none TrailStopR={a.trail})"))
+            continue
+        sha = hashlib.sha256(open(rep["_path"], "rb").read()).hexdigest()
+        news_off = _norm(rep["inputs"].get("AvoidNews")) == "false"
+        hdr = [
+            "; BASELINE set DERIVED from a validated 2026-09 report — NOT a live set; "
+            "live/committed sets are untouched.",
+            f"; candidate: {a.label}",
+            f"; source_report: {rep['file']}",
+            f"; source_sha256: {sha}",
+            f"; ea: {rep['ea']}   symbol: {sym}   period: {rep['period_from']}..{rep['period_to']}"
+            f"   tf: {rep['tf']}",
+            f"; reconciled_net: {rep['net']:+.2f} (== Toplam Net Kar)   trades: {rep['trades']}"
+            f"   quality: {rep.get('quality')}",
+            f"; CHANGE — news filter: source ran AvoidNews={rep['inputs'].get('AvoidNews')} "
+            f"({'OFF — a recorded limitation; turn ON for live-like behaviour' if news_off else 'ON'}).",
+            f"; CHANGE — tester offset: source TesterServerUtcOffsetHours="
+            f"{rep['inputs'].get('TesterServerUtcOffsetHours')} is a TESTER-ONLY pin for THIS period; "
+            "the batch generator RE-PINS it per validation period's DST regime (not a live key).",
+            "; inputs below are EXACTLY as validated:",
+        ]
+        body = [f"{k}={v}" for k, v in rep["inputs"].items()]
+        setname = a.set_pattern.format(sym=_sym_tag(sym))
+        open(os.path.join(a.out, setname), "w", encoding="utf-8").write("\n".join(hdr + body) + "\n")
+        written.append((sym, setname, rep["file"], sha, rep["inputs"].get("TrailStopR"),
+                        rep["inputs"].get("AvoidNews"), rep["inputs"].get("TesterServerUtcOffsetHours")))
+
+    prov = ["# Derived baseline sets — provenance", "",
+            f"- label: `{a.label}` · source reports dir: `{a.dir}`",
+            "- Derived ONLY from validated (error-free, reconciled) reports. Live sets untouched.",
+            "- News filter and tester-offset handling are noted per set (see each `.set` header).", "",
+            "| symbol | set | source report | sha256 | TrailStopR | AvoidNews | src offset |",
+            "|---|---|---|---|---|---|---|"]
+    for sym, setname, src, sha, trail, news, off in written:
+        prov.append(f"| {sym} | `{setname}` | `{src}` | `{sha[:16]}…` | {trail} | {news} | {off} |")
+    if skipped:
+        prov += ["", "## SKIPPED (no usable validated report)"]
+        for sym, why in skipped:
+            prov.append(f"- {sym}: {why}")
+    open(os.path.join(a.out, "PROVENANCE.md"), "w", encoding="utf-8").write("\n".join(prov) + "\n")
+    print(f"derive[{a.label}]: wrote {len(written)} baseline sets | skipped {len(skipped)}")
+    print(f"out: {a.out}/*.set , {a.out}/PROVENANCE.md")
+    return 0 if written else 2
+
+
 def main():
     ap = argparse.ArgumentParser(description="Aurvex research automation (read-only).")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -811,6 +924,14 @@ def main():
     b.add_argument("--today", default=None, help="override 'today' (YYYY.MM.DD) for pending detection")
     b.add_argument("--out", default="batch_out")
     b.set_defaults(func=cmd_batch)
+    d = sub.add_parser("derive", help="derive baseline .set files from validated MT5 reports")
+    d.add_argument("--dir", required=True, help="dir of validated MT5 HTML reports")
+    d.add_argument("--symbols", default=None, help="comma list (default: all symbols found)")
+    d.add_argument("--trail", default="0.5", help="pick the per-symbol report with this TrailStopR")
+    d.add_argument("--set-pattern", dest="set_pattern", default="baseline_v314_{sym}.set")
+    d.add_argument("--label", default="v314_baseline")
+    d.add_argument("--out", default="sets_baseline")
+    d.set_defaults(func=cmd_derive)
     a = ap.parse_args()
     sys.exit(a.func(a))
 

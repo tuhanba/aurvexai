@@ -1,98 +1,92 @@
 # Stop the every-minute CMD flash — hidden importer launcher
 
-A CMD window opens and closes every minute. This sets up the AurvexImporter v12 run so it
-executes **with no visible window**, logs to a file, keeps its error exit code, and never runs
-two copies at once. It does **not** change the importer, its paths, the DB, or any live setting.
+A CMD window opens and closes every minute. This runs the AurvexImporter v12 import **with no
+visible window**, logs to a file, keeps its error exit code, and never runs two copies at once —
+and a crash can never wedge it. It does **not** change the importer, its paths, the DB, or any
+live setting.
 
 ## 0. First confirm the source IS the AurvexImporter v12 task
 
-Do not change anything until you have confirmed the popup is this task. In an **elevated**
-Command Prompt:
+Do not change anything until you have confirmed the popup is this task. In an **elevated** prompt:
 
 ```
-schtasks /query /fo LIST /v | findstr /i "Aurvex Importer collector"
+schtasks /query /fo LIST /v | findstr /i "Aurvex Importer collector v12"
 ```
 
-or open **Task Scheduler** → Task Scheduler Library, and look for the importer task (every-1-minute
-trigger). Confirm its **Actions** tab currently runs the importer (python/cmd on
-`aurvex_collector_import.py`). That visible action is what flashes. If the minute-popup is some
-other task, stop — this launcher is only for the v12 importer.
+or open **Task Scheduler** → Task Scheduler Library and find the importer task (1-minute trigger);
+its **Actions** tab currently runs python on `aurvex_collector_import.py` — that visible action is
+what flashes. If the minute-popup is a different task, stop — this launcher is only for the v12
+importer.
 
-## 1. Files (in this `windows/` folder)
+## 1. Files (keep both together)
 
-- `run_importer.cmd` — the worker: single-instance lock, logging, exit-code preservation.
+- `run_importer.cmd` — worker: self-healing single-instance lock, logging, exit-code preservation.
 - `run_importer_hidden.vbs` — launches the worker hidden (window style 0) and returns its exit code.
 
-Copy both next to each other on the server, e.g. `C:\Aurvex\windows\`.
+Copy both to e.g. `C:\Users\pc\AurvexData\windows\`.
 
-## 2. Edit the paths in `run_importer.cmd`
+## 2. Confirm the paths in `run_importer.cmd`
 
-Open `run_importer.cmd` and set the five variables to the **same** values your current task uses
-— keep script, data, DB and report locations exactly as they are today:
+Batu's confirmed locations are already filled in; **two values must be verified** before the
+first run (marked in the file):
 
 ```
-set "PY=C:\Python311\pythonw.exe"      REM pythonw = no console; stdout/stderr still go to the log
-set "IMPORTER=C:\Aurvex\scripts\aurvex_collector_import.py"
-set "WATCHDIR=...\MQL5\Files\AurvexCollector\v12"   REM the collector's v12 output folder (--dir)
-set "DB=C:\Aurvex\data\live\aurvex_live.db"         REM --db (unchanged)
-set "REPORTDIR=C:\Aurvex\data\live\reports"         REM --report (unchanged)
-set "LOGDIR=C:\Aurvex\logs"
+set "PY=C:\Python311\python.exe"            <CONFIRM>  real python — run:  where python
+set "IMPORTER=C:\Users\pc\Downloads\aurvex_collector_import.py"   <CONFIRM> exact Downloads path
+set "WATCHDIR=...\MetaQuotes\Terminal\<TERMINAL_ID>\MQL5\Files\AurvexCollector\v12"  <CONFIRM ID>
+set "DB=C:\Users\pc\AurvexData\aurvex_live_v12.db"      (confirmed)
+set "REPORTDIR=C:\Users\pc\AurvexData\reports"          (confirmed)
+set "LOGDIR=C:\Users\pc\AurvexData\logs"
 ```
 
-The command it runs is exactly today's importer call:
-`pythonw aurvex_collector_import.py --dir <WATCHDIR> --db <DB> --report <REPORTDIR>`.
-If your current task passes extra flags (e.g. `--date`), add them on that line too.
+- **PY** — run `where python` in a normal Command Prompt and paste the real `python.exe` path.
+  The worker uses **`python.exe`** on purpose (not `pythonw.exe`): the VBS already hides the
+  window, and `python.exe` flushes stdout/stderr to the log reliably.
+- **IMPORTER** — the importer is under Downloads; confirm the exact filename/sub-folder.
+- **WATCHDIR** — in MT5, `File → Open Data Folder`, then `MQL5\Files\AurvexCollector\v12`; paste
+  that full path (it contains the terminal's long hex `<TERMINAL_ID>`).
+
+The import command is exactly today's call:
+`python.exe aurvex_collector_import.py --dir <WATCHDIR> --db <DB> --report <REPORTDIR>`.
+Add any extra flag (e.g. `--date`) your current task uses.
 
 ## 3. Point the scheduled task at the hidden launcher
 
-In Task Scheduler, open the importer task → **Properties**, change only these fields:
+Task Scheduler → importer task → **Properties**, change only:
 
-1. **Actions** tab → select the existing action → **Edit…**
+1. **Actions** → edit the action:
    - **Program/script:** `wscript.exe`
-   - **Add arguments:** `"C:\Aurvex\windows\run_importer_hidden.vbs"`
-   - Clear any old "Start in" / arguments that pointed at python or a .bat.
-   - OK.
-2. **Settings** tab →
-   - tick **Allow task to be run on demand** (so you can test it),
-   - set **If the task is already running, then the following rule applies:** → **Do not start a
-     new instance** (Task-Scheduler-level guard, on top of the file lock).
-3. **General** tab → leave **Run only when user is logged on** as-is. `wscript … ,0` already hides
-   the window, so you do **not** need "Run whether user is logged on or not" (that mode runs in
-   session 0 and needs a stored password). Only switch to it if you also want it to run while
-   signed out.
-4. OK to save (enter the account password if prompted).
+   - **Add arguments:** `"C:\Users\pc\AurvexData\windows\run_importer_hidden.vbs"`
+   - clear any old python/.bat program and "Start in".
+2. **Settings** → tick **Allow task to be run on demand**; set **If the task is already running…**
+   → **Do not start a new instance** (scheduler-level guard; can't go stale).
+3. **General** → leave **Run only when user is logged on** (the VBS hides the window, so you do
+   not need "whether user is logged on or not", which runs in session 0 and needs a stored password).
 
-Leave the **Triggers** (every 1 minute) unchanged.
+Leave the **Triggers** (every 1 minute) unchanged. OK to save.
 
-## 4. Verify — both the window is gone AND the DB keeps importing
+## 4. Verify — window gone AND the DB keeps importing
 
-**Window is hidden:**
-- Right-click the task → **Run**. No CMD/console window should appear.
-- Task Scheduler → the task's **Last Run Result** should read **0x0** (success). A non-zero code
-  means the importer itself failed — open the log (below); the code was preserved on purpose.
-- Wait for two or three of the normal 1-minute firings and confirm no popup flashes.
+**Window hidden:** right-click the task → **Run** → no console appears; **Last Run Result** = `0x0`.
+Watch two or three 1-minute firings — no flash.
 
-**Import is still flowing** (the window being gone must not mean it stopped working):
-- Open `C:\Aurvex\logs\importer.log` — each firing appends `START importer … END importer exit=0`,
-  and the importer's own "imported N ticks / N deals" lines. `SKIP: importer already running`
-  is normal if a run overlaps; it should be occasional, not every line.
-- Confirm the DB is actually advancing with the read-only analyzer, run twice a few minutes apart:
+**Import still flowing** (hidden must not mean stopped):
+- `C:\Users\pc\AurvexData\logs\importer.log` — each firing appends `START … END importer exit=0`
+  and the importer's own "imported N ticks/deals" lines. An occasional `SKIP: importer already
+  running` is normal when a run overlaps; it should not be every line.
+- Confirm the DB is advancing with the read-only analyzer, run twice a few minutes apart:
 
   ```
-  python scripts\aurvex_research.py collector --db C:\Aurvex\data\live\aurvex_live.db --out C:\Aurvex\reports\daily
+  python scripts\aurvex_research.py collector --db C:\Users\pc\AurvexData\aurvex_live_v12.db --out C:\Users\pc\AurvexData\reports\daily
   ```
 
-  In `collector_report.md` check that per-symbol **tick counts rise** and the **account "last …
-  (N min old)"** age stays small between the two runs. If counts are frozen or the age keeps
-  growing, the import is not flowing — check `importer.log` for errors or a stuck lock
-  (`C:\Aurvex\logs\importer.lock`; delete it only if no importer is actually running).
+  Check tick counts rise and the account "last … (N min old)" age stays small between the two runs.
 
-## Why this works
+## Why this is crash-safe (no permanent lock)
 
-- `wscript.exe … ,0` runs the worker in a hidden window — the flash is gone without changing the
-  importer.
-- `pythonw.exe` has no console of its own; `>>"%LOG%" 2>&1` still captures all output to the log.
-- The `md "%LOCK%"` / `rd "%LOCK%"` pair is an atomic single-instance guard; combined with "Do not
-  start a new instance" it prevents two importers touching the DB at once.
-- `exit /b %RC%` in the worker and `WScript.Quit rc` in the VBS carry the importer's real exit code
-  back to Task Scheduler, so a genuine failure still shows as a non-zero Last Run Result.
+The lock is a file whose timestamp is checked on each run. If a firing is killed mid-run, the lock
+is left behind — but the next firing sees it is older than `STALE_MIN` (10 min) and **reclaims it**,
+so imports resume automatically; they are never wedged by a stale lock. A fresh lock (< `STALE_MIN`)
+means a real run is in progress, so the new firing skips. Combined with the scheduler's "Do not
+start a new instance", two importers never touch the DB at once. `exit /b !RC!` + `WScript.Quit rc`
+carry the importer's real exit code to Task Scheduler, so a genuine failure still shows non-zero.

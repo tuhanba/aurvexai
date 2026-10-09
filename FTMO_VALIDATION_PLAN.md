@@ -12,17 +12,16 @@ frozen and validation never re-tunes.
 ## 1. EA + sets under validation
 
 - **Baseline matrix (primary):** the **v3.14 tester EA** used for the initial validation
-  (`Aurvex_v314_test_utc`, built from `AurvexFTMO_v3_14_safety_candidate.mq5`) with **Batu's
-  current per-symbol sets** — the ones that produced the 2026-09 baseline (`RiskPct=0.46` on
-  GER40, `0.59` on JP225).
-  - ⚠ **Set discrepancy to resolve first:** the committed `mql5/sets/AurvexFTMO_v3_15_*.set`
-    carry `RiskPct=0.33`, which does **not** match the validated baseline (0.46 / 0.59). The
-    baseline matrix must be generated with `--sets` pointing at Batu's actual v3.14 sets (or sets
-    edited to the validated RiskPct), **not** the committed v3_15 files. These baseline sets were
-    not fabricated here.
+  (`Aurvex_v314_test_utc`, built from `AurvexFTMO_v3_14_safety_candidate.mq5`) with baseline sets
+  **derived from the four validated 2026-09 HTML reports** — so they carry the inputs exactly as
+  validated (`RiskPct=0.46` GER40, `0.59` JP225; TrailStopR 0.5 on indices, 0 on metals as run).
+  Derived sets + provenance (source report + sha256, news-filter and tester-offset notes):
+  `validation_batch/baseline_sets_v314/` (via `aurvex_research.py derive`). Generated matrix:
+  `validation_batch/v314_baseline/`. The committed `mql5/sets/AurvexFTMO_v3_15_*.set`
+  (`RiskPct=0.33`) are **not** used for the baseline and were **not** modified.
 - **Candidate matrix (separate):** v3.15 (`AurvexFTMO_v3_15_live.ex5`) with the committed v3_15
   sets, recorded as its own `--candidate v315_candidate` run so it is never conflated with the
-  baseline in the ledger or comparisons. Generated set: `validation_batch/v315_candidate/`.
+  baseline in the ledger or comparisons. Generated matrix: `validation_batch/v315_candidate/`.
 
 ## 2. Development (in-sample) vs validation (out-of-sample)
 
@@ -81,8 +80,12 @@ non-zero** on any field/offset/quality/reconciliation error or settings mismatch
 ## 6. Research discipline (what makes a validation result count)
 
 1. **Net is reconciled.** Per-trade net includes commission + swap, and the computed total must
-   match the report's `Toplam Net Kar` (and trade/win counts); a run that does not reconcile, or
-   whose deals cannot be parsed, is **rejected** — never published as a zero result.
+   match the report's `Toplam Net Kar` within a **cent-scale tolerance** (±(0.005·deals + 0.005),
+   justified by MT5's 2-dp rounding of each deal and of the summary). Required monetary summary
+   fields (deposit, leverage, `Toplam Net Kar`, `Toplam İşlem`) must be present and parseable; a
+   run that does not reconcile, is missing/corrupt in those fields, or whose deals cannot be
+   parsed, is **rejected** — never published as a zero result, and never labelled "reconciled"
+   when it was not.
 2. **Offset pinned + DST-checked.** Tester `TesterServerUtcOffsetHours=999` (auto) is rejected;
    the pinned offset must match the window's regime, with every in-range transition checked.
 3. **Data quality.** Only `100% real-tick` runs pass; lower modelling quality is rejected.
@@ -99,7 +102,10 @@ non-zero** on any field/offset/quality/reconciliation error or settings mismatch
 The **live collector** DB captures ticks/deals as the account trades now. It is **not** evidence
 that the broker holds **historical tick data** for a Strategy-Tester backtest — tester history is
 a separate source and must be confirmed inside MT5 for each symbol/period (collector freshness
-proves nothing about tester coverage). The collector report states this explicitly.
+proves nothing about tester coverage). The collector report states this explicitly. The collector
+also correlates the position snapshot with the latest **account** snapshot: a position snapshot
+older than the account snapshot is **not** shown as current, and when flat cannot be proven the
+open-position state is reported as **UNKNOWN** (the schema stores positions only while open).
 
 ## 8. Gate linkage
 

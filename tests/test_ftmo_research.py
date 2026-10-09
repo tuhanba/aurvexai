@@ -30,7 +30,8 @@ def _deal_row(cols):
 def make_report(path, symbol, pfrom, pto, inputs, trades, tf="H1", ea="Aurvex_v314_test_utc",
                 quality="100% gerçek tik", deposit="25 000.00", leverage="100",
                 commissions=None, swaps=None, comment="sl 100.0",
-                summary_net=None, summary_trades=None, summary_wins=None, with_summary=True):
+                summary_net=None, summary_trades=None, summary_wins=None, with_summary=True,
+                omit=()):
     """Write a synthetic tester report. `trades` = realised profits; each becomes an in-deal
     (0) + an out-deal carrying that profit (and optional commission/swap). The summary block is
     computed to match, so reconciliation passes unless summary_* overrides force a mismatch."""
@@ -59,17 +60,23 @@ def make_report(path, symbol, pfrom, pto, inputs, trades, tf="H1", ea="Aurvex_v3
         rows.append('<tr align="right"><td colspan="3"></td>'
                     '<td colspan="10" align="left"><b>%s=%s</b></td></tr>' % (k, v))
     if with_summary:
-        summary = (
-            "Şirket: FTMO Global Markets Ltd Para Birimi: USD "
-            f"Başlangıç Mevduatı: {deposit} Kaldıraç: 1:{leverage} Sonuçlar "
-            f"Tarihin Kalite: {quality} Çubuklar: 524 Tikler: 2205351 Semboller: 1 "
-            f"Toplam Net Kar: {net:.2f} Brüt kar: {gp:.2f} Brüt Zarar: {gl:.2f} "
-            f"Kar Faktörü: 0.65 "
-            f"Toplam İşlem: {ntr} Kısa İşlemler (kazanılan %): 0 (0.00%) "
-            f"Uzun İşlemler (kazanılan %): 0 (0.00%) Tüm İşlemler: {len(trades) * 2} "
-            f"Karlı İşlemler (toplamın %): {nwin} (0.00%) "
-            f"Kayıplı İşlemler (toplamın %): {nloss} (0.00%)")
-        rows.append("<tr><td colspan='13'>" + summary + "</td></tr>")
+        parts = ["Şirket: FTMO Global Markets Ltd Para Birimi: USD"]
+        if "deposit" not in omit:
+            parts.append(f"Başlangıç Mevduatı: {deposit}")
+        if "leverage" not in omit:
+            parts.append(f"Kaldıraç: 1:{leverage}")
+        parts.append("Sonuçlar")
+        if "quality" not in omit:
+            parts.append(f"Tarihin Kalite: {quality} Çubuklar: 524 Tikler: 2205351 Semboller: 1")
+        if "sum_net" not in omit:
+            parts.append(f"Toplam Net Kar: {net:.2f} Brüt kar: {gp:.2f} Brüt Zarar: {gl:.2f}")
+        parts.append("Kar Faktörü: 0.65")
+        if "sum_trades" not in omit:
+            parts.append(f"Toplam İşlem: {ntr} Kısa İşlemler (kazanılan %): 0 (0.00%) "
+                         f"Uzun İşlemler (kazanılan %): 0 (0.00%) Tüm İşlemler: {len(trades) * 2}")
+        parts.append(f"Karlı İşlemler (toplamın %): {nwin} (0.00%) "
+                     f"Kayıplı İşlemler (toplamın %): {nloss} (0.00%)")
+        rows.append("<tr><td colspan='13'>" + " ".join(parts) + "</td></tr>")
     tk = 1
     for i, p in enumerate(trades):
         tk += 1
@@ -140,6 +147,32 @@ def test_net_reconciliation_mismatch_flagged(tmp_path):
                     trades=[10.0, 20.0], summary_net=999.0)      # summary disagrees with deals
     rep = ar.parse_mt5_report(str(p))
     assert any("net reconciliation" in e for e in rep["errors"])
+
+
+def test_missing_monetary_summary_field_rejected(tmp_path):
+    # summary present but Başlangıç Mevduatı (deposit) absent → cannot verify monetary values
+    p = make_report(tmp_path / "nod.html", "GER40.cash", *SUMMER, BASE_INPUTS, [10.0], omit=("deposit",))
+    rep = ar.parse_mt5_report(str(p))
+    assert any("missing/corrupt summary field 'Başlangıç Mevduatı'" in e for e in rep["errors"])
+
+
+def test_missing_sum_net_rejected(tmp_path):
+    p = make_report(tmp_path / "non.html", "GER40.cash", *SUMMER, BASE_INPUTS, [10.0], omit=("sum_net",))
+    rep = ar.parse_mt5_report(str(p))
+    assert any("Toplam Net Kar" in e for e in rep["errors"])
+    assert rep["reconciled"] is False
+
+
+def test_net_tolerance_is_cent_scale(tmp_path):
+    # 2 trades = 4 deals → tol = 0.005*(4+1) = 0.025; a 0.02 summary diff passes, 0.50 fails
+    ok = make_report(tmp_path / "ok.html", "GER40.cash", *SUMMER, BASE_INPUTS,
+                     trades=[10.0, 20.0], summary_net=30.02)
+    rep_ok = ar.parse_mt5_report(str(ok))
+    assert rep_ok["net_tol"] == 0.025 and rep_ok["reconciled"] is True
+    assert not any("net reconciliation" in e for e in rep_ok["errors"])
+    bad = make_report(tmp_path / "bad.html", "GER40.cash", *SUMMER, BASE_INPUTS,
+                      trades=[10.0, 20.0], summary_net=30.50)
+    assert any("net reconciliation" in e for e in ar.parse_mt5_report(str(bad))["errors"])
 
 
 # --------------------------------------------------------------------------- #
@@ -263,7 +296,8 @@ def test_ledger_dedup_and_columns(tmp_path):
 # --------------------------------------------------------------------------- #
 # collector (schema version + zero-open handling)  (bug #6, #7)
 # --------------------------------------------------------------------------- #
-def _make_collector_db(path, version="1.2", ticks=True, positions="one"):
+def _make_collector_db(path, version="1.2", ticks=True, positions="one",
+                       acc_snap="2026.09.02 12:10:00", pos_snap="2026.09.02 12:10:00"):
     con = sqlite3.connect(str(path))
     con.executescript("""
       CREATE TABLE ticks(id INTEGER PRIMARY KEY, symbol TEXT, tick_msc INTEGER, seq INTEGER, utc_time TEXT);
@@ -279,13 +313,13 @@ def _make_collector_db(path, version="1.2", ticks=True, positions="one"):
         rows = [("GER40.cash", base + i * 1000, 0, "2026.09.02 12:00:%02d" % i) for i in range(5)]
         rows.append(("GER40.cash", base + 10_000_000, 0, "2026.09.02 12:10:00"))
         con.executemany("INSERT INTO ticks(symbol,tick_msc,seq,utc_time) VALUES(?,?,?,?)", rows)
-        con.execute("INSERT INTO account(collect_utc,utc_time,balance,equity) "
-                    "VALUES('x','2026.09.02 12:10:00',25000,25010)")
+        con.execute("INSERT INTO account(collect_utc,utc_time,balance,equity) VALUES(?,?,25000,25010)",
+                    (acc_snap, acc_snap))
         con.executemany("INSERT INTO deals(deal_ticket,symbol,owner,net) VALUES(?,?,?,?)",
                         [(1, "GER40.cash", "aurvex", 12.5), (2, "GER40.cash", "aurvex", -8.0),
                          (3, "EURUSD", "foreign", 3.0)])
-    if positions == "one":
-        con.execute("INSERT INTO positions(collect_utc) VALUES('2026.09.02 12:10:00')")
+    if positions == "one":                       # one open position recorded at pos_snap
+        con.execute("INSERT INTO positions(collect_utc) VALUES(?)", (pos_snap,))
     con.commit(); con.close()
 
 
@@ -295,13 +329,32 @@ def _coll_ns(tmp_path, db, gap=1.0):
 
 
 def test_collector_report(tmp_path):
-    db = tmp_path / "c.db"; _make_collector_db(db)
+    db = tmp_path / "c.db"; _make_collector_db(db)      # pos snapshot == account snapshot
     assert ar.cmd_collector(_coll_ns(tmp_path, db)) == 0
     md = (tmp_path / "out" / "collector_report.md").read_text()
     assert "schema version: 1.2 (validated)" in md
     assert "NOT evidence" in md                                  # tester-coverage disclaimer
     assert "1 gaps" in md and "| GER40.cash | aurvex | 2 | 4.5 |" in md
+    assert "not an external reconciliation" in md               # honest section title
+    assert "1 open (current)" in md                              # pos snapshot in step w/ account
     assert "FOREIGN" in md
+
+
+def test_collector_stale_positions_are_unknown_not_current(tmp_path):
+    # position snapshot OLDER than the latest account snapshot → must not be shown as current
+    db = tmp_path / "stale.db"
+    _make_collector_db(db, acc_snap="2026.09.02 12:10:00", pos_snap="2026.09.02 11:00:00")
+    ar.cmd_collector(_coll_ns(tmp_path, db))
+    md = (tmp_path / "out" / "collector_report.md").read_text()
+    assert "UNKNOWN" in md and "predates" in md and "flat not proven" in md
+    assert "1 open (current)" not in md
+
+
+def test_collector_no_position_row_is_unknown(tmp_path):
+    db = tmp_path / "flat.db"; _make_collector_db(db, positions="none")
+    ar.cmd_collector(_coll_ns(tmp_path, db))
+    md = (tmp_path / "out" / "collector_report.md").read_text()
+    assert "UNKNOWN" in md and "flat cannot be proven" in md
 
 
 def test_collector_rejects_wrong_schema_version(tmp_path):
@@ -316,13 +369,6 @@ def test_collector_rejects_no_schema_meta(tmp_path):
 
 def test_collector_missing_db(tmp_path):
     assert ar.cmd_collector(_coll_ns(tmp_path, tmp_path / "nope.db", gap=30.0)) == 2
-
-
-def test_collector_zero_positions_vs_no_snapshot(tmp_path):
-    db1 = tmp_path / "flat.db"; _make_collector_db(db1, positions="none")
-    ar.cmd_collector(_coll_ns(tmp_path, db1))
-    md = (tmp_path / "out" / "collector_report.md").read_text()
-    assert "no position snapshot recorded" in md                 # cannot assert flat
 
 
 def test_collector_empty_db_no_stats(tmp_path):
@@ -412,3 +458,39 @@ def test_batch_skips_boundary_and_reports_missing(tmp_path):
     man = (tmp_path / "bout" / "MANIFEST.md").read_text()
     assert "SKIPPED" in man and "DST" in man
     assert "MISSING base .set" in man and "NOPE" in man
+
+
+# --------------------------------------------------------------------------- #
+# derive — baseline sets from validated reports, with provenance  (#4)
+# --------------------------------------------------------------------------- #
+def _derive_ns(tmp_path, reports_dir, **kw):
+    base = dict(dir=str(reports_dir), symbols=None, trail="0.5",
+                set_pattern="baseline_v314_{sym}.set", label="v314_baseline",
+                out=str(tmp_path / "bsets"))
+    base.update(kw)
+    return types.SimpleNamespace(**base)
+
+
+def test_derive_writes_sets_with_provenance(tmp_path):
+    reps = tmp_path / "reps"; reps.mkdir()
+    # two GER40 reports (trail 0.3 and 0.5); derive must pick the 0.5 one
+    make_report(reps / "g03.html", "GER40.cash", *SUMMER, _trail(BASE_INPUTS, "0.3"), [10.0])
+    make_report(reps / "g05.html", "GER40.cash", *SUMMER, _trail(BASE_INPUTS, "0.5"), [20.0])
+    assert ar.cmd_derive(_derive_ns(tmp_path, reps)) == 0
+    s = (tmp_path / "bsets" / "baseline_v314_GER40_cash.set").read_text()
+    assert "TrailStopR=0.5" in s                                 # picked the trail=0.5 report
+    assert "source_report: g05.html" in s and "source_sha256:" in s
+    assert "news filter: source ran AvoidNews=false" in s        # news-filter change noted
+    assert "tester offset" in s.lower() and "RE-PINS" in s       # offset handling noted
+    prov = (tmp_path / "bsets" / "PROVENANCE.md").read_text()
+    assert "GER40.cash" in prov and "g05.html" in prov
+
+
+def test_derive_skips_unvalidated_report(tmp_path):
+    reps = tmp_path / "reps"; reps.mkdir()
+    # only an INVALID report (offset 999) present → nothing to derive from
+    bad = dict(BASE_INPUTS, TesterServerUtcOffsetHours="999")
+    make_report(reps / "bad.html", "GER40.cash", *SUMMER, bad, [10.0])
+    assert ar.cmd_derive(_derive_ns(tmp_path, reps)) == 2        # no validated report → non-zero
+    prov = (tmp_path / "bsets" / "PROVENANCE.md").read_text()
+    assert "SKIPPED" in prov and "GER40.cash" in prov
