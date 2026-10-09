@@ -9,11 +9,11 @@ interpreter shutdown.
 | Scope | Result |
 |---|---|
 | Full suite (`pytest -q`) | **0 FAILED, 0 ERROR** on every run (progress reaches `[100%]`; ~1091 tests) |
-| Research pipeline only (`pytest tests/test_ftmo_research.py`) | **34 passed**, process exit code **0** (deterministic, every run) |
+| Research pipeline only (`pytest tests/test_ftmo_research.py`) | **35 passed**, process exit code **0** (deterministic, every run) |
 
-The 34 research-tool tests cover: MT5 HTML parsing (UTF-16 / Turkish labels / paired in-out
+The 35 research-tool tests cover: MT5 HTML parsing (UTF-16 / Turkish labels / paired in-out
 deals), **net incl. commission + swap reconciled against the summary** with a **cent-scale
-tolerance**, **required monetary fields rejected when missing/corrupt**, unparseable deals not
+tolerance**, **required monetary fields AND corrupt per-deal money cells rejected (never zeroed)**, unparseable deals not
 published as zero, DST-aware offset validation (**reject 999**, scan all transitions),
 data-quality checks, **per-cell grouping that keeps different validation periods separate**,
 ledger dedup + columns, the read-only collector analyser (**schema-version guard**,

@@ -170,11 +170,15 @@ def parse_mt5_report(path):
     # ---- per-trade net INCLUDING commission + swap (+ profit), paired by position ----
     # A trade spans its in-deal(s) and the out-deal that closes it; net sums commission(8),
     # swap(9) and profit(10) over all of them. Reconciliation (below) guards the pairing.
-    trade_nets, acc, open_deals, deals_seen, unmatched = [], 0.0, 0, 0, 0
+    trade_nets, acc, open_deals, deals_seen, unmatched, bad_money = [], 0.0, 0, 0, 0, 0
     for c in rows:
         if len(c) == 13 and c[3] in ("buy", "sell") and c[4] in ("in", "out", "in/out"):
             deals_seen += 1
-            comm, swap, prof = _num(c[8]) or 0.0, _num(c[9]) or 0.0, _num(c[10]) or 0.0
+            cv, sv, pv = _num(c[8]), _num(c[9]), _num(c[10])   # commission, swap, profit
+            if cv is None or sv is None or pv is None:
+                # a corrupt/empty monetary cell must NOT be silently coerced to 0 — flag & reject
+                bad_money += 1
+            comm, swap, prof = cv or 0.0, sv or 0.0, pv or 0.0
             acc += comm + swap + prof
             if c[4] == "in":
                 open_deals += 1
@@ -260,6 +264,9 @@ def parse_mt5_report(path):
             rep["errors"].append("no parseable deals and no summary trade count "
                                  "(not published as a 0 result)")
     else:
+        if bad_money:
+            rep["errors"].append(f"corrupt/missing monetary field in {bad_money} deal row(s) "
+                                 "(commission/swap/profit not numeric) — not published")
         if unmatched:
             rep["errors"].append(f"deal pairing anomaly ({unmatched} unmatched) — net/trade "
                                  "attribution unreliable")
@@ -277,7 +284,7 @@ def parse_mt5_report(path):
     rep["reconciled"] = bool(sm.get("sum_net") is not None and rep["trades"] > 0
                              and not any(k in e for e in rep["errors"]
                                          for k in ("reconciliation", "pairing anomaly",
-                                                   "missing/corrupt summary")))
+                                                   "missing/corrupt summary", "monetary field")))
     return rep
 
 

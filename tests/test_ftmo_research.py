@@ -31,7 +31,7 @@ def make_report(path, symbol, pfrom, pto, inputs, trades, tf="H1", ea="Aurvex_v3
                 quality="100% gerçek tik", deposit="25 000.00", leverage="100",
                 commissions=None, swaps=None, comment="sl 100.0",
                 summary_net=None, summary_trades=None, summary_wins=None, with_summary=True,
-                omit=()):
+                omit=(), corrupt_money=False):
     """Write a synthetic tester report. `trades` = realised profits; each becomes an in-deal
     (0) + an out-deal carrying that profit (and optional commission/swap). The summary block is
     computed to match, so reconciliation passes unless summary_* overrides force a mismatch."""
@@ -84,8 +84,11 @@ def make_report(path, symbol, pfrom, pto, inputs, trades, tf="H1", ea="Aurvex_v3
                                "1.0", "100.00", tk, "0.00", "0.00", "0.00",
                                "25 000.00", "AurvexPDHL"]))
         tk += 1
+        prof_cell = "%.2f" % p
+        if corrupt_money and i == 0:
+            prof_cell = "x"                      # non-numeric profit cell (corrupt)
         rows.append(_deal_row(["2026.09.02 13:00:00", tk, symbol, "buy", "out", "1.0", "100.00",
-                               tk, "%.2f" % commissions[i], "%.2f" % swaps[i], "%.2f" % p,
+                               tk, "%.2f" % commissions[i], "%.2f" % swaps[i], prof_cell,
                                "25 000.00", comment]))
     doc = "<html><body><table>" + "\n".join(rows) + "</table></body></html>"
     with open(path, "w", encoding="utf-16") as f:
@@ -160,6 +163,15 @@ def test_missing_sum_net_rejected(tmp_path):
     p = make_report(tmp_path / "non.html", "GER40.cash", *SUMMER, BASE_INPUTS, [10.0], omit=("sum_net",))
     rep = ar.parse_mt5_report(str(p))
     assert any("Toplam Net Kar" in e for e in rep["errors"])
+    assert rep["reconciled"] is False
+
+
+def test_corrupt_deal_money_field_rejected_not_zeroed(tmp_path):
+    # a non-numeric profit cell must NOT be coerced to 0 — the report is rejected
+    p = make_report(tmp_path / "cm.html", "GER40.cash", *SUMMER, BASE_INPUTS,
+                    trades=[10.0, 20.0], corrupt_money=True)
+    rep = ar.parse_mt5_report(str(p))
+    assert any("corrupt/missing monetary field" in e for e in rep["errors"])
     assert rep["reconciled"] is False
 
 

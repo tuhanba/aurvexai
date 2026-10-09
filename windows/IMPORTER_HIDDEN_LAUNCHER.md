@@ -27,15 +27,15 @@ Copy both to e.g. `C:\Users\pc\AurvexData\windows\`.
 
 ## 2. Confirm the paths in `run_importer.cmd`
 
-Batu's confirmed locations are already filled in; **two values must be verified** before the
-first run (marked in the file):
+Batu's locations are filled in. The collector `WATCHDIR`, `DB` and `REPORTDIR` are set to the
+real paths; **two values must still be verified** before the first run:
 
 ```
 set "PY=C:\Python311\python.exe"            <CONFIRM>  real python — run:  where python
 set "IMPORTER=C:\Users\pc\Downloads\aurvex_collector_import.py"   <CONFIRM> exact Downloads path
-set "WATCHDIR=...\MetaQuotes\Terminal\<TERMINAL_ID>\MQL5\Files\AurvexCollector\v12"  <CONFIRM ID>
-set "DB=C:\Users\pc\AurvexData\aurvex_live_v12.db"      (confirmed)
-set "REPORTDIR=C:\Users\pc\AurvexData\reports"          (confirmed)
+set "WATCHDIR=C:\Users\pc\AppData\Roaming\MetaQuotes\Terminal\81A933A9AFC5DE3C23B15CAB19C63850\MQL5\Files\AurvexCollector\v12"
+set "DB=C:\Users\pc\AurvexData\aurvex_live_v12.db"
+set "REPORTDIR=C:\Users\pc\AurvexData\reports"
 set "LOGDIR=C:\Users\pc\AurvexData\logs"
 ```
 
@@ -43,8 +43,8 @@ set "LOGDIR=C:\Users\pc\AurvexData\logs"
   The worker uses **`python.exe`** on purpose (not `pythonw.exe`): the VBS already hides the
   window, and `python.exe` flushes stdout/stderr to the log reliably.
 - **IMPORTER** — the importer is under Downloads; confirm the exact filename/sub-folder.
-- **WATCHDIR** — in MT5, `File → Open Data Folder`, then `MQL5\Files\AurvexCollector\v12`; paste
-  that full path (it contains the terminal's long hex `<TERMINAL_ID>`).
+- **WATCHDIR** — already the real collector v12 folder; re-confirm with MT5 `File → Open Data
+  Folder` only if the terminal is reinstalled (the long hex is the terminal id).
 
 The import command is exactly today's call:
 `python.exe aurvex_collector_import.py --dir <WATCHDIR> --db <DB> --report <REPORTDIR>`.
@@ -82,11 +82,18 @@ Watch two or three 1-minute firings — no flash.
 
   Check tick counts rise and the account "last … (N min old)" age stays small between the two runs.
 
-## Why this is crash-safe (no permanent lock)
+## Why this is atomic and crash-safe (no stale wedge, no age guessing)
 
-The lock is a file whose timestamp is checked on each run. If a firing is killed mid-run, the lock
-is left behind — but the next firing sees it is older than `STALE_MIN` (10 min) and **reclaims it**,
-so imports resume automatically; they are never wedged by a stale lock. A fresh lock (< `STALE_MIN`)
-means a real run is in progress, so the new firing skips. Combined with the scheduler's "Do not
-start a new instance", two importers never touch the DB at once. `exit /b !RC!` + `WScript.Quit rc`
-carry the importer's real exit code to Task Scheduler, so a genuine failure still shows non-zero.
+The lock is an **exclusive OS file handle** (`fd 9`) held for the entire run, not a timestamp:
+
+- **Atomic:** the OS grants the exclusive handle to exactly one process. While the first importer
+  is alive its handle is open, so a second firing's open **fails** and that firing **skips** — two
+  importers never run at once (the scheduler's "Do not start a new instance" is a second guard).
+- **Liveness-tied, never age-guessed:** the lock exists precisely while the holding process lives.
+  We never delete it by age and never "assume it is ownerless" — if the open fails for *any* reason
+  (held, or not checkable), we skip rather than start a second importer.
+- **Crash-safe:** when the process ends — normal exit, crash, or kill — the OS releases the handle,
+  so the very next firing acquires it. A dead importer can never wedge imports; nothing to clean up.
+
+`exit /b !RC!` + `WScript.Quit rc` carry the importer's real exit code to Task Scheduler, so a
+genuine failure still shows a non-zero Last Run Result.
