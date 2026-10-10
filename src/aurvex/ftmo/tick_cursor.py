@@ -7,7 +7,7 @@ Python mirror lets that logic be regression-tested without a terminal.
 """
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 
 def collect_new_ticks(start_msc: int, start_cnt: int, tick_mscs: List[int]
@@ -35,3 +35,37 @@ def collect_new_ticks(start_msc: int, start_cnt: int, tick_mscs: List[int]
         new_cnt += 1
         written.append((msc, seq))
     return written, new_msc, new_cnt
+
+
+def resume_coverage(start_msc: int, now_msc: int, broker_mscs: List[int], gap_warn_ms: int
+                    ) -> Tuple[List[int], List[Dict[str, int]]]:
+    """Mirror of the collector's resume back-read + gap reporting (AurvexCollector.mq5
+    PollTicksWindow / OnInit resume_gap). After a restart the cursor sits at the last written
+    tick; the collector re-reads forward in bounded windows, writing whatever the broker still
+    holds. This returns:
+
+      * recovered — the broker-held tick stamps at/after the cursor, in [start_msc, now_msc]
+        (what the back-read fills in),
+      * gaps      — the UNRECOVERABLE leading hole, if any, as a one-item list of
+        {"start","end","dur_ms","kind":"unrecoverable"}: the span between the cursor and the
+        broker's EARLIEST served tick (or the whole span to now if the broker serves nothing
+        at/after the cursor). Those ticks are gone for good — e.g. after a machine reset — so the
+        collector advances past the hole and reports it rather than inventing data.
+
+    This mirrors the collector's write-path report (firstMsc - startMsc > GapWarnSec). Interior
+    "empty window" gaps are a separate, window-level concern in the collector and are not derived
+    from inter-tick spacing here (normal low tick cadence is NOT a gap)."""
+    recovered = [m for m in broker_mscs if start_msc <= m <= now_msc]
+    gaps: List[Dict[str, int]] = []
+    if start_msc <= 0:
+        return recovered, gaps                      # fresh start: no cursor, nothing to back-read
+    if recovered:
+        lead = recovered[0] - start_msc
+        if lead > gap_warn_ms:
+            gaps.append({"start": start_msc, "end": recovered[0], "dur_ms": lead,
+                         "kind": "unrecoverable"})
+    elif now_msc - start_msc > gap_warn_ms:
+        # broker has nothing at/after the cursor — the whole span is an unfilled hole
+        gaps.append({"start": start_msc, "end": now_msc, "dur_ms": now_msc - start_msc,
+                     "kind": "unrecoverable"})
+    return recovered, gaps

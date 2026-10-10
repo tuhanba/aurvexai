@@ -14,7 +14,7 @@ import sqlite3
 import sys
 from datetime import datetime, timezone
 
-from aurvex.ftmo.tick_cursor import collect_new_ticks
+from aurvex.ftmo.tick_cursor import collect_new_ticks, resume_coverage
 
 _SPEC = importlib.util.spec_from_file_location(
     "aurvex_collector_import",
@@ -79,6 +79,38 @@ def test_tick_cursor_start_is_constant_across_multi_ms():
     written, nm, nc = collect_new_ticks(0, 0, [100, 100, 101, 101, 102])
     assert written == [(100, 0), (100, 1), (101, 0), (101, 1), (102, 0)]
     assert (nm, nc) == (102, 1)
+
+
+# --- resume back-read + gap reporting after a restart (e.g. a machine reset) ---------------
+def test_resume_backread_fills_gap_when_broker_still_has_ticks():
+    # cursor at 1000; broker still holds every second to 5000 -> all back-read, no gap reported
+    recovered, gaps = resume_coverage(1000, 5000, [1000, 2000, 3000, 4000, 5000], gap_warn_ms=500)
+    assert recovered == [1000, 2000, 3000, 4000, 5000]
+    assert gaps == []
+
+
+def test_resume_reports_unrecoverable_gap_when_old_ticks_gone():
+    # after a reset the broker's earliest served tick (4000) is well past the cursor (1000):
+    # the 1000..4000 span is unrecoverable and must be reported, not silently skipped.
+    recovered, gaps = resume_coverage(1000, 5000, [4000, 4500, 5000], gap_warn_ms=500)
+    assert recovered == [4000, 4500, 5000]
+    assert len(gaps) == 1 and gaps[0]["kind"] == "unrecoverable"
+    assert gaps[0]["start"] == 1000 and gaps[0]["end"] == 4000 and gaps[0]["dur_ms"] == 3000
+
+
+def test_resume_nothing_available_is_unrecoverable():
+    recovered, gaps = resume_coverage(1000, 9000, [], gap_warn_ms=500)
+    assert recovered == [] and len(gaps) == 1 and gaps[0]["kind"] == "unrecoverable"
+
+
+def test_resume_small_gap_under_threshold_not_reported():
+    recovered, gaps = resume_coverage(1000, 2000, [1000, 1400, 2000], gap_warn_ms=500)
+    assert gaps == []                                        # 400ms < 500ms threshold
+
+
+def test_fresh_start_has_no_backread_gap():
+    recovered, gaps = resume_coverage(0, 5000, [1000, 2000], gap_warn_ms=500)
+    assert gaps == []                                        # no cursor -> nothing to report
 
 
 # ======================= byte-offset incremental (#1,#4) =====================

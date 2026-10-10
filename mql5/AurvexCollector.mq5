@@ -1,5 +1,14 @@
 //+------------------------------------------------------------------+
-//| AurvexCollector.mq5  — READ-ONLY live data collector (v1.2)       |
+//| AurvexCollector.mq5  — READ-ONLY live data collector (v1.3)       |
+//| v1.3 (resilience review): STRICT checkpoint load (validate main,  |
+//|   else validated .tmp, else fresh cursors) + startup cursor LOG;   |
+//|   lost/corrupt .commit sidecar NO LONGER trusts the whole file —   |
+//|   committed length is rebuilt to the last well-formed record and   |
+//|   the partial tail dropped; tick clock base VALIDATED before any    |
+//|   UTC conversion or deal-history read; write failures logged with   |
+//|   file+phase+errcode; disconnects reported as start/end+duration;   |
+//|   resume/coverage tick gaps reported (span+duration+kind). CSV      |
+//|   schema UNCHANGED (still "1.2"). NOT PASS until F7 compile + MT5.   |
 //| v1.2 (review): per-ms tick SEQ for crash-replay dedup; FILE_SHARE  |
 //|   flags for concurrent reads; AppendBatch verifies the FULL write  |
 //|   and newline-terminates a partial tail; checkpoint written to a    |
@@ -24,9 +33,9 @@
 //|  - open risk that can't be computed (no SL / calc fail) -> unknown. |
 //+------------------------------------------------------------------+
 #property copyright "Aurvex / read-only collector"
-#property version   "1.20"
+#property version   "1.30"
 #property strict
-#define COLLECTOR_SCHEMA "1.2"
+#define COLLECTOR_SCHEMA "1.2"   // CSV schema UNCHANGED since v1.2; only collector resilience changed
 // #include <Trade/Trade.mqh> intentionally OMITTED — this EA can never trade.
 
 input string CollectSymbols      = "XAUUSD,XAGUSD,GER40.cash,JP225.cash";
@@ -40,6 +49,7 @@ input int    HistoryBackfillDays = 60;     // first start: backfill deals this m
 input int    ReconcileOverlapDays= 3;      // re-scan this overlap each reconcile (dedup handles repeats)
 input long   OurMagic            = 770077; // tag deals/positions as "ours" (base Aurvex magic)
 input string FilePrefix          = "AurvexCollector";
+input int    GapWarnSec          = 300;    // report a tick-coverage gap longer than this (s)
 input bool   VerboseHealth       = true;
 
 string   g_syms[]; int g_nSym=0;
@@ -49,6 +59,9 @@ long     g_lastDealTimeMsc=0;   // reconcile anchor (max deal execution time pro
 ulong    g_seen[]; int g_seenN=0;  // in-session written deal tickets (sorted) for dedup
 datetime g_lastStateSnap=0;
 datetime g_curDay=0;
+bool     g_clockOk=false;       // tick clock base validated (no UTC/history work until true)
+long     g_clockOffsetSec=0;    // measured TimeTradeServer - TimeGMT (server <-> GMT)
+datetime g_disconnectSince=0;   // >0 while disconnected: start of the current outage
 
 //------------------------------- time/util ----------------------------//
 datetime UtcDayStart0(datetime t){ return (datetime)((long)t/86400*86400); }
@@ -64,6 +77,20 @@ string SymFile(){ return FileDir()+"symbols_"+DayTag(TimeGMT())+".csv"; }
 string HealthFile(){ return FileDir()+"health_"+DayTag(TimeGMT())+".csv"; }
 string CheckpointFile(){ return FileDir()+"checkpoint.csv"; }
 long NowMsc(){ return (long)TimeGMT()*1000; }
+
+// Validate the tick clock base BEFORE any UTC conversion or deal-history operation. We require
+// a sane GMT and trade-server clock and a plausible GMT<->server offset. If it cannot be
+// validated we do NOT convert tick times to UTC and do NOT touch historical data — the caller
+// waits and re-checks on the next timer. (Records the measured offset for the analysis layer.)
+bool ValidateClockBase()
+{
+   datetime g=TimeGMT(), s=TimeTradeServer();
+   if(g<=0 || s<=0) return false;                       // clock not established yet
+   long off=(long)s-(long)g;
+   if(off>14*3600 || off<-14*3600) return false;        // implausible timezone offset
+   g_clockOffsetSec=off;
+   return true;
+}
 
 const string TICK_HDR="collect_msc\ttick_msc\tseq\tbroker_time\tutc_time\tbid\task\tlast\tvolume\tvolume_real\tflags";
 const string DEAL_HDR="collect_utc\tdeal_time_msc\tdeal_ticket\torder_ticket\tposition_id\tmagic\tsymbol\tdeal_type\tentry_type\tvolume\tprice\tsl_planned\tcommission\tswap\tfee\tprofit\tea_version\towner";
@@ -95,25 +122,61 @@ bool WriteCommitAtomic(string cf,long val)
    FileFlush(h); FileClose(h);
    return FileMove(tmp,0,cf,FILE_REWRITE);
 }
+// When the .commit sidecar is MISSING or CORRUPT we must NOT assume the whole existing file is
+// valid (a crash/reset can leave a half-written tail). Rebuild the committed length as the end
+// of the last run of well-formed, newline-terminated records (header column count) FROM THE
+// START; scanning stops at the first malformed/short line, so a partial or corrupt tail is left
+// uncommitted and is overwritten by the next batch. Returns 0 if not even one valid line exists.
+long RebuildCommitLength(string file,string header)
+{
+   int cols=1; for(int i=0;i<StringLen(header);i++) if(StringGetCharacter(header,i)=='\t') cols++;
+   int h=FileOpen(file,FILE_READ|FILE_BIN|FILE_SHARE_READ|FILE_SHARE_WRITE);
+   if(h==INVALID_HANDLE) return 0;
+   long sz=(long)FileSize(h);
+   if(sz<=0){ FileClose(h); return 0; }
+   uchar buf[]; int got=FileReadArray(h,buf,0,(int)sz); FileClose(h);
+   long good=0; int fields=1;
+   for(int p=0;p<got;p++)
+   {
+      uchar c=buf[p];
+      if(c=='\t') fields++;
+      else if(c=='\n')
+      {
+         if(fields==cols){ good=p+1; fields=1; }   // a complete, correctly-shaped line
+         else break;                               // malformed/short line -> stop; tail is uncommitted
+      }
+   }
+   return good;
+}
 bool AppendBatch(string file,string header,string payload)
 {
    if(StringLen(payload)==0) return true;
    string cf=file+".commit";
    long committed=ReadCommit(cf);
    int h=FileOpen(file,FILE_READ|FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
-   if(h==INVALID_HANDLE){ Print("Collector FileOpen fail ",file," err=",GetLastError()); return false; }
+   if(h==INVALID_HANDLE){ Health("write_fail",StringFormat("file=%s phase=open err=%d",file,GetLastError())); return false; }
    if(committed<0)
-   {   // new file (or lost sidecar): write header if empty, commit the full current size
-      if(FileSize(h)==0) FileWriteString(h,header+"\r\n");
-      committed=(long)FileSize(h);
+   {   // new file, or lost/corrupt sidecar
+      if(FileSize(h)==0){ FileWriteString(h,header+"\r\n"); committed=(long)FileSize(h); }
+      else
+      {   // sidecar gone but the file has content: rebuild to the last valid record (never trust the whole file)
+         long rb=RebuildCommitLength(file,header);
+         if(rb<=0){ FileSeek(h,0,SEEK_SET); string hh=header+"\r\n"; FileWriteString(h,hh); rb=(long)StringLen(hh); }
+         committed=rb;
+         Health("commit_rebuilt",StringFormat("file=%s size=%I64d committed=%I64d (sidecar lost/corrupt; partial tail dropped)",
+                file,(long)FileSize(h),committed));
+         WriteCommitAtomic(cf,committed);
+      }
    }
-   FileSeek(h,committed,SEEK_SET);          // overwrite any uncommitted partial tail
+   if(!FileSeek(h,committed,SEEK_SET)){ Health("write_fail",StringFormat("file=%s phase=seek off=%I64d err=%d",file,committed,GetLastError())); FileClose(h); return false; }
    uint want=(uint)StringLen(payload);
    uint w=FileWriteString(h,payload);
+   int werr=GetLastError();
    FileFlush(h);
    FileClose(h);
-   if(w<want) return false;                 // partial: .commit NOT advanced -> batch hidden, retried
-   return WriteCommitAtomic(cf,committed+(long)want);
+   if(w<want){ Health("write_fail",StringFormat("file=%s phase=write wrote=%u want=%u err=%d",file,w,want,werr)); return false; }  // partial: .commit NOT advanced -> batch hidden, retried
+   if(!WriteCommitAtomic(cf,committed+(long)want)){ Health("write_fail",StringFormat("file=%s phase=commit err=%d",file,GetLastError())); return false; }
+   return true;
 }
 void AppendLine(string file,string header,string line){ AppendBatch(file,header,line+"\r\n"); }
 void Health(string ev,string detail)
@@ -165,21 +228,23 @@ void SaveCheckpoint()
    if(!FileMove(tmp,0,CheckpointFile(),FILE_REWRITE))
       Print("Collector checkpoint move failed err=",GetLastError());
 }
-void LoadCheckpoint()
+void LogCursors(string ctx)
+{   // log the per-symbol cursors actually loaded at startup (and the deal anchor)
+   for(int i=0;i<g_nSym;i++)
+      Health("cursor",StringFormat("%s %s=%I64d:%d",ctx,g_syms[i],g_lastMsc[i],g_lastMscCnt[i]));
+   Health("cursor",StringFormat("%s last_deal_time_msc=%I64d",ctx,g_lastDealTimeMsc));
+}
+void ParseCheckpoint(string path)
 {
-   int h=FileOpen(CheckpointFile(),FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
-   if(h==INVALID_HANDLE)
-   {   // recovery: a crash between temp-write and move may leave only the .tmp
-      h=FileOpen(CheckpointFile()+".tmp",FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
-      if(h==INVALID_HANDLE) return;
-   }
+   int h=FileOpen(path,FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
+   if(h==INVALID_HANDLE) return;
    while(!FileIsEnding(h))
    {
       string ln=FileReadString(h);
       if(StringLen(ln)==0) continue;
       string f[]; if(StringSplit(ln,'\t',f)<2) continue;
       string k=f[0], v=f[1];
-      if(k=="schema"){ if(v!=COLLECTOR_SCHEMA) Health("checkpoint_schema",v); continue; }
+      if(k=="schema") continue;                 // already validated by ValidateCheckpointFile
       if(StringFind(k,"tick_")==0)
       {
          string sym=StringSubstr(k,5);
@@ -194,6 +259,20 @@ void LoadCheckpoint()
       else if(k=="last_deal_time_msc") g_lastDealTimeMsc=(long)StringToInteger(v);
    }
    FileClose(h);
+}
+// STRICT load: a checkpoint is used only if it passes full validation (schema + a cursor for
+// EVERY configured symbol + the deal anchor). The main file is tried first, then the .tmp
+// (crash between temp-write and move). If NEITHER validates we start every cursor at 0 rather
+// than loading a partial/stale cursor set. The loaded cursors are logged.
+void LoadCheckpoint()
+{
+   string main=CheckpointFile(), tmp=CheckpointFile()+".tmp";
+   if(ValidateCheckpointFile(main)){ ParseCheckpoint(main); LogCursors("loaded(checkpoint)"); return; }
+   if(ValidateCheckpointFile(tmp))
+   { Health("checkpoint_recovered","main missing/invalid; loaded validated .tmp");
+     ParseCheckpoint(tmp); LogCursors("loaded(.tmp)"); return; }
+   Health("checkpoint_fresh","no VALID checkpoint — all tick cursors start at 0 (full back-read)");
+   LogCursors("fresh");
 }
 
 //------------------------------- ticks --------------------------------//
@@ -211,13 +290,14 @@ int PollTicksWindow(int i)
    int n=CopyTicksRange(sym,ticks,COPY_TICKS_ALL,(ulong)fromMs,(ulong)toMs);
    if(n<0){ Health("tick_copy_err",StringFormat("%s err=%d",sym,GetLastError())); return -1; }
    long newMsc=startMsc; int newCnt=startCnt;                  // computed SEPARATELY
-   int skip=startCnt, written=0;
+   int skip=startCnt, written=0; long firstMsc=-1;
    string batch="";
    for(int k=0;k<n && written<TicksPerPollMax;k++)
    {
       long msc=ticks[k].time_msc;
       if(msc<startMsc) continue;
       if(msc==startMsc && skip>0){ skip--; continue; }
+      if(firstMsc<0) firstMsc=msc;                             // earliest tick the broker served
       int seq;
       if(msc>newMsc){ newMsc=msc; newCnt=0; }                  // new ms -> seq restarts at 0
       seq=newCnt; newCnt++;                                    // 0-based index within this ms
@@ -232,10 +312,21 @@ int PollTicksWindow(int i)
    if(written>0)
    {
       if(!AppendBatch(TickFile(sym),TICK_HDR,batch)){ Health("tick_write_fail",sym); return -1; }
+      // resume coverage gap: the earliest tick served is well AFTER our cursor -> the span in
+      // between is not in the broker's tick store (e.g. after a reset). Report it with span/duration;
+      // we advance past it, so it is a permanent (unrecoverable) hole in coverage.
+      if(startMsc>0 && firstMsc>startMsc && (firstMsc-startMsc)>(long)GapWarnSec*1000)
+         Health("tick_gap",StringFormat("%s from_msc=%I64d to_msc=%I64d dur_s=%I64d kind=unrecoverable(no-broker-ticks)",
+                sym,startMsc,firstMsc,(firstMsc-startMsc)/1000));
       g_lastMsc[i]=newMsc; g_lastMscCnt[i]=newCnt;             // advance ONLY after verified write
       return (toMs>=nowMs)?2:1;
    }
-   // empty window: advance the cursor past the gap so scanning still progresses
+   // empty window: advance the cursor past the gap so scanning still progresses. If this window
+   // lies in the past (not the live edge) and is longer than GapWarnSec, report the skipped span
+   // (cause — weekend/closed vs truly missing — is for the analysis layer, not asserted here).
+   if(startMsc>0 && (toMs-startMsc)>(long)GapWarnSec*1000 && toMs<nowMs-(long)GapWarnSec*1000)
+      Health("tick_gap",StringFormat("%s from_msc=%I64d to_msc=%I64d dur_s=%I64d kind=empty-window",
+             sym,startMsc,toMs,(toMs-startMsc)/1000));
    if(toMs>startMsc){ g_lastMsc[i]=toMs; g_lastMscCnt[i]=0; }
    return (toMs>=nowMs)?2:0;
 }
@@ -391,19 +482,58 @@ int OnInit()
    }
    ArrayResize(g_syms,g_nSym);
    LoadCheckpoint();
+   // validate the clock base BEFORE any UTC conversion or deal-history read
+   g_clockOk=ValidateClockBase();
+   if(!g_clockOk)
+      Health("clock_base_invalid","GMT/server clock not sane at init — deferring ticks/history to OnTimer");
+   else
+      Health("clock_base_ok",StringFormat("offset_server_minus_gmt_s=%I64d",g_clockOffsetSec));
+   // on resume, flag the per-symbol gap between the loaded cursor and now (e.g. after a reset)
+   if(g_clockOk)
+   {
+      long nowMs=NowMsc();
+      for(int i=0;i<g_nSym;i++)
+         if(g_lastMsc[i]>0 && nowMs-g_lastMsc[i]>(long)GapWarnSec*1000)
+            Health("resume_gap",StringFormat("%s from_msc=%I64d to_msc=%I64d dur_s=%I64d (back-read on resume)",
+                   g_syms[i],g_lastMsc[i],nowMs,(nowMs-g_lastMsc[i])/1000));
+   }
    g_curDay=UtcDayStart0(TimeGMT());
-   datetime dealFrom=(g_lastDealTimeMsc>0)?(datetime)(g_lastDealTimeMsc/1000):(TimeGMT()-(datetime)HistoryBackfillDays*86400);
-   ReconcileDeals(dealFrom);
-   SnapshotSymbols(); SnapshotAccount();
+   if(g_clockOk)
+   {
+      datetime dealFrom=(g_lastDealTimeMsc>0)?(datetime)(g_lastDealTimeMsc/1000):(TimeGMT()-(datetime)HistoryBackfillDays*86400);
+      ReconcileDeals(dealFrom);
+      SnapshotSymbols(); SnapshotAccount();
+   }
    EventSetTimer(MathMax(1,TickTimerSeconds));
-   Health("start",StringFormat("symbols=%d backfillDays=%d overlapDays=%d",g_nSym,HistoryBackfillDays,ReconcileOverlapDays));
+   Health("start",StringFormat("symbols=%d backfillDays=%d overlapDays=%d gapWarnSec=%d clockOk=%d",
+          g_nSym,HistoryBackfillDays,ReconcileOverlapDays,GapWarnSec,(int)g_clockOk));
    return INIT_SUCCEEDED;
 }
 void OnDeinit(const int reason){ SaveCheckpoint(); EventKillTimer(); Health("stop","reason="+(string)reason); }
 
 void OnTimer()
 {
-   if(!(bool)TerminalInfoInteger(TERMINAL_CONNECTED)){ Health("disconnected","not connected; will resume"); return; }
+   // connection: report an outage as a single start, then end + duration on reconnect
+   if(!(bool)TerminalInfoInteger(TERMINAL_CONNECTED))
+   {
+      if(g_disconnectSince==0)
+      { g_disconnectSince=TimeGMT();
+        Health("disconnect_start",TimeToString(g_disconnectSince,TIME_DATE|TIME_SECONDS)); }
+      return;
+   }
+   if(g_disconnectSince>0)
+   {
+      datetime endT=TimeGMT(); long dur=(long)endT-(long)g_disconnectSince;
+      Health("disconnect_end",StringFormat("start=%s end=%s dur_s=%I64d",
+             TimeToString(g_disconnectSince,TIME_DATE|TIME_SECONDS),
+             TimeToString(endT,TIME_DATE|TIME_SECONDS),dur));
+      g_disconnectSince=0;
+   }
+   // clock-base gate: no UTC conversion or history work until the clock is validated
+   if(!ValidateClockBase())
+   { if(g_clockOk){ g_clockOk=false; Health("clock_base_invalid","deferring ticks/history until clock sane"); } return; }
+   if(!g_clockOk){ g_clockOk=true; Health("clock_base_ok",StringFormat("offset_server_minus_gmt_s=%I64d",g_clockOffsetSec)); }
+
    datetime day=UtcDayStart0(TimeGMT());
    if(day!=g_curDay){ g_curDay=day; SnapshotSymbols(); Health("day_rollover",DayTag(TimeGMT())); }
    for(int i=0;i<g_nSym;i++) PollTicks(i);
