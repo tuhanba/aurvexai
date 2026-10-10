@@ -14,7 +14,7 @@ import sqlite3
 import sys
 from datetime import datetime, timezone
 
-from aurvex.ftmo.tick_cursor import collect_new_ticks, resume_coverage
+from aurvex.ftmo.tick_cursor import collect_new_ticks, empty_window_gaps, resume_coverage
 
 _SPEC = importlib.util.spec_from_file_location(
     "aurvex_collector_import",
@@ -111,6 +111,18 @@ def test_resume_small_gap_under_threshold_not_reported():
 def test_fresh_start_has_no_backread_gap():
     recovered, gaps = resume_coverage(0, 5000, [1000, 2000], gap_warn_ms=500)
     assert gaps == []                                        # no cursor -> nothing to report
+
+
+def test_empty_window_single_window_does_not_fire_but_accumulates():
+    # window=300s, GapWarn=300s: one empty window (300000ms) must NOT fire (not > 300000),
+    # but two consecutive empties accumulate to 600000 and DO fire once.
+    assert empty_window_gaps([300_000], 300_000) == []
+    assert empty_window_gaps([300_000, 300_000], 300_000) == [600_000]
+
+
+def test_empty_window_run_reset_by_written_window():
+    # an empty, then a window that wrote ticks (None), then an empty -> run never accumulates
+    assert empty_window_gaps([300_000, None, 300_000], 300_000) == []
 
 
 # ======================= byte-offset incremental (#1,#4) =====================

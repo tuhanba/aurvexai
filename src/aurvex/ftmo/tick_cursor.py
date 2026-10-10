@@ -69,3 +69,22 @@ def resume_coverage(start_msc: int, now_msc: int, broker_mscs: List[int], gap_wa
         gaps.append({"start": start_msc, "end": now_msc, "dur_ms": now_msc - start_msc,
                      "kind": "unrecoverable"})
     return recovered, gaps
+
+
+def empty_window_gaps(events: List, gap_warn_ms: int) -> List[int]:
+    """Mirror of the collector's ACCUMULATED empty-window gap detection (PollTicksWindow).
+    A single bounded window (e.g. 300s) can never exceed a 300s GapWarn on its own, so empty
+    windows accumulate across consecutive polls; when the running empty span passes gap_warn_ms
+    a gap of that accumulated size is reported and the accumulator resets. A window that WROTE
+    ticks (None) ends the run and resets. Returns the list of reported accumulated gap durations."""
+    gaps: List[int] = []
+    accum = 0
+    for e in events:
+        if e is None:               # a window that wrote ticks -> empty run ends
+            accum = 0
+        else:                        # an empty window of span `e` ms
+            accum += e
+            if accum > gap_warn_ms:
+                gaps.append(accum)
+                accum = 0
+    return gaps
