@@ -11,7 +11,7 @@ set "IMPORTER=C:\Users\pc\Downloads\aurvex_collector_import.py"
 REM Collector v13 output folder (MT5 "File > Open Data Folder").
 set "WATCHDIR=C:\Users\pc\AppData\Roaming\MetaQuotes\Terminal\81A933A9AFC5DE3C23B15CAB19C63850\MQL5\Files\AurvexCollector\v13"
 set "DB=C:\Users\pc\AurvexData\aurvex_live_v13.db"
-set "REPORTDIR=C:\Users\pc\AurvexData\reports"
+set "REPORTDIR=C:\Users\pc\AurvexData\reports_v13"
 set "LOGDIR=C:\Users\pc\AurvexData\logs"
 REM ===========================================================================
 

@@ -18,7 +18,11 @@
 //|   UTC — no age gate); .commit read STRICTLY (digits only, <= file    |
 //|   size); and because utc_time is now TRUE UTC the store moves to a   |
 //|   NEW folder "v13" + schema "1.3" so server-time (v12) and UTC (v13) |
-//|   rows never mix. NOT PASS until F7 compile + MT5 verification.       |
+//|   rows never mix.                                                     |
+//| review 4: tick-clock basis is PER SYMBOL (one symbol's fresh tick    |
+//|   never validates another); historical utc_time uses the DST offset  |
+//|   in force on the TICK's own date (EET winter / EEST summer, derived |
+//|   from the measured offset), not today's. NOT PASS until F7 + MT5.    |
 //| v1.2 (review): per-ms tick SEQ for crash-replay dedup; FILE_SHARE  |
 //|   flags for concurrent reads; AppendBatch verifies the FULL write  |
 //|   and newline-terminates a partial tail; checkpoint written to a    |
@@ -72,7 +76,8 @@ datetime g_lastStateSnap=0;
 datetime g_curDay=0;
 bool     g_clockOk=false;       // GMT/server clock base validated (no UTC/history work until true)
 long     g_clockOffsetSec=0;    // measured TimeTradeServer - TimeGMT (server <-> GMT)
-bool     g_tickClockOk=false;   // per-symbol tick clock base validated (UTC field reliable)
+bool     g_tickBaseOk[];        // PER-SYMBOL tick clock base validated (its utc_time reliable)
+long     g_winterOffsetSec=0;   // winter (EET) server->UTC offset, derived from measured offset
 datetime g_disconnectSince=0;   // >0 while disconnected: start of the current outage
 long     g_emptyAccumMs[];      // per-symbol accumulated consecutive empty-window span (ms)
 long     g_emptyStartMs[];      // per-symbol start of the current empty run (msc)
@@ -109,24 +114,41 @@ bool ValidateClockBase()
    g_clockOffsetSec=off;
    return true;
 }
-// Validate the TICK clock BASE (not a tick's age): confirm that tick time_msc is on the SAME clock
-// as TimeTradeServer() by checking the symbol's CURRENT (live) tick against server-now. This is a
-// one-shot basis check — once it holds, EVERY tick (old back-read ones included) converts to UTC
-// via the validated offset. It never marks an old historical tick "unverified" for being old.
-bool ValidateTickClockBase()
+// last Sunday of a month (EU/EET DST switches on the last Sunday of March and October)
+datetime LastSundayOfMonth(int year,int month)
 {
-   long serverNow=ServerNowMsc();
-   MqlTick t;
-   for(int i=0;i<g_nSym;i++)
-      if(SymbolInfoTick(g_syms[i],t) && t.time_msc>0)
-      {
-         long d=(long)t.time_msc-serverNow; if(d<0) d=-d;
-         if(d<=(long)TickClockToleranceSec*1000) return true;   // a LIVE tick matches server clock -> basis confirmed
-      }
-   return false;                                                // no fresh tick to confirm basis right now
+   int dim=31; if(month==4||month==6||month==9||month==11) dim=30;
+   else if(month==2) dim=((year%4==0 && year%100!=0)||year%400==0)?29:28;
+   MqlDateTime d; d.year=year; d.mon=month; d.day=dim; d.hour=0; d.min=0; d.sec=0;
+   datetime t=StructToTime(d);
+   while(true){ MqlDateTime x; TimeToStruct(t,x); if(x.day_of_week==0) return t; t-=86400; }
 }
-// server-time seconds -> UTC seconds using the validated offset (server = UTC + offset)
-datetime ServerMscToUtc(long msc){ return (datetime)(msc/1000-g_clockOffsetSec); }
+// EET/EEST summer window for a SERVER date: [last-Sun-Mar, last-Sun-Oct). +1h DST in summer.
+bool IsSummerServer(datetime d)
+{
+   MqlDateTime x; TimeToStruct(d,x);
+   return (d>=LastSundayOfMonth(x.year,3) && d<LastSundayOfMonth(x.year,10));
+}
+// Validate the TICK clock BASE for ONE symbol (not a tick's age): confirm the symbol's CURRENT
+// (live) tick is on the same clock as TimeTradeServer(). A fresh match confirms the basis for that
+// symbol only; another symbol's stale feed cannot vouch for it. Once confirmed, EVERY tick of that
+// symbol (old back-read ones included) converts to UTC — never blanked merely for being old.
+bool ValidateSymbolTickBase(int i)
+{
+   MqlTick t;
+   if(!SymbolInfoTick(g_syms[i],t) || t.time_msc<=0) return false;
+   long d=(long)t.time_msc-ServerNowMsc(); if(d<0) d=-d;
+   return (d<=(long)TickClockToleranceSec*1000);
+}
+// server-time seconds -> UTC seconds, DST-AWARE: the offset applied is the one in force on the
+// TICK's own server date (winter base + 1h if that date is in the EET summer window), NOT today's
+// offset — so a back-read tick from across a DST boundary is converted with its own offset.
+datetime ServerMscToUtc(long msc)
+{
+   datetime tickDate=(datetime)(msc/1000);
+   long off=g_winterOffsetSec + (IsSummerServer(tickDate)?3600:0);
+   return (datetime)(msc/1000-off);
+}
 
 const string TICK_HDR="collect_msc\ttick_msc\tseq\tbroker_time\tutc_time\tbid\task\tlast\tvolume\tvolume_real\tflags";
 const string DEAL_HDR="collect_utc\tdeal_time_msc\tdeal_ticket\torder_ticket\tposition_id\tmagic\tsymbol\tdeal_type\tentry_type\tvolume\tprice\tsl_planned\tcommission\tswap\tfee\tprofit\tea_version\towner";
@@ -357,11 +379,11 @@ int PollTicksWindow(int i)
       int seq;
       if(msc>newMsc){ newMsc=msc; newCnt=0; }                  // new ms -> seq restarts at 0
       seq=newCnt; newCnt++;                                    // 0-based index within this ms
-      // utc_time: presented only when the tick clock BASIS is validated for this session (a live
-      // tick matched the server clock — see ValidateTickClockBase in OnTimer). Then EVERY tick,
-      // however old, converts to TRUE UTC via the validated offset. If the basis is not yet
-      // confirmed, utc_time is left EMPTY (never a wrong value) — it is NOT gated on tick age.
-      string utc=g_tickClockOk?TimeToString(ServerMscToUtc(msc),TIME_DATE|TIME_SECONDS):"";
+      // utc_time: presented only when THIS SYMBOL's tick clock basis is validated (its own live
+      // tick matched the server clock — see OnTimer). Then every tick, however old, converts to
+      // TRUE UTC with the offset for the tick's own DST regime. If this symbol's basis is not
+      // confirmed, utc_time is left EMPTY (never a wrong value) — not gated on tick age.
+      string utc=g_tickBaseOk[i]?TimeToString(ServerMscToUtc(msc),TIME_DATE|TIME_SECONDS):"";
       batch+=StringFormat("%I64d\t%I64d\t%d\t%s\t%s\t%.8f\t%.8f\t%.8f\t%I64d\t%.4f\t%u\r\n",
          NowMsc(),msc,seq,
          TimeToString(ticks[k].time,TIME_DATE|TIME_SECONDS),   // broker/server time (as-is)
@@ -545,6 +567,7 @@ int OnInit()
    ArrayResize(g_syms,n); ArrayResize(g_lastMsc,n); ArrayResize(g_lastMscCnt,n);
    ArrayResize(g_emptyAccumMs,n); ArrayResize(g_emptyStartMs,n);
    ArrayInitialize(g_emptyAccumMs,0); ArrayInitialize(g_emptyStartMs,0);
+   ArrayResize(g_tickBaseOk,n); ArrayInitialize(g_tickBaseOk,false);
    g_nSym=0;
    for(int i=0;i<n;i++)
    {
@@ -607,10 +630,16 @@ void OnTimer()
    if(!ValidateClockBase())
    { if(g_clockOk){ g_clockOk=false; Health("clock_base_invalid","deferring ticks/history until clock sane"); } return; }
    if(!g_clockOk){ g_clockOk=true; Health("clock_base_ok",StringFormat("offset_server_minus_gmt_s=%I64d",g_clockOffsetSec)); }
-   // validate the TICK clock BASIS against a live tick (one-shot; enables UTC for ticks of ANY age)
-   bool tbase=ValidateTickClockBase();
-   if(tbase && !g_tickClockOk){ g_tickClockOk=true; Health("tick_clock_ok",StringFormat("live tick matches server clock (offset_s=%I64d) — utc_time enabled",g_clockOffsetSec)); }
-   else if(!tbase && g_tickClockOk){ g_tickClockOk=false; Health("tick_clock_unverified","no live tick matches server clock — utc_time left empty until reconfirmed"); }
+   // derive the winter (EET) server->UTC offset from the measured offset (assume 1h EU DST):
+   // if today is in the summer regime the measured offset already includes +1h.
+   g_winterOffsetSec = IsSummerServer(TimeTradeServer()) ? (g_clockOffsetSec-3600) : g_clockOffsetSec;
+   // validate the TICK clock basis PER SYMBOL (one symbol's fresh tick never vouches for another)
+   for(int s=0;s<g_nSym;s++)
+   {
+      bool ok=ValidateSymbolTickBase(s);
+      if(ok && !g_tickBaseOk[s]){ g_tickBaseOk[s]=true; Health("tick_clock_ok",StringFormat("%s live tick matches server clock — utc_time enabled",g_syms[s])); }
+      else if(!ok && g_tickBaseOk[s]){ g_tickBaseOk[s]=false; Health("tick_clock_unverified",StringFormat("%s no live tick matches server clock — utc_time left empty",g_syms[s])); }
+   }
 
    datetime day=UtcDayStart0(TimeGMT());
    if(day!=g_curDay){ g_curDay=day; SnapshotSymbols(); Health("day_rollover",DayTag(TimeGMT())); }

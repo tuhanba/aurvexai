@@ -39,13 +39,28 @@ def _line(cols):
     return "\t".join(str(c) for c in cols)
 
 
-def _write(path, header, rows, mode="w", terminate=True):
+def _commit(path, length=None):
+    """Publish the collector's '<path>.commit' sidecar. Default = the byte offset of the last
+    newline (i.e. the end of the last COMPLETE line), so a partial trailing line stays
+    uncommitted — exactly what the collector guarantees."""
+    if length is None:
+        with open(path, "rb") as f:
+            data = f.read()
+        nl = data.rfind(b"\n")
+        length = nl + 1 if nl >= 0 else 0
+    with open(path + ".commit", "w") as f:
+        f.write(str(length))
+
+
+def _write(path, header, rows, mode="w", terminate=True, commit=True):
     with open(path, mode, encoding="latin-1", newline="") as f:
         if mode == "w":
             f.write("\t".join(header) + "\r\n")
         for i, r in enumerate(rows):
             last = (i == len(rows) - 1)
             f.write(_line(r) + ("\r\n" if (terminate or not last) else ""))
+    if commit:                      # the real collector always advances .commit after a verified write
+        _commit(path)
 
 
 # ======================= tick-cursor reference (regression #1,#2) ============
@@ -139,9 +154,10 @@ def test_partial_trailing_line_not_consumed(tmp_path):
     assert con.execute("SELECT COUNT(*) FROM ticks").fetchone()[0] == 1   # partial NOT imported
     off1 = con.execute("SELECT off FROM import_state WHERE path=?", (p,)).fetchone()[0]
     con.close()
-    # complete the partial line + add another; re-import
+    # complete the partial line + add another; the collector then advances .commit; re-import
     with open(p, "a", encoding="latin-1", newline="") as f:
         f.write("\r\n" + _line([3, MSC_1002 + 3, 0, "b", "2026.10.02 10:00:01", 1, 2, 0, 1, 1.0, 6]) + "\r\n")
+    _commit(p)
     imp.import_dir(db, str(csv_dir))
     con = sqlite3.connect(db)
     assert con.execute("SELECT COUNT(*) FROM ticks").fetchone()[0] == 3   # formerly-partial + new
@@ -324,6 +340,46 @@ def test_uncommitted_partial_not_published(tmp_path):
     # and the truncated 'fla' flags value never entered the DB
     assert con.execute("SELECT COUNT(*) FROM ticks WHERE flags IS NULL").fetchone()[0] == 0
     con.close()
+
+
+# ===== importer stops safely on an unusable .commit (missing/corrupt/oversize) =====
+def test_missing_sidecar_imports_nothing_then_valid_commit_publishes(tmp_path):
+    csv_dir = tmp_path / "csv"; csv_dir.mkdir()
+    db = str(tmp_path / "live.db")
+    p = str(csv_dir / "ticks_XAUUSD_20261002.csv")
+    # a FULL-column, newline-terminated line — but NO .commit sidecar published yet
+    _write(p, TH, [[1, MSC_1002, 0, "b", "2026.10.02 10:00:00", 2650.1, 2650.4, 0, 1, 1.0, 6]],
+           commit=False)
+    assert not os.path.exists(p + ".commit")
+    n, notes = imp.import_dir(db, str(csv_dir))
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT COUNT(*) FROM ticks").fetchone()[0] == 0           # imported nothing
+    assert con.execute("SELECT COUNT(*) FROM import_state WHERE path=?", (p,)).fetchone()[0] == 0  # offset not advanced
+    con.close()
+    assert any(".commit missing" in x for x in notes)                             # explicit error
+    # collector now publishes a valid commit -> the committed line becomes visible
+    _commit(p)
+    imp.import_dir(db, str(csv_dir))
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT COUNT(*) FROM ticks").fetchone()[0] == 1
+    con.close()
+
+
+def test_corrupt_negative_and_oversize_commit_import_nothing(tmp_path):
+    csv_dir = tmp_path / "csv"; csv_dir.mkdir()
+    db = str(tmp_path / "live.db")
+    p = str(csv_dir / "ticks_XAUUSD_20261002.csv")
+    _write(p, TH, [[1, MSC_1002, 0, "b", "2026.10.02 10:00:00", 2650.1, 2650.4, 0, 1, 1.0, 6]],
+           commit=False)
+    for bad in ("abc", "-5", str(os.path.getsize(p) + 999)):
+        with open(p + ".commit", "w") as f:
+            f.write(bad)
+        n, notes = imp.import_dir(db, str(csv_dir))
+        con = sqlite3.connect(db)
+        assert con.execute("SELECT COUNT(*) FROM ticks").fetchone()[0] == 0       # never imported
+        assert con.execute("SELECT COUNT(*) FROM import_state WHERE path=?", (p,)).fetchone()[0] == 0
+        con.close()
+        assert any("skip" in x and ".commit" in x for x in notes)
 
 
 # ============ checkpoint content/schema/symbol validation (narrow #2) =========

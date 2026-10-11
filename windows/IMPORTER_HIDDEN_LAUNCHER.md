@@ -4,6 +4,7 @@
 > `AurvexCollector\v13` folder with schema `1.3`, so it never mixes with the old server-time (v12)
 > rows. Use a **fresh** DB `aurvex_live_v13.db` (the importer with `SCHEMA_VERSION=1.3` refuses the
 > old v12 DB). The old `v12` folder and `aurvex_live_v12.db` are preserved, untouched, for history.
+> Reports also move to `reports_v13\` so new UTC-based reports never overwrite same-dated v12 ones.
 
 A CMD window opens and closes every minute. This runs the AurvexImporter v13 import **with no
 visible window**, logs to a file, keeps its error exit code, and never runs two copies at once —
@@ -40,7 +41,7 @@ set "PY=C:\Users\pc\AppData\Local\Programs\Python\Python312\python.exe"   (confi
 set "IMPORTER=C:\Users\pc\Downloads\aurvex_collector_import.py"   <CONFIRM> exact Downloads path
 set "WATCHDIR=C:\Users\pc\AppData\Roaming\MetaQuotes\Terminal\81A933A9AFC5DE3C23B15CAB19C63850\MQL5\Files\AurvexCollector\v13"
 set "DB=C:\Users\pc\AurvexData\aurvex_live_v13.db"
-set "REPORTDIR=C:\Users\pc\AurvexData\reports"
+set "REPORTDIR=C:\Users\pc\AurvexData\reports_v13"
 set "LOGDIR=C:\Users\pc\AurvexData\logs"
 ```
 
@@ -82,7 +83,7 @@ Watch two or three 1-minute firings — no flash.
 - Confirm the DB is advancing with the read-only analyzer, run twice a few minutes apart:
 
   ```
-  python scripts\aurvex_research.py collector --db C:\Users\pc\AurvexData\aurvex_live_v13.db --out C:\Users\pc\AurvexData\reports\daily
+  python scripts\aurvex_research.py collector --db C:\Users\pc\AurvexData\aurvex_live_v13.db --out C:\Users\pc\AurvexData\reports_v13\daily
   ```
 
   Check tick counts rise and the account "last … (N min old)" age stays small between the two runs.

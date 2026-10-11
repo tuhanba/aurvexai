@@ -118,24 +118,44 @@ def _date_from_msc(msc):
         return None
 
 
+class CommitError(Exception):
+    """The '<path>.commit' sidecar is missing/unreadable/corrupt/out-of-range — the file's
+    committed boundary is unknown, so NOTHING from it may be imported and its offset must not
+    advance. The collector publishes ONLY a validated sidecar; its absence is not 'read it all'."""
+
+
 def _read_commit(path):
-    """Committed length published by the collector in '<path>.commit'. Bytes BEYOND this
-    are an uncommitted (failed/partial) batch and must never be read. -1 = no sidecar."""
+    """Committed byte-length from '<path>.commit', or None when there is no RELIABLE commit:
+    missing sidecar, unreadable, empty, or not a clean non-negative integer (bytes.isdigit()
+    rejects signs/spaces/garbage, so a negative or corrupt value returns None)."""
+    cf = path + ".commit"
+    if not os.path.exists(cf):
+        return None
     try:
-        with open(path + ".commit", "rb") as f:
+        with open(cf, "rb") as f:
             s = f.read().strip()
-        return int(s) if s else -1
-    except (OSError, ValueError):
-        return -1
+    except OSError:
+        return None
+    if not s or not s.isdigit():
+        return None
+    return int(s)
 
 
 def _read_new_complete_lines(cur, path):
     """Byte-offset read capped at the collector's committed length: return
-    (lines, is_first_read, new_offset). Only committed, newline-terminated data is
-    consumed, so a partial/uncommitted trailing batch is never imported."""
+    (lines, is_first_read, new_offset). Only committed, newline-terminated data is consumed,
+    so a partial/uncommitted trailing batch is never imported. Raises CommitError when the
+    commit boundary is not reliably known — then the caller imports nothing and does not advance
+    the offset (file shape alone is NEVER treated as proof of a commit)."""
     size = os.path.getsize(path)
     commit = _read_commit(path)
-    end = size if commit < 0 else min(size, max(0, commit))
+    if commit is None:
+        raise CommitError(f"{os.path.basename(path)}: .commit missing/unreadable/corrupt "
+                          "(negative or non-numeric) — no records imported, offset NOT advanced")
+    if commit > size:
+        raise CommitError(f"{os.path.basename(path)}: .commit={commit} exceeds file size {size} "
+                          "(corrupt) — no records imported, offset NOT advanced")
+    end = commit                         # validated: 0 <= commit <= size
     row = cur.execute("SELECT off FROM import_state WHERE path=?", (path,)).fetchone()
     off = row[0] if row else 0
     if off > size:                       # file shrank/rotated unexpectedly -> restart it
@@ -188,6 +208,8 @@ def import_file(cur, path):
         return 0, None
     try:
         lines, is_first, new_off = _read_new_complete_lines(cur, path)
+    except CommitError as e:                   # no reliable commit -> import NOTHING, don't advance
+        return 0, f"skip {e}"
     except (OSError, PermissionError) as e:    # missing/locked file -> skip gracefully
         return 0, f"skip {name}: {e}"
     if is_first and lines:

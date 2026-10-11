@@ -12,6 +12,25 @@ file or DB, so clock-based reports are never computed across a mixed basis. Use 
 `aurvex_live_v13.db`; the old v12 folder + DB are preserved untouched. The importer refuses a
 1.2 DB.
 
+## review-4 clock fixes (v1.4)
+
+- **Tick-clock basis is PER SYMBOL.** Each symbol's `utc_time` is enabled only when THAT symbol's
+  own current tick matches the server clock (`g_tickBaseOk[i]`); one symbol's fresh tick no longer
+  validates the other three. A symbol with a stale feed keeps `utc_time` empty.
+- **Historical UTC is DST-aware.** A back-read tick is converted with the offset in force on the
+  TICK's own server date (EET winter / EEST summer, from `IsSummerServer()`), derived from the
+  measured offset (`g_winterOffsetSec`) — not today's offset — so ticks from across a DST boundary
+  are not shifted by an hour. Unverified symbols still leave `utc_time` empty.
+
+## importer commit-safety (scripts/aurvex_collector_import.py)
+
+The importer now **hard-stops on an unusable `.commit`**: missing, unreadable, non-numeric,
+negative, or greater than the file size → it imports NOTHING from that file, does NOT advance the
+offset, and emits an explicit `skip … .commit …` note. File shape (full columns + newline) is
+never treated as proof of a commit. Regression tests: a committed-looking but un-published line is
+not imported while the sidecar is absent, and becomes visible only once a valid `.commit` is
+published; corrupt/negative/oversize sidecars import nothing.
+
 ## review-3 clock/commit fixes (v1.4)
 
 - **Tick read bounds use the SERVER clock.** The window `from/to` and the resume-gap now use
