@@ -89,7 +89,47 @@ EA) exposing the inputs above; then generate its tester matrix with
 `aurvex_research.py batch --candidate <name> --ea <candidate.ex5> --set-pattern ... --periods <V1..V4>`
 and analyze with `reports`. Keep the live EA and live sets unchanged.
 
-## Generate the runnable matrices
+## Cost modeling (spread, commission, slippage)
+
+- **Spread:** modeled by the real-tick tester (`Model=4`) — the actual captured spread per tick.
+- **Commission:** from the symbol spec in the tester; if the demo spec has none, set the C1 EA's
+  `CommissionPerLotUSD` (it feeds the scalp **cost gate** and the realized result). The analyzer's
+  net already includes the commission + swap + fee columns, so reported net is after cost.
+- **Slippage:** real-tick fills carry the spread; extra allowance is folded into the C1 cost gate
+  via `SlippageBufferPts`. (Indices/PDHL/ORB use broker fills; no synthetic slippage added.)
+
+## Reporting rules (enforced by the analyzer)
+
+- Every run is logged (ledger) and shown; **runs that did NOT reach the target show `NO`** in the
+  target column — speed-to-target is **never** inferred from the winning runs only.
+- Reported together per run: **net after cost**, `net_ex_top1` (monster check), **max drawdown**
+  (balance & equity, from the report summary), and **reached-target / days-to-target** for the
+  FTMO step (`--target-pct`, 10 for step-1, 5 for step-2). FTMO daily/overall limit behavior is
+  modeled by the EA halting (baseline/C1); a run whose equity DD approaches the 5%/10% limits is
+  read off the max-DD columns.
+
+## C1 scalp EA — status
+
+`mql5/AurvexScalpCandidate_c1.mq5` is a NEW, SEPARATE, tester-only candidate EA (the live EA is
+untouched). **NOT PASS** until the operator F7-compiles it (0 errors) to
+`Advisors\Aurvex_scalp_c1.ex5` and verifies a run. See the header for its rules.
+
+## Run it — single Windows command
+
+Prerequisites (one-time): F7-compile the scalp EA to `Advisors\Aurvex_scalp_c1.ex5`; have
+`Aurvex_v314_test_utc.ex5` in `Advisors\`; confirm the four paths at the top of the bat (PY is the
+operator-confirmed Python 3.12). Then the **single command** (runs baseline + C1 + C2 and writes
+one report):
+
+```
+experiments\run_experiments.bat
+```
+
+Report written to: `experiments\report\comparison.md` (plus `settings_check.md` and
+`experiment_ledger.csv`). The `Standalone runs` table there is the cross-candidate surface:
+net-after-cost, `net_ex_top1`, max DD (balance & equity), and reached-target / days (or `NO`).
+
+## Generate the runnable matrices (how the bundle was built)
 
 ```
 # C2 session breakout (exists today), London open, over V1–V3 (V4 pending as future):

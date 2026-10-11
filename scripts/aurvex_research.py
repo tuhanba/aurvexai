@@ -107,6 +107,8 @@ _SUM_PATTERNS = {
     "sum_deals": r"Tüm İşlemler:\s*(\d+)",
     "sum_wins": r"Karlı İşlemler \(toplamın %\):\s*(\d+)",
     "sum_losses": r"Kayıplı İşlemler \(toplamın %\):\s*(\d+)",
+    "bal_dd_pct": r"Maksimal Bakiye Düşüşü:\s*[0-9 .,\xa0]+\(([\d.]+)%\)",     # max balance drawdown %
+    "eq_dd_pct": r"Maksimal Varlık Düşüşü:\s*[0-9 .,\xa0]+\(([\d.]+)%\)",      # max equity drawdown %
 }
 
 
@@ -171,6 +173,7 @@ def parse_mt5_report(path):
     # A trade spans its in-deal(s) and the out-deal that closes it; net sums commission(8),
     # swap(9) and profit(10) over all of them. Reconciliation (below) guards the pairing.
     trade_nets, acc, open_deals, deals_seen, unmatched, bad_money = [], 0.0, 0, 0, 0, 0
+    curve = []                                      # (date_str, running balance) at each close
     for c in rows:
         if len(c) == 13 and c[3] in ("buy", "sell") and c[4] in ("in", "out", "in/out"):
             deals_seen += 1
@@ -188,6 +191,12 @@ def parse_mt5_report(path):
                 open_deals = max(0, open_deals - 1)
                 if open_deals == 0:
                     trade_nets.append(round(acc, 2)); acc = 0.0
+                    bal = _num(c[11])               # balance column after this close
+                    if bal is not None:
+                        curve.append((c[0][:10], bal))
+    rep["curve"] = curve
+    rep["bal_dd_pct"] = rep.get("summary", {}).get("bal_dd_pct")
+    rep["eq_dd_pct"] = rep.get("summary", {}).get("eq_dd_pct")
     if open_deals > 0 or abs(acc) > 1e-9:           # a position left open at end of data
         unmatched += 1
 
@@ -293,7 +302,32 @@ LEDGER_COLS = ["ingested_at", "file_sha", "file", "ea", "symbol", "tf", "period_
                "offset", "deposit", "leverage", "quality", "AvoidNews", "AccountSize", "RiskPct",
                "TrailStopR", "MinRangeMedMult", "PdhlMinRangeMedMult", "MaxSpreadToStopPct",
                "net", "gross_profit", "gross_loss", "trades", "wins", "losses", "avg_win",
-               "avg_loss", "max_win", "net_ex_top1", "reconciled", "status"]
+               "avg_loss", "max_win", "net_ex_top1", "bal_dd_pct", "eq_dd_pct", "reached_target",
+               "days_to_target", "reconciled", "status"]
+
+
+def _target_metrics(rep, target_pct):
+    """From the balance curve + deposit: did the run REACH the FTMO step target, and in how many
+    calendar days from the first close. Returns (reached, days) where reached is True/False
+    (False = NOT reached — such runs MUST still be reported; speed is never inferred from winners
+    only) or None when it cannot be computed (no curve/deposit/target)."""
+    dep = rep.get("deposit")
+    curve = rep.get("curve") or []
+    if not dep or not curve or target_pct is None:
+        return (None, None)
+    target = dep * (1.0 + target_pct / 100.0)
+
+    def d(s):
+        try:
+            return dt.date(*map(int, s.split(".")))
+        except (ValueError, TypeError):
+            return None
+    start = d(curve[0][0])
+    for ds, bal in curve:
+        if bal >= target:
+            hit = d(ds)
+            return (True, (hit - start).days if (hit and start) else None)
+    return (False, None)
 
 
 def _ledger_row(rep, sha, status):
@@ -314,8 +348,13 @@ def _ledger_row(rep, sha, status):
             "gross_profit": sm.get("gross_profit", ""), "gross_loss": sm.get("gross_loss", ""),
             "trades": rep["trades"], "wins": rep["wins"], "losses": rep["losses"],
             "avg_win": rep["avg_win"], "avg_loss": rep["avg_loss"], "max_win": rep["max_win"],
-            "net_ex_top1": rep["net_ex_top1"], "reconciled": rep.get("reconciled", False),
-            "status": status}
+            "net_ex_top1": rep["net_ex_top1"],
+            "bal_dd_pct": rep.get("bal_dd_pct") if rep.get("bal_dd_pct") is not None else "",
+            "eq_dd_pct": rep.get("eq_dd_pct") if rep.get("eq_dd_pct") is not None else "",
+            "reached_target": ("" if rep.get("reached_target") is None else
+                               ("yes" if rep["reached_target"] else "NO")),
+            "days_to_target": rep.get("days_to_target") if rep.get("days_to_target") is not None else "",
+            "reconciled": rep.get("reconciled", False), "status": status}
 
 
 def append_ledger(path, rows):
@@ -390,10 +429,13 @@ def cmd_reports(a):
     files = sorted(glob.glob(os.path.join(a.dir, "*.htm*")))
     parsed = [parse_mt5_report(p) for p in files]
     os.makedirs(a.out, exist_ok=True)
+    target_pct = getattr(a, "target_pct", None)
     rejected, valid = [], []
     for rep in parsed:
         sha = hashlib.sha256(open(os.path.join(a.dir, rep["file"]), "rb").read()).hexdigest()[:16]
         rep["_sha"] = sha
+        reached, days = _target_metrics(rep, target_pct)   # None/True/False; False = NOT reached
+        rep["reached_target"], rep["days_to_target"] = reached, days
         (rejected if rep["errors"] else valid).append(rep)
 
     # Group valid runs by experiment CELL (symbol+EA+period+tf+deposit+leverage). Different
@@ -449,31 +491,50 @@ def cmd_reports(a):
               "_Each table is one experiment cell (symbol+EA+period+timeframe+deposit+leverage). "
               "Different cells — including different validation periods — are never merged, and "
               "per-symbol results are never summed into a portfolio._", ""]
-    if not families:
-        cmp_md += [f"**No comparable cell (≥2 runs varying only `{a.vary}`, all else equal).** "
-                   "No comparison drawn — no conclusions from missing/incomparable data."]
-        if standalone:
-            cmp_md += ["", "Standalone runs present (not compared): "
-                       + ", ".join(f"{_cell_label(fam[0])} [{a.vary}={fam[0]['inputs'].get(a.vary)}]"
-                                   for _, fam, _ in standalone) + "."]
-    else:
+    def _reached(r):
+        t = r.get("reached_target")
+        if t is None:
+            return "?"
+        return ("yes(%sd)" % r.get("days_to_target")) if t else "NO"
+
+    def _dd(r):
+        return "n/a" if r.get("bal_dd_pct") is None else ("%.2f%%" % r["bal_dd_pct"])
+
+    if families:
         for key, fam, _ in families:
             b = fam[0]
             cmp_md += [f"## {b['symbol']}  ({b['ea']}, {b['period_from']}..{b['period_to']}, {b['tf']}, "
                        f"offset +{b['inputs'].get('TesterServerUtcOffsetHours')}, dep {b.get('deposit')}, "
-                       f"lev 1:{b.get('leverage')}, AvoidNews={b['inputs'].get('AvoidNews')}, "
-                       f"RiskPct={b['inputs'].get('RiskPct')}, quality={b.get('quality')})",
-                       f"| {a.vary} | net | trades | win/n | avgW | avgL | maxW | net_ex_top1 | recon |",
-                       "|---|---|---|---|---|---|---|---|---|"]
+                       f"lev 1:{b.get('leverage')}, RiskPct={b['inputs'].get('RiskPct')})",
+                       f"| {a.vary} | net | trades | win/n | net_ex_top1 | maxDD(bal) | "
+                       f"target{'' if target_pct is None else '(+%g%%)' % target_pct} | recon |",
+                       "|---|---|---|---|---|---|---|---|"]
             for r in fam:
                 cmp_md.append(f"| {r['inputs'].get(a.vary)} | {r['net']:+.2f} | {r['trades']} | "
-                              f"{r['wins']}/{r['trades']} | {r['avg_win']:+.2f} | {r['avg_loss']:+.2f} | "
-                              f"{r['max_win']:+.1f} | {r['net_ex_top1']:+.2f} | "
-                              f"{'✓' if r['reconciled'] else '—'} |")
+                              f"{r['wins']}/{r['trades']} | {r['net_ex_top1']:+.2f} | {_dd(r)} | "
+                              f"{_reached(r)} | {'✓' if r['reconciled'] else '—'} |")
             cmp_md.append("")
-        cmp_md += ["_net_ex_top1 = net minus the single best trade (monster-dependence check); "
-                   "net includes commission + swap and is reconciled (recon ✓) against the report's "
-                   "Toplam Net Kar._"]
+    # Standalone runs (the usual case for baseline/C1/C2 — one run per cell) are shown WITH their
+    # metrics, including runs that did NOT reach target (never hidden; speed is not inferred from
+    # winners only). This is the cross-candidate comparison surface.
+    if standalone:
+        cmp_md += ["## Standalone runs (one per cell — incl. runs that did NOT reach target)",
+                   f"| symbol | EA | period | tf | net | net_ex_top1 | maxDD(bal) | maxDD(eq) | "
+                   f"target{'' if target_pct is None else '(+%g%%)' % target_pct} | recon |",
+                   "|---|---|---|---|---|---|---|---|---|---|"]
+        for _, fam, _ in standalone:
+            r = fam[0]
+            eqdd = "n/a" if r.get("eq_dd_pct") is None else ("%.2f%%" % r["eq_dd_pct"])
+            cmp_md.append(f"| {r['symbol']} | {r['ea']} | {r['period_from']}..{r['period_to']} | "
+                          f"{r['tf']} | {r['net']:+.2f} | {r['net_ex_top1']:+.2f} | {_dd(r)} | {eqdd} | "
+                          f"{_reached(r)} | {'✓' if r['reconciled'] else '—'} |")
+        cmp_md.append("")
+    if not families and not standalone:
+        cmp_md += ["**No comparable or standalone runs** — no conclusions from missing data."]
+    cmp_md += ["_net includes commission + swap + fee; net_ex_top1 removes the single best trade "
+               "(monster check); maxDD from the report summary; target shows days-to-target or **NO** "
+               "when the FTMO step target was never reached (non-reaching runs are reported, not hidden). "
+               "Per-symbol only — never summed into a portfolio._"]
     open(os.path.join(a.out, "comparison.md"), "w", encoding="utf-8").write("\n".join(cmp_md) + "\n")
 
     # ---- ledger ----
@@ -719,6 +780,37 @@ def _load_ledger(path):
         return list(csv.DictReader(f))
 
 
+def _parse_dst_sets(items):
+    """Parse --dst-set 'KEY:winterVal:summerVal' entries into {KEY:(winter,summer)}. Lets a set
+    value track the period's DST regime (e.g. a session open hour in UTC: 08 winter / 07 summer)."""
+    out = {}
+    for it in (items or []):
+        parts = it.split(":")
+        if len(parts) == 3:
+            out[parts[0].strip()] = (parts[1].strip(), parts[2].strip())
+    return out
+
+
+def _apply_set_overrides(path, kv):
+    """Rewrite given KEY=VALUE lines in an existing .set (append if absent). Used to set the
+    DST-appropriate value per period. Comment/other lines untouched."""
+    if not kv:
+        return
+    lines = open(path, encoding="utf-8").read().splitlines()
+    done = set()
+    out = []
+    for ln in lines:
+        k = ln.split("=", 1)[0] if ("=" in ln and not ln.lstrip().startswith(";")) else None
+        if k in kv:
+            out.append(f"{k}={kv[k]}"); done.add(k)
+        else:
+            out.append(ln)
+    for k, v in kv.items():
+        if k not in done:
+            out.append(f"{k}={v}")
+    open(path, "w", encoding="utf-8").write("\n".join(out) + "\n")
+
+
 def _exam_status(ledger, sym, pf, pt, dev_f, dev_t):
     """Examination status for a window, evidence-based — NEVER inferred from Sept non-overlap.
     Overlap with the dev window is flagged (not OOS); a prior run is claimed only if the ledger
@@ -746,6 +838,7 @@ def cmd_batch(a):
     dev_f, dev_t = dev_f.strip(), dev_t.strip()
     today = _parse_date(a.today) or dt.date.today()
     ledger = _load_ledger(a.ledger)
+    dst_sets = _parse_dst_sets(getattr(a, "dst_set", None))
     cand = a.candidate
     os.makedirs(os.path.join(a.out, "ini"), exist_ok=True)
     os.makedirs(os.path.join(a.out, "sets"), exist_ok=True)
@@ -768,7 +861,11 @@ def cmd_batch(a):
             sub = "pending" if is_pending else "."
             os.makedirs(os.path.join(a.out, sub, "ini"), exist_ok=True)
             os.makedirs(os.path.join(a.out, sub, "sets"), exist_ok=True)
-            _write_set_with_offset(base_lines, off, os.path.join(a.out, sub, "sets", setname))
+            setpath = os.path.join(a.out, sub, "sets", setname)
+            _write_set_with_offset(base_lines, off, setpath)
+            if dst_sets:                              # pick winter/summer value per the period regime
+                summer = (off == 3)
+                _apply_set_overrides(setpath, {k: (v[1] if summer else v[0]) for k, v in dst_sets.items()})
             ini = (
                 "; GENERATED by aurvex_research batch — verify key names against YOUR MT5 build.\n"
                 f"; Candidate: {cand}\n"
@@ -959,6 +1056,8 @@ def main():
     r.add_argument("--dir", required=True)
     r.add_argument("--vary", default="TrailStopR", help="the single input expected to differ")
     r.add_argument("--ledger", default=None)
+    r.add_argument("--target-pct", dest="target_pct", type=float, default=10.0,
+                   help="FTMO step target %% for reached/days-to-target (step-1=10, step-2=5)")
     r.add_argument("--out", default="research_out")
     r.set_defaults(func=cmd_reports)
     c = sub.add_parser("collector", help="analyse the collector SQLite (read-only)")
@@ -988,6 +1087,9 @@ def main():
     b.add_argument("--ledger", default=None,
                    help="experiment_ledger.csv to check whether a window was already run")
     b.add_argument("--today", default=None, help="override 'today' (YYYY.MM.DD) for pending detection")
+    b.add_argument("--dst-set", dest="dst_set", action="append", default=None,
+                   help="per-period DST override 'KEY:winterVal:summerVal' (repeatable), e.g. "
+                        "OrbRangeHourUTC:8:7 for a London open that is 08:00 UTC in winter / 07:00 in summer")
     b.add_argument("--out", default="batch_out")
     b.set_defaults(func=cmd_batch)
     d = sub.add_parser("derive", help="derive baseline .set files from validated MT5 reports")

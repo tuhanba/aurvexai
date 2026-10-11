@@ -289,7 +289,8 @@ def test_singleton_standalone_not_error(tmp_path):
     assert ar.cmd_reports(_ns(tmp_path)) == 0
     se = (tmp_path / "out" / "settings_check.md").read_text()
     assert "STANDALONE" in se and "XAUUSD" in se
-    assert "No comparable cell" in (tmp_path / "out" / "comparison.md").read_text()
+    cmp_md = (tmp_path / "out" / "comparison.md").read_text()
+    assert "Standalone runs" in cmp_md and "XAUUSD" in cmp_md    # shown with metrics, not compared
 
 
 def test_ledger_dedup_and_columns(tmp_path):

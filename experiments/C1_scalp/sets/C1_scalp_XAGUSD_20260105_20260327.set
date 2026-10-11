@@ -1,0 +1,23 @@
+; C1 scalp candidate base set for AurvexScalpCandidate_c1.ex5 (tester-only). NOT a live set.
+; Comparable risk to the metals baseline (RiskPct=0.46). TesterServerUtcOffsetHours re-pinned
+; per period by the batch tool. Timeframe must be M1 (scalp) — batch --tf M1.
+RiskPct=0.46
+AccountSize=25000
+RequireAccountSize=true
+ScalpStartUTC=13
+ScalpEndUTC=16
+NbarLookback=5
+AtrPeriod=14
+AtrStopMult=1.0
+TpR=1.2
+TimeStopMin=10
+MaxTradesPerDay=6
+CostGateMult=3.0
+CommissionPerLotUSD=0.0
+SlippageBufferPts=0.0
+DailyLossPct=5.0
+OverallLossPct=10.0
+FridayFlattenUTCMin=1200
+ServerUtcOffsetOverrideHours=999
+TesterServerUtcOffsetHours=2
+Magic=880088

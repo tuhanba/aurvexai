@@ -1,6 +1,6 @@
 ; C2 session-breakout candidate (ORB reparam) — derived from baseline_v314_XAGUSD.set
 ; Inherits the VALIDATED baseline RiskPct (comparable risk). ForceStrategy=ORB;
-; London open OrbRangeHourUTC=7, OrbHours=1, TrailStopR=0.5. NOT a live set.
+; London open: OrbRangeHourUTC set per period by batch --dst-set (8 winter / 7 summer);
 ; Feed to aurvex_research.py batch (TesterServerUtcOffsetHours re-pinned per period).
 RiskPct=0.46
 ForceStrategy=ORB
