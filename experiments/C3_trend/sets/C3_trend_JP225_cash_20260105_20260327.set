@@ -1,0 +1,20 @@
+; C3 trend-continuation base set for AurvexTrendContCandidate_c3.ex5 (tester-only). NOT a live set.
+; Matched to index baseline risk. Timeframe H1 (batch --tf H1). Offset re-pinned per period.
+RiskPct=0.59
+AccountSize=25000
+RequireAccountSize=true
+EmaFast=20
+EmaSlow=200
+AtrPeriod=14
+AtrStopMult=1.5
+TrailAtrMult=3.0
+MaxTradesPerDay=3
+CostGateMult=2.0
+CommissionPerLotUSD=0.0
+SlippageBufferPts=0.0
+DailyLossPct=5.0
+OverallLossPct=10.0
+FridayFlattenUTCMin=1200
+ServerUtcOffsetOverrideHours=999
+TesterServerUtcOffsetHours=2
+Magic=880033

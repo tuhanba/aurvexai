@@ -173,6 +173,7 @@ def parse_mt5_report(path):
     # A trade spans its in-deal(s) and the out-deal that closes it; net sums commission(8),
     # swap(9) and profit(10) over all of them. Reconciliation (below) guards the pairing.
     trade_nets, acc, open_deals, deals_seen, unmatched, bad_money = [], 0.0, 0, 0, 0, 0
+    realized_cost = 0.0                             # commission + swap ACTUALLY applied (not profit)
     curve = []                                      # (date_str, running balance) at each close
     for c in rows:
         if len(c) == 13 and c[3] in ("buy", "sell") and c[4] in ("in", "out", "in/out"):
@@ -183,6 +184,7 @@ def parse_mt5_report(path):
                 bad_money += 1
             comm, swap, prof = cv or 0.0, sv or 0.0, pv or 0.0
             acc += comm + swap + prof
+            realized_cost += comm + swap          # cost ACTUALLY applied to results (not the gate)
             if c[4] == "in":
                 open_deals += 1
             else:                                   # "out" or "in/out" closes a position
@@ -195,6 +197,7 @@ def parse_mt5_report(path):
                     if bal is not None:
                         curve.append((c[0][:10], bal))
     rep["curve"] = curve
+    rep["realized_cost"] = round(realized_cost, 2)   # commission+swap applied to the net
     rep["bal_dd_pct"] = rep.get("summary", {}).get("bal_dd_pct")
     rep["eq_dd_pct"] = rep.get("summary", {}).get("eq_dd_pct")
     if open_deals > 0 or abs(acc) > 1e-9:           # a position left open at end of data
@@ -302,7 +305,8 @@ LEDGER_COLS = ["ingested_at", "file_sha", "file", "ea", "symbol", "tf", "period_
                "offset", "deposit", "leverage", "quality", "AvoidNews", "AccountSize", "RiskPct",
                "TrailStopR", "MinRangeMedMult", "PdhlMinRangeMedMult", "MaxSpreadToStopPct",
                "net", "gross_profit", "gross_loss", "trades", "wins", "losses", "avg_win",
-               "avg_loss", "max_win", "net_ex_top1", "bal_dd_pct", "eq_dd_pct", "reached_target",
+               "avg_loss", "max_win", "net_ex_top1", "realized_cost", "gate_comm_per_lot",
+               "gate_slip_pts", "bal_dd_pct", "eq_dd_pct", "reached_target",
                "days_to_target", "reconciled", "status"]
 
 
@@ -349,6 +353,8 @@ def _ledger_row(rep, sha, status):
             "trades": rep["trades"], "wins": rep["wins"], "losses": rep["losses"],
             "avg_win": rep["avg_win"], "avg_loss": rep["avg_loss"], "max_win": rep["max_win"],
             "net_ex_top1": rep["net_ex_top1"],
+            "realized_cost": rep.get("realized_cost") if rep.get("realized_cost") is not None else "",
+            "gate_comm_per_lot": g("CommissionPerLotUSD", ""), "gate_slip_pts": g("SlippageBufferPts", ""),
             "bal_dd_pct": rep.get("bal_dd_pct") if rep.get("bal_dd_pct") is not None else "",
             "eq_dd_pct": rep.get("eq_dd_pct") if rep.get("eq_dd_pct") is not None else "",
             "reached_target": ("" if rep.get("reached_target") is None else
@@ -519,22 +525,35 @@ def cmd_reports(a):
     # winners only). This is the cross-candidate comparison surface.
     if standalone:
         cmp_md += ["## Standalone runs (one per cell — incl. runs that did NOT reach target)",
-                   f"| symbol | EA | period | tf | net | net_ex_top1 | maxDD(bal) | maxDD(eq) | "
+                   f"| symbol | EA | period | net | realized cost (comm+swap) | gate cost (assumed) | "
+                   f"net_ex_top1 | maxDD(bal) | maxDD(eq) | "
                    f"target{'' if target_pct is None else '(+%g%%)' % target_pct} | recon |",
-                   "|---|---|---|---|---|---|---|---|---|---|"]
+                   "|---|---|---|---|---|---|---|---|---|---|---|"]
         for _, fam, _ in standalone:
             r = fam[0]
             eqdd = "n/a" if r.get("eq_dd_pct") is None else ("%.2f%%" % r["eq_dd_pct"])
+            rc = r.get("realized_cost")
+            rc_s = "n/a" if rc is None else ("%+.2f" % rc)
+            gc = r["inputs"].get("CommissionPerLotUSD"); gs = r["inputs"].get("SlippageBufferPts")
+            gate = (f"comm/lot={gc or '0'}, slipPts={gs or '0'}" if (gc is not None or gs is not None)
+                    else "—")
             cmp_md.append(f"| {r['symbol']} | {r['ea']} | {r['period_from']}..{r['period_to']} | "
-                          f"{r['tf']} | {r['net']:+.2f} | {r['net_ex_top1']:+.2f} | {_dd(r)} | {eqdd} | "
-                          f"{_reached(r)} | {'✓' if r['reconciled'] else '—'} |")
+                          f"{r['net']:+.2f} | {rc_s} | {gate} | {r['net_ex_top1']:+.2f} | {_dd(r)} | "
+                          f"{eqdd} | {_reached(r)} | {'✓' if r['reconciled'] else '—'} |")
         cmp_md.append("")
     if not families and not standalone:
         cmp_md += ["**No comparable or standalone runs** — no conclusions from missing data."]
-    cmp_md += ["_net includes commission + swap + fee; net_ex_top1 removes the single best trade "
-               "(monster check); maxDD from the report summary; target shows days-to-target or **NO** "
-               "when the FTMO step target was never reached (non-reaching runs are reported, not hidden). "
-               "Per-symbol only — never summed into a portfolio._"]
+    cmp_md += ["_**realized cost** (comm+swap) is the cost APPLIED to the net; **gate cost** is the "
+               "commission/slippage the entry filter ASSUMED — reported separately so the modeled "
+               "entry cost is not confused with the realized cost. net_ex_top1 removes the single best "
+               "trade (monster check); maxDD from the report summary; target shows days-to-target or "
+               "**NO** when the FTMO step target was never reached (non-reaching runs reported, not "
+               "hidden)._",
+               "",
+               "> **Portfolio speed NOT measured.** reached-target / days are **per-symbol, "
+               "single-instrument** tester runs. A combined-account (portfolio) time-to-target — all "
+               "symbols trading one FTMO account together — is **not** measured here and would be a "
+               "separate combined-account test. Per-symbol results are never summed into a portfolio."]
     open(os.path.join(a.out, "comparison.md"), "w", encoding="utf-8").write("\n".join(cmp_md) + "\n")
 
     # ---- ledger ----

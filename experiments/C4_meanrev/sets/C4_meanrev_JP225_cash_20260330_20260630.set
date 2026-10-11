@@ -1,0 +1,24 @@
+; C4 mean-reversion base set for AurvexMeanRevCandidate_c4.ex5 (tester-only). NOT a live set.
+; Matched to index baseline risk. Timeframe M5 (batch --tf M5). Offset re-pinned per period.
+RiskPct=0.59
+AccountSize=25000
+RequireAccountSize=true
+BbPeriod=20
+BbDev=2.0
+RsiPeriod=14
+RsiHi=70
+AdxPeriod=14
+AdxMax=20
+AtrPeriod=14
+AtrStopMult=1.0
+TimeStopMin=30
+MaxTradesPerDay=4
+CostGateMult=2.0
+CommissionPerLotUSD=0.0
+SlippageBufferPts=0.0
+DailyLossPct=5.0
+OverallLossPct=10.0
+FridayFlattenUTCMin=1200
+ServerUtcOffsetOverrideHours=999
+TesterServerUtcOffsetHours=3
+Magic=880044

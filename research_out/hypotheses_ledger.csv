@@ -1,0 +1,4 @@
+id,created,feature,rule,horizon,symbols,evidence_level,status,decision,notes
+H1,2026-10-11,opening-range breakout + entry spread,ORB first-break-wins no-TP session-close,session,XAUUSD;XAGUSD,B(in-sample)->C,open,pending-OOS,"Sept net +291.14 XAU(9) / +202.27 XAG(1=anecdotal); run C2/baseline OOS"
+H2,2026-10-11,squeeze = range/median (<1),PDHL only when PdhlMinRangeMedMult>=1.0,day,GER40.cash;JP225.cash,B(prior KAPI-1),open,pending-OOS,"filter not re-validated OOS in this pipeline"
+H3,2026-10-11,entry spread vs stop,skip when target<CostGateMult*(spread+comm+slip),3-12 bars,XAUUSD;XAGUSD,C(hypothesis),open,needs-measure,"aurvex_edge.py: after-cost return by entry-spread bucket"
