@@ -308,7 +308,7 @@ def test_ledger_dedup_and_columns(tmp_path):
 # --------------------------------------------------------------------------- #
 # collector (schema version + zero-open handling)  (bug #6, #7)
 # --------------------------------------------------------------------------- #
-def _make_collector_db(path, version="1.2", ticks=True, positions="one",
+def _make_collector_db(path, version="1.3", ticks=True, positions="one",
                        acc_snap="2026.09.02 12:10:00", pos_snap="2026.09.02 12:10:00"):
     con = sqlite3.connect(str(path))
     con.executescript("""
@@ -344,7 +344,7 @@ def test_collector_report(tmp_path):
     db = tmp_path / "c.db"; _make_collector_db(db)      # pos snapshot == account snapshot
     assert ar.cmd_collector(_coll_ns(tmp_path, db)) == 0
     md = (tmp_path / "out" / "collector_report.md").read_text()
-    assert "schema version: 1.2 (validated)" in md
+    assert "schema version: 1.3 (validated)" in md
     assert "NOT evidence" in md                                  # tester-coverage disclaimer
     assert "1 gaps" in md and "| GER40.cash | aurvex | 2 | 4.5 |" in md
     assert "not an external reconciliation" in md               # honest section title

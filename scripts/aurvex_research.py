@@ -20,7 +20,7 @@ Nothing here edits live settings or the trading EA. Read-only inputs only.
 """
 import argparse, csv, datetime as dt, glob, hashlib, json, os, re, sqlite3, sys
 
-COLLECTOR_SCHEMA_VERSION = "1.2"   # must match AurvexCollector importer SCHEMA_VERSION
+COLLECTOR_SCHEMA_VERSION = "1.3"   # must match AurvexCollector importer SCHEMA_VERSION (v13 = true-UTC utc_time)
 
 # ----------------------------- MT5 HTML report parsing -----------------------
 _LBL = {

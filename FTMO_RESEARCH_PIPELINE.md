@@ -37,7 +37,7 @@ batch      --symbols S1,S2 --sets DIR --set-pattern P --periods F:T,F:T
    aside under `pending/`, a `--candidate` label tagging all outputs, and the separate-tester
    path / EA↔set / dates / offset explicit in every file. Marks operator-required steps.
 6. **Hidden importer launcher** — `windows/` (`run_importer_hidden.vbs` + `run_importer.cmd` +
-   `IMPORTER_HIDDEN_LAUNCHER.md`). Runs the AurvexImporter v12 task with no console window, logs
+   `IMPORTER_HIDDEN_LAUNCHER.md`). Runs the AurvexImporter v13 task with no console window, logs
    to a file, preserves the exit code, and prevents overlapping runs; with Task Scheduler steps
    and a post-setup check that the window is gone **and** the DB keeps importing.
 

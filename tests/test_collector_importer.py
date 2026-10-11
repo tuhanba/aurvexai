@@ -329,11 +329,11 @@ def test_uncommitted_partial_not_published(tmp_path):
 # ============ checkpoint content/schema/symbol validation (narrow #2) =========
 def test_checkpoint_validation():
     syms = ["XAUUSD", "XAGUSD"]
-    good = "schema\t1.2\r\ntick_XAUUSD\t100:1\r\ntick_XAGUSD\t200:0\r\nlast_deal_time_msc\t5\r\n"
+    good = "schema\t1.3\r\ntick_XAUUSD\t100:1\r\ntick_XAGUSD\t200:0\r\nlast_deal_time_msc\t5\r\n"
     assert imp.validate_checkpoint(good, syms) is True
-    assert imp.validate_checkpoint(good.replace("1.2", "1.1"), syms) is False   # wrong schema
+    assert imp.validate_checkpoint(good.replace("1.3", "1.1"), syms) is False   # wrong schema
     assert imp.validate_checkpoint(
-        "schema\t1.2\r\ntick_XAUUSD\t100:1\r\nlast_deal_time_msc\t5\r\n", syms) is False  # missing symbol
+        "schema\t1.3\r\ntick_XAUUSD\t100:1\r\nlast_deal_time_msc\t5\r\n", syms) is False  # missing symbol
     assert imp.validate_checkpoint(
-        "schema\t1.2\r\ntick_XAUUSD\t100:1\r\ntick_XAGUSD\t200:0\r\n", syms) is False      # no last_deal
+        "schema\t1.3\r\ntick_XAUUSD\t100:1\r\ntick_XAGUSD\t200:0\r\n", syms) is False      # no last_deal
     assert imp.validate_checkpoint("", syms) is False                           # empty

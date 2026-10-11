@@ -1,21 +1,26 @@
 # Stop the every-minute CMD flash — hidden importer launcher
 
-A CMD window opens and closes every minute. This runs the AurvexImporter v12 import **with no
+> **v1.4 migration (v12 → v13):** the collector now writes `utc_time` as true UTC, in a new
+> `AurvexCollector\v13` folder with schema `1.3`, so it never mixes with the old server-time (v12)
+> rows. Use a **fresh** DB `aurvex_live_v13.db` (the importer with `SCHEMA_VERSION=1.3` refuses the
+> old v12 DB). The old `v12` folder and `aurvex_live_v12.db` are preserved, untouched, for history.
+
+A CMD window opens and closes every minute. This runs the AurvexImporter v13 import **with no
 visible window**, logs to a file, keeps its error exit code, and never runs two copies at once —
 and a crash can never wedge it. It does **not** change the importer, its paths, the DB, or any
 live setting.
 
-## 0. First confirm the source IS the AurvexImporter v12 task
+## 0. First confirm the source IS the AurvexImporter v13 task
 
 Do not change anything until you have confirmed the popup is this task. In an **elevated** prompt:
 
 ```
-schtasks /query /fo LIST /v | findstr /i "Aurvex Importer collector v12"
+schtasks /query /fo LIST /v | findstr /i "Aurvex Importer collector v13 v12"
 ```
 
 or open **Task Scheduler** → Task Scheduler Library and find the importer task (1-minute trigger);
 its **Actions** tab currently runs python on `aurvex_collector_import.py` — that visible action is
-what flashes. If the minute-popup is a different task, stop — this launcher is only for the v12
+what flashes. If the minute-popup is a different task, stop — this launcher is only for the v13 (formerly v12)
 importer.
 
 ## 1. Files (keep both together)
@@ -33,8 +38,8 @@ value must still be verified** before the first run — the exact importer filen
 ```
 set "PY=C:\Users\pc\AppData\Local\Programs\Python\Python312\python.exe"   (confirmed)
 set "IMPORTER=C:\Users\pc\Downloads\aurvex_collector_import.py"   <CONFIRM> exact Downloads path
-set "WATCHDIR=C:\Users\pc\AppData\Roaming\MetaQuotes\Terminal\81A933A9AFC5DE3C23B15CAB19C63850\MQL5\Files\AurvexCollector\v12"
-set "DB=C:\Users\pc\AurvexData\aurvex_live_v12.db"
+set "WATCHDIR=C:\Users\pc\AppData\Roaming\MetaQuotes\Terminal\81A933A9AFC5DE3C23B15CAB19C63850\MQL5\Files\AurvexCollector\v13"
+set "DB=C:\Users\pc\AurvexData\aurvex_live_v13.db"
 set "REPORTDIR=C:\Users\pc\AurvexData\reports"
 set "LOGDIR=C:\Users\pc\AurvexData\logs"
 ```
@@ -43,7 +48,7 @@ set "LOGDIR=C:\Users\pc\AurvexData\logs"
   the VBS already hides the window, and `python.exe` flushes stdout/stderr to the log reliably.
 - **IMPORTER** — the importer is under Downloads; confirm the exact filename/sub-folder (e.g. if
   it sits in a sub-folder of Downloads, add it to the path).
-- **WATCHDIR** — already the real collector v12 folder; re-confirm with MT5 `File → Open Data
+- **WATCHDIR** — the collector v13 folder (v1.4 migration); re-confirm with MT5 `File → Open Data
   Folder` only if the terminal is reinstalled (the long hex is the terminal id).
 
 The import command is exactly today's call:
@@ -77,7 +82,7 @@ Watch two or three 1-minute firings — no flash.
 - Confirm the DB is advancing with the read-only analyzer, run twice a few minutes apart:
 
   ```
-  python scripts\aurvex_research.py collector --db C:\Users\pc\AurvexData\aurvex_live_v12.db --out C:\Users\pc\AurvexData\reports\daily
+  python scripts\aurvex_research.py collector --db C:\Users\pc\AurvexData\aurvex_live_v13.db --out C:\Users\pc\AurvexData\reports\daily
   ```
 
   Check tick counts rise and the account "last … (N min old)" age stays small between the two runs.

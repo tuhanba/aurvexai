@@ -21,7 +21,7 @@ the generated report/DB.
 import argparse, glob, json, os, re, sqlite3, sys
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = "1.2"
+SCHEMA_VERSION = "1.3"   # v1.3: utc_time is TRUE UTC (collector v13). v1.2 stored server time — use a fresh DB.
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta(key TEXT PRIMARY KEY, value TEXT);
@@ -86,12 +86,12 @@ def _kind(name):
 
 
 def ensure_schema(con):
-    """Create the v1.2 schema on a fresh DB; refuse an old (v1.0/v1.1) DB loudly rather
-    than migrating silently. Returns nothing; raises SystemExit on a version mismatch."""
+    """Create the current schema on a fresh DB; refuse an older DB loudly rather than migrating
+    silently. Returns nothing; raises SystemExit on a version mismatch."""
     existing = {r[0] for r in con.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     if "schema_meta" not in existing and (existing & {"ticks", "deals", "account"}):
-        raise SystemExit("Old v1.0/v1.1 DB detected (no schema_meta). Use a FRESH v1.2 --db "
+        raise SystemExit("Old v1.0/v1.1 DB detected (no schema_meta). Use a FRESH --db "
                          "path; there is no silent migration (schema changed: ticks.seq, "
                          "deals.deal_time_msc, account.open_risk_known).")
     con.executescript(SCHEMA)
@@ -99,7 +99,8 @@ def ensure_schema(con):
     if row is None:
         con.execute("INSERT INTO schema_meta(key,value) VALUES('version',?)", (SCHEMA_VERSION,))
     elif row[0] != SCHEMA_VERSION:
-        raise SystemExit(f"DB schema {row[0]} != importer {SCHEMA_VERSION}; use a fresh v1.2 DB.")
+        raise SystemExit(f"DB schema {row[0]} != importer {SCHEMA_VERSION}; use a fresh DB "
+                         f"(schema {SCHEMA_VERSION} = utc_time is true UTC; 1.2 stored server time).")
     con.commit()
 
 

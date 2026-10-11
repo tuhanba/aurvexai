@@ -2,9 +2,26 @@
 
 **Status: NOT PASS.** Source changes only. This environment cannot compile MQL5 or run
 MetaTrader, so the EA is **not** verified. It is PASS only after **F7 compile (0 errors)** and the
-**Windows runtime checks** below. CSV columns are unchanged (`COLLECTOR_SCHEMA "1.2"`); the live
-trading EAs and existing data are untouched. **One meaning change:** `utc_time` in the tick CSV is
-now TRUE UTC (was server time) — see item 3.
+**Windows runtime checks** below. The live trading EAs and existing data are untouched.
+
+**MIGRATION (v1.4, review 3) — explicit version marker.** Because `utc_time` is now TRUE UTC (v12
+and earlier stored server time), the store moves to a NEW folder **`AurvexCollector\v13`** with
+schema **`1.3`** (collector `COLLECTOR_SCHEMA`, importer `SCHEMA_VERSION`, analyzer
+`COLLECTOR_SCHEMA_VERSION` all `1.3`). Server-time (v12) and UTC (v13) rows therefore never share a
+file or DB, so clock-based reports are never computed across a mixed basis. Use a fresh
+`aurvex_live_v13.db`; the old v12 folder + DB are preserved untouched. The importer refuses a
+1.2 DB.
+
+## review-3 clock/commit fixes (v1.4)
+
+- **Tick read bounds use the SERVER clock.** The window `from/to` and the resume-gap now use
+  `TimeTradeServer()` (tick `time_msc`'s own clock), not `TimeGMT()`. A server-ahead-of-UTC feed is
+  no longer capped below the newest tick (which previously lagged reads by the offset).
+- **Tick-clock BASIS validated from a live tick, not tick age.** `ValidateTickClockBase()` confirms
+  the basis by matching the symbol's CURRENT tick to server-now; once confirmed, EVERY tick — old
+  back-read ones included — converts to UTC. Historical ticks are no longer blanked for being old.
+- **`.commit` read STRICTLY.** The sidecar must be digits-only and `<=` the data-file size; anything
+  else is treated as corrupt (file preserved, `commit_unrecoverable`), never seeked to blindly.
 
 ## v1.4 changes (review 2)
 

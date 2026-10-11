@@ -11,9 +11,14 @@
 //|   guarded (Print fallback if Health itself can't be written).       |
 //| v1.3 (resilience review 1): STRICT checkpoint load (main/.tmp/fresh)|
 //|   + startup cursor LOG; clock-offset gate; write file+phase+err;    |
-//|   disconnect start/end+duration; resume/coverage gap reports. CSV   |
-//|   schema UNCHANGED (still "1.2"; utc_time MEANING corrected to true  |
-//|   UTC in v1.4). NOT PASS until F7 compile + MT5 verification.        |
+//|   disconnect start/end+duration; resume/coverage gap reports.        |
+//| MIGRATION (v1.4 review 3): tick read bounds use the SERVER clock     |
+//|   (not GMT) so a server-ahead-of-UTC feed is not lagged; tick-clock  |
+//|   BASIS validated from a LIVE tick (old back-read ticks still get    |
+//|   UTC — no age gate); .commit read STRICTLY (digits only, <= file    |
+//|   size); and because utc_time is now TRUE UTC the store moves to a   |
+//|   NEW folder "v13" + schema "1.3" so server-time (v12) and UTC (v13) |
+//|   rows never mix. NOT PASS until F7 compile + MT5 verification.       |
 //| v1.2 (review): per-ms tick SEQ for crash-replay dedup; FILE_SHARE  |
 //|   flags for concurrent reads; AppendBatch verifies the FULL write  |
 //|   and newline-terminates a partial tail; checkpoint written to a    |
@@ -40,7 +45,7 @@
 #property copyright "Aurvex / read-only collector"
 #property version   "1.40"
 #property strict
-#define COLLECTOR_SCHEMA "1.2"   // CSV columns UNCHANGED; v1.4 corrects utc_time MEANING to true UTC
+#define COLLECTOR_SCHEMA "1.3"   // v1.4: utc_time is TRUE UTC (v12/"1.2" stored server time); folder->v13
 // #include <Trade/Trade.mqh> intentionally OMITTED — this EA can never trade.
 
 input string CollectSymbols      = "XAUUSD,XAGUSD,GER40.cash,JP225.cash";
@@ -76,9 +81,11 @@ bool     g_reporting=false;     // re-entrancy guard for write-failure reporting
 //------------------------------- time/util ----------------------------//
 datetime UtcDayStart0(datetime t){ return (datetime)((long)t/86400*86400); }
 string DayTag(datetime t){ MqlDateTime d; TimeToStruct(t,d); return StringFormat("%04d%02d%02d",d.year,d.mon,d.day); }
-// v1.2: output under a versioned subfolder so the changed schema NEVER mixes with
-// v1.0/v1.1 files. Migration = start fresh here; do not append to old files.
-string FileDir(){ return FilePrefix+"/v12/"; }
+// Output under a versioned subfolder so a changed schema/semantics NEVER mixes with older files.
+// v13 MIGRATION (v1.4): utc_time is now TRUE UTC (v12 and earlier stored server time). A new
+// folder + new schema ("1.3") keep server-time rows and UTC rows in separate stores so clock-based
+// reports are never computed across a mixed basis. Start fresh in v13; do not append to v12 files.
+string FileDir(){ return FilePrefix+"/v13/"; }
 string TickFile(string sym){ return FileDir()+"ticks_"+sym+"_"+DayTag(TimeGMT())+".csv"; }
 string DealFile(){ return FileDir()+"deals_"+DayTag(TimeGMT())+".csv"; }
 string PosFile(){ return FileDir()+"positions_"+DayTag(TimeGMT())+".csv"; }
@@ -86,7 +93,8 @@ string AcctFile(){ return FileDir()+"account_"+DayTag(TimeGMT())+".csv"; }
 string SymFile(){ return FileDir()+"symbols_"+DayTag(TimeGMT())+".csv"; }
 string HealthFile(){ return FileDir()+"health_"+DayTag(TimeGMT())+".csv"; }
 string CheckpointFile(){ return FileDir()+"checkpoint.csv"; }
-long NowMsc(){ return (long)TimeGMT()*1000; }
+long NowMsc(){ return (long)TimeGMT()*1000; }            // GMT collection wall-clock (collect_msc)
+long ServerNowMsc(){ return (long)TimeTradeServer()*1000; }  // SERVER clock — the basis of tick time_msc
 
 // Validate the tick clock base BEFORE any UTC conversion or deal-history operation. We require
 // a sane GMT and trade-server clock and a plausible GMT<->server offset. If it cannot be
@@ -101,14 +109,21 @@ bool ValidateClockBase()
    g_clockOffsetSec=off;
    return true;
 }
-// Validate the TICK clock base: a tick's time_msc must be on the same clock as TimeTradeServer()
-// (within tolerance). Only then can we convert tick server-time to UTC via g_clockOffsetSec. If a
-// tick's time is not consistent with the server clock we do NOT present its utc_time as reliable.
-bool TickTimeConsistent(long tick_msc)
+// Validate the TICK clock BASE (not a tick's age): confirm that tick time_msc is on the SAME clock
+// as TimeTradeServer() by checking the symbol's CURRENT (live) tick against server-now. This is a
+// one-shot basis check — once it holds, EVERY tick (old back-read ones included) converts to UTC
+// via the validated offset. It never marks an old historical tick "unverified" for being old.
+bool ValidateTickClockBase()
 {
-   long serverNowMs=(long)TimeTradeServer()*1000;
-   long d=tick_msc-serverNowMs; if(d<0) d=-d;
-   return (d<=(long)TickClockToleranceSec*1000);
+   long serverNow=ServerNowMsc();
+   MqlTick t;
+   for(int i=0;i<g_nSym;i++)
+      if(SymbolInfoTick(g_syms[i],t) && t.time_msc>0)
+      {
+         long d=(long)t.time_msc-serverNow; if(d<0) d=-d;
+         if(d<=(long)TickClockToleranceSec*1000) return true;   // a LIVE tick matches server clock -> basis confirmed
+      }
+   return false;                                                // no fresh tick to confirm basis right now
 }
 // server-time seconds -> UTC seconds using the validated offset (server = UTC + offset)
 datetime ServerMscToUtc(long msc){ return (datetime)(msc/1000-g_clockOffsetSec); }
@@ -126,13 +141,19 @@ const string SYM_HDR="collect_utc\tsymbol\tpoint\tdigits\ttick_size\ttick_value\
 // is .commit advanced. So a partially-written batch — even one that happens to end with a
 // full column count — stays BEYOND .commit and is never published to the importer. We
 // never append a newline to a partial payload to make it "look valid".
+// Read the committed length STRICTLY: the sidecar must be a pure non-negative integer (no stray
+// characters, no partial write). A non-numeric/garbage sidecar returns -1 (treated as lost/corrupt
+// -> the file is preserved, not appended). The caller also rejects a value that exceeds the data
+// file size (cannot have committed beyond what exists).
 long ReadCommit(string cf)
 {
    int h=FileOpen(cf,FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
    if(h==INVALID_HANDLE) return -1;
    string s=(FileIsEnding(h)?"":FileReadString(h));
    FileClose(h);
-   return (StringLen(s)>0)?(long)StringToInteger(s):-1;
+   StringTrimLeft(s); StringTrimRight(s);
+   if(!IsNonNegInt(s)) return -1;          // empty or non-digit -> corrupt/missing
+   return (long)StringToInteger(s);
 }
 bool WriteCommitAtomic(string cf,long val)
 {
@@ -162,19 +183,24 @@ bool AppendBatch(string file,string header,string payload)
    long committed=ReadCommit(cf);
    int h=FileOpen(file,FILE_READ|FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
    if(h==INVALID_HANDLE){ ReportWriteFail(file,"open",GetLastError()); return false; }
-   if(committed<0)
+   long fsz=(long)FileSize(h);
+   // A sidecar value that exceeds the actual file size is corrupt (cannot have committed beyond
+   // what exists) — treat it exactly like a lost/corrupt sidecar.
+   bool sidecarBad=(committed<0) || (committed>fsz);
+   if(sidecarBad)
    {
-      if(FileSize(h)==0){ FileWriteString(h,header+"\r\n"); committed=(long)FileSize(h); }
+      if(fsz==0){ FileWriteString(h,header+"\r\n"); committed=(long)FileSize(h); }
       else
-      {   // Sidecar MISSING/CORRUPT while the file has content. The .commit is the ONLY proof of a
-          // successful commit; file shape (columns/newline) is NOT proof — a full-column line can be
-          // a crashed, never-committed write. So we do NOT guess a length and do NOT append: preserve
-          // the file untouched and report the unrecoverable commit state for the operator to resolve.
+      {   // Sidecar MISSING/CORRUPT (or > file size) while the file has content. The .commit is the
+          // ONLY proof of a successful commit; file shape (columns/newline) is NOT proof — a full-
+          // column line can be a crashed, never-committed write. So we do NOT guess a length and do
+          // NOT append: preserve the file untouched and report the unrecoverable commit state.
          FileClose(h);
          if(g_reporting) Print("Collector commit_unrecoverable (nested): ",file);
          else { g_reporting=true;
-                Health("commit_unrecoverable",StringFormat("file=%s size=? .commit lost/corrupt — "
-                       "file preserved, NOT appended; operator must restore/clear before resume",file));
+                Health("commit_unrecoverable",StringFormat("file=%s size=%I64d commit=%I64d — "
+                       ".commit lost/corrupt/oversize; file preserved, NOT appended; operator must "
+                       "restore/clear before resume",file,fsz,committed));
                 g_reporting=false; }
          return false;
       }
@@ -311,7 +337,7 @@ void LoadCheckpoint()
 int PollTicksWindow(int i)
 {
    string sym=g_syms[i];
-   long nowMs=NowMsc();
+   long nowMs=ServerNowMsc();                                  // tick window bounds are SERVER-clock
    long startMsc=g_lastMsc[i]; int startCnt=g_lastMscCnt[i];   // CONSTANT during this scan
    long fromMs=(startMsc>0)?startMsc:(nowMs-(long)TickMaxLookbackSec*1000);
    long toMs=MathMin(nowMs,fromMs+(long)TickWindowSec*1000);   // FINITE window
@@ -319,8 +345,6 @@ int PollTicksWindow(int i)
    MqlTick ticks[];
    int n=CopyTicksRange(sym,ticks,COPY_TICKS_ALL,(ulong)fromMs,(ulong)toMs);
    if(n<0){ Health("tick_copy_err",StringFormat("%s err=%d",sym,GetLastError())); return -1; }
-   if(n>0 && TickTimeConsistent(ticks[n-1].time_msc) && !g_tickClockOk)
-   { g_tickClockOk=true; Health("tick_clock_ok",StringFormat("%s latest tick consistent with server clock (offset_s=%I64d)",sym,g_clockOffsetSec)); }
    long newMsc=startMsc; int newCnt=startCnt;                  // computed SEPARATELY
    int skip=startCnt, written=0; long firstMsc=-1;
    string batch="";
@@ -333,12 +357,11 @@ int PollTicksWindow(int i)
       int seq;
       if(msc>newMsc){ newMsc=msc; newCnt=0; }                  // new ms -> seq restarts at 0
       seq=newCnt; newCnt++;                                    // 0-based index within this ms
-      // utc_time: only presented when the TICK clock base is validated against the server clock;
-      // then it is the TRUE UTC (server-time minus the validated server->GMT offset). If the tick
-      // time is not consistent with the server clock, utc_time is left EMPTY (not a wrong value).
-      bool tconsistent=TickTimeConsistent(msc);
-      if(!tconsistent && g_tickClockOk){ g_tickClockOk=false; Health("tick_clock_unverified",StringFormat("%s tick_msc=%I64d serverNowMs=%I64d",sym,msc,(long)TimeTradeServer()*1000)); }
-      string utc=tconsistent?TimeToString(ServerMscToUtc(msc),TIME_DATE|TIME_SECONDS):"";
+      // utc_time: presented only when the tick clock BASIS is validated for this session (a live
+      // tick matched the server clock — see ValidateTickClockBase in OnTimer). Then EVERY tick,
+      // however old, converts to TRUE UTC via the validated offset. If the basis is not yet
+      // confirmed, utc_time is left EMPTY (never a wrong value) — it is NOT gated on tick age.
+      string utc=g_tickClockOk?TimeToString(ServerMscToUtc(msc),TIME_DATE|TIME_SECONDS):"";
       batch+=StringFormat("%I64d\t%I64d\t%d\t%s\t%s\t%.8f\t%.8f\t%.8f\t%I64d\t%.4f\t%u\r\n",
          NowMsc(),msc,seq,
          TimeToString(ticks[k].time,TIME_DATE|TIME_SECONDS),   // broker/server time (as-is)
@@ -538,10 +561,11 @@ int OnInit()
       Health("clock_base_invalid","GMT/server clock not sane at init — deferring ticks/history to OnTimer");
    else
       Health("clock_base_ok",StringFormat("offset_server_minus_gmt_s=%I64d",g_clockOffsetSec));
-   // on resume, flag the per-symbol gap between the loaded cursor and now (e.g. after a reset)
+   // on resume, flag the per-symbol gap between the loaded cursor and now (e.g. after a reset).
+   // Cursor and tick time are SERVER-clock, so compare against the server clock, not GMT.
    if(g_clockOk)
    {
-      long nowMs=NowMsc();
+      long nowMs=ServerNowMsc();
       for(int i=0;i<g_nSym;i++)
          if(g_lastMsc[i]>0 && nowMs-g_lastMsc[i]>(long)GapWarnSec*1000)
             Health("resume_gap",StringFormat("%s from_msc=%I64d to_msc=%I64d dur_s=%I64d (back-read on resume)",
@@ -583,6 +607,10 @@ void OnTimer()
    if(!ValidateClockBase())
    { if(g_clockOk){ g_clockOk=false; Health("clock_base_invalid","deferring ticks/history until clock sane"); } return; }
    if(!g_clockOk){ g_clockOk=true; Health("clock_base_ok",StringFormat("offset_server_minus_gmt_s=%I64d",g_clockOffsetSec)); }
+   // validate the TICK clock BASIS against a live tick (one-shot; enables UTC for ticks of ANY age)
+   bool tbase=ValidateTickClockBase();
+   if(tbase && !g_tickClockOk){ g_tickClockOk=true; Health("tick_clock_ok",StringFormat("live tick matches server clock (offset_s=%I64d) — utc_time enabled",g_clockOffsetSec)); }
+   else if(!tbase && g_tickClockOk){ g_tickClockOk=false; Health("tick_clock_unverified","no live tick matches server clock — utc_time left empty until reconfirmed"); }
 
    datetime day=UtcDayStart0(TimeGMT());
    if(day!=g_curDay){ g_curDay=day; SnapshotSymbols(); Health("day_rollover",DayTag(TimeGMT())); }

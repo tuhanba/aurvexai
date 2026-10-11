@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-REM === AurvexImporter v12 worker — run_importer.cmd ============================
+REM === AurvexImporter v13 worker — run_importer.cmd ============================
 REM Launched HIDDEN by run_importer_hidden.vbs (no console window). Does the real
 REM work: ATOMIC single-instance lock, logging, exit-code preservation.
 REM ---------------------------------------------------------------------------
@@ -8,9 +8,9 @@ REM Real python.exe path (confirmed by operator 2026-10-09).
 set "PY=C:\Users\pc\AppData\Local\Programs\Python\Python312\python.exe"
 REM Importer script under Downloads (confirm exact sub-path / filename).
 set "IMPORTER=C:\Users\pc\Downloads\aurvex_collector_import.py"
-REM Collector v12 output folder (MT5 "File > Open Data Folder").
-set "WATCHDIR=C:\Users\pc\AppData\Roaming\MetaQuotes\Terminal\81A933A9AFC5DE3C23B15CAB19C63850\MQL5\Files\AurvexCollector\v12"
-set "DB=C:\Users\pc\AurvexData\aurvex_live_v12.db"
+REM Collector v13 output folder (MT5 "File > Open Data Folder").
+set "WATCHDIR=C:\Users\pc\AppData\Roaming\MetaQuotes\Terminal\81A933A9AFC5DE3C23B15CAB19C63850\MQL5\Files\AurvexCollector\v13"
+set "DB=C:\Users\pc\AurvexData\aurvex_live_v13.db"
 set "REPORTDIR=C:\Users\pc\AurvexData\reports"
 set "LOGDIR=C:\Users\pc\AurvexData\logs"
 REM ===========================================================================
