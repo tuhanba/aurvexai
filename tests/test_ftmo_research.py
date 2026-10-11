@@ -309,27 +309,39 @@ def test_ledger_dedup_and_columns(tmp_path):
 # collector (schema version + zero-open handling)  (bug #6, #7)
 # --------------------------------------------------------------------------- #
 def _make_collector_db(path, version="1.3", ticks=True, positions="one",
-                       acc_snap="2026.09.02 12:10:00", pos_snap="2026.09.02 12:10:00"):
+                       acc_snap="2026.09.02 12:10:00", pos_snap="2026.09.02 12:10:00",
+                       unproven=0):
     con = sqlite3.connect(str(path))
     con.executescript("""
-      CREATE TABLE ticks(id INTEGER PRIMARY KEY, symbol TEXT, tick_msc INTEGER, seq INTEGER, utc_time TEXT);
+      CREATE TABLE ticks(id INTEGER PRIMARY KEY, symbol TEXT, tick_msc INTEGER, seq INTEGER,
+                         utc_time TEXT, bid REAL, ask REAL);
       CREATE TABLE account(id INTEGER PRIMARY KEY, collect_utc TEXT, utc_time TEXT, balance REAL, equity REAL);
-      CREATE TABLE deals(deal_ticket INTEGER PRIMARY KEY, symbol TEXT, owner TEXT, net REAL);
+      CREATE TABLE deals(deal_ticket INTEGER PRIMARY KEY, symbol TEXT, owner TEXT, net REAL,
+                         profit REAL, commission REAL, swap REAL, fee REAL);
       CREATE TABLE positions(id INTEGER PRIMARY KEY, collect_utc TEXT);
+      CREATE TABLE symbols(id INTEGER PRIMARY KEY, collect_utc TEXT, symbol TEXT, point REAL, spread_points INTEGER);
     """)
     if version is not None:
         con.execute("CREATE TABLE schema_meta(key TEXT PRIMARY KEY, value TEXT)")
         con.execute("INSERT INTO schema_meta VALUES('version',?)", (version,))
     if ticks:
         base = 1_700_000_000_000
-        rows = [("GER40.cash", base + i * 1000, 0, "2026.09.02 12:00:%02d" % i) for i in range(5)]
-        rows.append(("GER40.cash", base + 10_000_000, 0, "2026.09.02 12:10:00"))
-        con.executemany("INSERT INTO ticks(symbol,tick_msc,seq,utc_time) VALUES(?,?,?,?)", rows)
+        rows = [("GER40.cash", base + i * 1000, 0, "2026.09.02 12:00:%02d" % i, 100.0, 100.5)
+                for i in range(5)]
+        rows.append(("GER40.cash", base + 10_000_000, 0, "2026.09.02 12:10:00", 100.0, 100.5))
+        for j in range(unproven):                # clock-unverified rows carry an EMPTY utc_time
+            rows.append(("GER40.cash", base + 20_000_000 + j * 1000, 0, "", 100.0, 100.5))
+        con.executemany("INSERT INTO ticks(symbol,tick_msc,seq,utc_time,bid,ask) VALUES(?,?,?,?,?,?)", rows)
         con.execute("INSERT INTO account(collect_utc,utc_time,balance,equity) VALUES(?,?,25000,25010)",
                     (acc_snap, acc_snap))
-        con.executemany("INSERT INTO deals(deal_ticket,symbol,owner,net) VALUES(?,?,?,?)",
-                        [(1, "GER40.cash", "aurvex", 12.5), (2, "GER40.cash", "aurvex", -8.0),
-                         (3, "EURUSD", "foreign", 3.0)])
+        # net == profit + commission + swap + fee; GER40 nets 12.5 and -8.0 (tally 4.5)
+        con.executemany("INSERT INTO deals(deal_ticket,symbol,owner,net,profit,commission,swap,fee) "
+                        "VALUES(?,?,?,?,?,?,?,?)",
+                        [(1, "GER40.cash", "ours", 12.5, 14.5, -2.0, 0.0, 0.0),
+                         (2, "GER40.cash", "ours", -8.0, -8.0, 0.0, 0.0, 0.0),
+                         (3, "EURUSD", "foreign", 3.0, 3.0, 0.0, 0.0, 0.0)])
+        con.execute("INSERT INTO symbols(collect_utc,symbol,point,spread_points) VALUES(?,?,?,?)",
+                    (acc_snap, "GER40.cash", 0.01, 50))
     if positions == "one":                       # one open position recorded at pos_snap
         con.execute("INSERT INTO positions(collect_utc) VALUES(?)", (pos_snap,))
     con.commit(); con.close()
@@ -346,10 +358,26 @@ def test_collector_report(tmp_path):
     md = (tmp_path / "out" / "collector_report.md").read_text()
     assert "schema version: 1.3 (validated)" in md
     assert "NOT evidence" in md                                  # tester-coverage disclaimer
-    assert "1 gaps" in md and "| GER40.cash | aurvex | 2 | 4.5 |" in md
+    assert "1 gaps" in md and "| GER40.cash | ours | 2 | 4.5 |" in md
     assert "not an external reconciliation" in md               # honest section title
+    # after-cost breakdown: commission broken out, NET after cost
+    assert "After-cost net" in md and "| GER40.cash | 2 | 6.5 | -2.0 | 0.0 | 0.0 | 4.5 |" in md
+    # spread: avg (ask-bid)=0.5 price, /point(0.01)=50 pts
+    assert "Spread" in md and "0.500000" in md and "50.0" in md
+    # coverage: all 6 GER40 ticks clock-proven, 0 unproven
+    assert "Data coverage & clock-proven" in md and "| GER40.cash | 6 | 6 | 0 |" in md
     assert "1 open (current)" in md                              # pos snapshot in step w/ account
     assert "FOREIGN" in md
+
+
+def test_collector_unproven_ticks_excluded_from_timebased(tmp_path):
+    db = tmp_path / "u.db"; _make_collector_db(db, unproven=3)   # 6 proven + 3 unproven
+    ar.cmd_collector(_coll_ns(tmp_path, db))
+    md = (tmp_path / "out" / "collector_report.md").read_text()
+    assert "| GER40.cash | 9 | 6 | 3 |" in md                    # total 9, proven 6, unproven 3
+    assert "no session result may be produced from them" in md
+    # spread stat counts proven ticks only (6), not the 9 total
+    assert "| GER40.cash | 6 |" in md
 
 
 def test_collector_stale_positions_are_unknown_not_current(tmp_path):

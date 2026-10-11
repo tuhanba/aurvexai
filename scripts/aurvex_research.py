@@ -560,6 +560,65 @@ def cmd_collector(a):
         for r in drows:
             md.append(f"| {r['symbol']} | {r['owner']} | {r['n']} | {r['net']} |")
 
+    # ---- after-cost breakdown (ours): commission / swap / fee / gross profit / NET ----
+    md += ["", "## After-cost net (ours) — commission, swap, fee broken out"]
+    costs = cur.execute(
+        "SELECT symbol, COUNT(*) n, ROUND(SUM(profit),2) gross, ROUND(SUM(commission),2) comm, "
+        "ROUND(SUM(swap),2) swap, ROUND(SUM(fee),2) fee, ROUND(SUM(net),2) net "
+        "FROM deals WHERE owner='ours' GROUP BY symbol ORDER BY symbol").fetchall()
+    if not costs:
+        md.append("- no 'ours' deals recorded (no after-cost result to report)")
+    else:
+        md += ["| symbol | deals | gross profit | commission | swap | fee | NET (after cost) |",
+               "|---|---|---|---|---|---|---|"]
+        for r in costs:
+            md.append(f"| {r['symbol']} | {r['n']} | {r['gross']} | {r['comm']} | {r['swap']} | "
+                      f"{r['fee']} | {r['net']} |")
+        md.append("_NET already includes commission + swap + fee (not gross)._")
+
+    # ---- per-symbol spread (price + points) from captured ticks + latest symbol snapshot ----
+    md += ["", "## Spread (captured ticks; time-based, so clock-proven ticks only)"]
+    md += ["| symbol | proven ticks | avg spread (price) | avg spread (pts) | last spread_pts |",
+           "|---|---|---|---|---|"]
+    for r in fresh:
+        sym = r["symbol"]
+        sp = cur.execute("SELECT COUNT(*) n, AVG(ask-bid) av FROM ticks "
+                         "WHERE symbol=? AND utc_time<>'' AND ask>0 AND bid>0", (sym,)).fetchone()
+        srow = cur.execute("SELECT point, spread_points FROM symbols WHERE symbol=? "
+                           "ORDER BY id DESC LIMIT 1", (sym,)).fetchone()
+        point = (srow["point"] if srow and srow["point"] else 0) or 0
+        avg_px = sp["av"] if sp and sp["av"] is not None else None
+        avg_pts = (avg_px / point) if (avg_px is not None and point) else None
+        md.append(f"| {sym} | {sp['n'] if sp else 0} | "
+                  f"{('%.6f' % avg_px) if avg_px is not None else 'n/a'} | "
+                  f"{('%.1f' % avg_pts) if avg_pts is not None else 'n/a'} | "
+                  f"{srow['spread_points'] if srow else 'n/a'} |")
+
+    # ---- data coverage + clock-proven gating (session/time results use proven rows only) ----
+    md += ["", "## Data coverage & clock-proven gating"]
+    md += ["| symbol | total ticks | clock-proven | unproven (utc empty) | proven span (UTC) |",
+           "|---|---|---|---|---|"]
+    any_unproven = False
+    for r in fresh:
+        sym = r["symbol"]
+        cov = cur.execute(
+            "SELECT COUNT(*) tot, SUM(CASE WHEN utc_time<>'' THEN 1 ELSE 0 END) prov, "
+            "MIN(CASE WHEN utc_time<>'' THEN utc_time END) lo, "
+            "MAX(CASE WHEN utc_time<>'' THEN utc_time END) hi FROM ticks WHERE symbol=?",
+            (sym,)).fetchone()
+        prov = cov["prov"] or 0
+        unprov = (cov["tot"] or 0) - prov
+        if unprov:
+            any_unproven = True
+        span = f"`{cov['lo']}` … `{cov['hi']}`" if prov else "—"
+        md.append(f"| {sym} | {cov['tot']} | {prov} | {unprov} | {span} |")
+    md.append("")
+    md.append("_Clock-proven = tick `utc_time` is non-empty (collector confirmed the tick clock "
+              "basis for that symbol). **Session/time-of-day results must use clock-proven ticks "
+              "only;** unproven rows are excluded here and must not seed session conclusions._")
+    if any_unproven:
+        md.append("- ⚠ Unproven ticks present — no session result may be produced from them.")
+
     # Open positions must be correlated with the LATEST ACCOUNT snapshot. A position snapshot
     # older than the last account snapshot may be stale (positions opened/closed since), so it
     # cannot prove "flat". Only a position snapshot at/after the account snapshot proves state.
