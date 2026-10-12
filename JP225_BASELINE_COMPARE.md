@@ -20,14 +20,23 @@ can't satisfy it).
 
 ## Comparison to fill (same symbol JP225, same period, same 0.46% risk)
 
-| period | side | net | reached target? / days | equity DD | overall-limit viol (measurable) |
+| period | side | net | reached target? | overall-limit check | net_ex_top1 (robustness) |
 |---|---|---|---|---|---|
-| V1 2026.01.05–03.27 | M05 | … | … | … | … |
-| V1 | baseline@0.46 | … | … | … | … |
-| V2 2026.03.30–06.30 | M05 | … | … | … | … |
-| V2 | baseline@0.46 | … | … | … | … |
-| V3 2026.07.01–08.31 | M05 | … | … | … | … |
-| V3 | baseline@0.46 | … | … | … | … |
+| V1 2026.01.05–03.27 | **M05 (measured)** | **−480.48** | NO | UNKNOWN (min bal 24087.81 > floor; min equity n/a) | −615.73 |
+| V1 | baseline@0.46 | _run pkg_ | … | … | … |
+| V2 2026.03.30–06.30 | **M05 (measured)** | **+617.50** | NO | UNKNOWN (min bal 24885.00 > floor; min equity n/a) | **+488.75** |
+| V2 | baseline@0.46 | _run pkg_ | … | … | … |
+| V3 2026.07.01–08.31 | **M05 (measured)** | **+1141.09** | NO | UNKNOWN (min bal 24883.03 > floor; min equity n/a) | **+970.01** |
+| V3 | baseline@0.46 | _run pkg_ | … | … | … |
+
+**M05 JP225 OOS (measured, 10 of 12 arrived last; all 12 now in the ledger):**
+sum V1–V3 ≈ **+1278** net (realized comm+swap included). V2 and V3 are positive
+**and** stay positive with the single best trade removed (`net_ex_top1` +488.75 /
++970.01), so the JP225 result is **not** monster-driven — this is why JP225
+remains a live research candidate while GER40/XAUUSD/XAGUSD were eliminated. The
+baseline@0.46 column is filled by running the prepared package
+(`experiments/JP225_baseline_cmp/`). Reached-target is NO per single OOS leg
+(no +10% within one leg); none of this is a live-go signal on its own.
 
 `reports` fills `net`, `reached_target`/`days_to_target`, `eq_dd_pct` (context
 only), and the `limit_viol` column. The FTMO **overall** limit is **minimum
