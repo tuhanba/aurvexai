@@ -568,10 +568,13 @@ def _write_scan(path, rows):
 
 def _scan_row(**kw):
     base = dict(id="M01", method="Inside-bar breakout", family="breakout", aliases="IB",
+                source_verified="yes", from_source="break of mother bar; stop opposite end; 1R",
+                our_adaptation="FTMO overlay; closed-bar+tick",
                 condition="inside bar", entry="stop beyond", stop="opposite side", exit="R",
                 data_need="OHLC", have_data="yes", codable="high", cost_sensitivity="med",
                 needs_orderbook="no", evidence="blog; no cited data", vague_flags="", missing_rules="",
-                source_urls="https://example.com/ib", selected="no", rationale="")
+                source_urls="https://example.com/ib", selected="no", locked="no",
+                status="catalogued", decision="reserve", rationale="")
     base.update(kw)
     return base
 
@@ -602,9 +605,39 @@ def test_sources_errors_when_selected_needs_orderbook(tmp_path):
 
 def test_sources_errors_when_no_source_link(tmp_path):
     led = tmp_path / "scan.csv"
-    _write_scan(led, [_scan_row(id="M05", source_urls="", selected="no")])
+    _write_scan(led, [_scan_row(id="M05", source_urls="", selected="no")])  # verified but no link
     ns = types.SimpleNamespace(ledger=str(led), out=str(tmp_path / "out"))
-    assert ar.cmd_sources(ns) == 1                                # a method with no source is rejected
+    assert ar.cmd_sources(ns) == 1                                # a verified method with no source is rejected
+
+
+def test_sources_unverified_row_must_leave_rules_unknown(tmp_path):
+    led = tmp_path / "scan.csv"
+    # unverified (UNKNOWN) but rules are filled in anyway -> fabrication, rejected
+    _write_scan(led, [_scan_row(id="M02", source_verified="UNKNOWN", source_urls="",
+                                condition="trending", entry="pull to VWAP", stop="x", exit="y")])
+    ns = types.SimpleNamespace(ledger=str(led), out=str(tmp_path / "out"))
+    assert ar.cmd_sources(ns) == 1
+
+
+def test_sources_unknown_row_with_unknown_rules_is_ok(tmp_path):
+    led = tmp_path / "scan.csv"
+    _write_scan(led, [_scan_row(id="M02", method="VWAP", source_verified="UNKNOWN", source_urls="",
+                                from_source="UNKNOWN", our_adaptation="",
+                                condition="UNKNOWN", entry="UNKNOWN", stop="UNKNOWN", exit="UNKNOWN",
+                                selected="no", status="needs-source")])
+    ns = types.SimpleNamespace(ledger=str(led), out=str(tmp_path / "out"))
+    assert ar.cmd_sources(ns) == 0                                # honest UNKNOWN row passes
+    md = (tmp_path / "out" / "source_scan_status.md").read_text()
+    assert "UNKNOWN" in md and "M02" in md
+
+
+def test_sources_selected_must_be_verified(tmp_path):
+    led = tmp_path / "scan.csv"
+    _write_scan(led, [_scan_row(id="M02", source_verified="UNKNOWN", source_urls="",
+                                condition="UNKNOWN", entry="UNKNOWN", stop="UNKNOWN", exit="UNKNOWN",
+                                selected="yes")])
+    ns = types.SimpleNamespace(ledger=str(led), out=str(tmp_path / "out"))
+    assert ar.cmd_sources(ns) == 1                                # cannot select an unverified method
 
 
 def test_shipped_source_scan_ledger_is_valid(tmp_path):

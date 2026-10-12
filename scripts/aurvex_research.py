@@ -1101,16 +1101,24 @@ def cmd_derive(a):
 
 
 SOURCE_SCAN_COLS = [
-    "id", "method", "family", "aliases", "condition", "entry", "stop", "exit",
-    "data_need", "have_data", "codable", "cost_sensitivity", "needs_orderbook",
-    "evidence", "vague_flags", "missing_rules", "source_urls", "selected", "rationale",
-    "status", "decision",
+    "id", "method", "family", "aliases", "source_verified", "from_source", "our_adaptation",
+    "condition", "entry", "stop", "exit", "data_need", "have_data", "codable",
+    "cost_sensitivity", "needs_orderbook", "evidence", "vague_flags", "missing_rules",
+    "source_urls", "selected", "locked", "status", "decision", "rationale",
 ]
+
+_SS_RULE_FIELDS = ("condition", "entry", "stop", "exit")
+
+
+def _ss_yes(v):
+    return (v or "").strip().lower() in ("yes", "y", "true", "1")
 
 
 def cmd_sources(a):
-    """Validate + report the source-scan ledger (read-only). Never fabricates a
-    rule and never lets a 'selected' method depend on data we lack."""
+    """Validate + report the source-scan ledger (read-only). Enforces the scan
+    discipline: a VERIFIED row has a directly-supporting source and real rules;
+    an UNKNOWN (unverified) row leaves its rules UNKNOWN (never fabricated); a
+    SELECTED method is verified and does not depend on data we lack."""
     if not os.path.exists(a.ledger):
         print(f"sources: ledger not found: {a.ledger}", file=sys.stderr)
         return 2
@@ -1127,38 +1135,64 @@ def cmd_sources(a):
     errors, warns = [], []
     for r in rows:
         rid = r.get("id") or "?"
-        if not (r.get("source_urls") or "").strip():
-            errors.append(f"{rid}: no source link (ads/claims are not evidence; a real source is required)")
-        sel = (r.get("selected") or "").strip().lower() in ("yes", "y", "true", "1")
-        ob = (r.get("needs_orderbook") or "").strip().lower() in ("yes", "y", "true", "1")
+        verified = (r.get("source_verified") or "").strip().lower() == "yes"
+        has_src = bool((r.get("source_urls") or "").strip())
+        rules_known = [f for f in _SS_RULE_FIELDS if (r.get(f) or "").strip().upper() != "UNKNOWN"
+                       and (r.get(f) or "").strip()]
+        sel = _ss_yes(r.get("selected"))
+        ob = _ss_yes(r.get("needs_orderbook"))
         have = (r.get("have_data") or "").strip().lower()
+
+        if verified and not has_src:
+            errors.append(f"{rid}: source_verified=yes but NO source link — a direct source is required")
+        if verified and not rules_known:
+            errors.append(f"{rid}: source_verified=yes but all rule fields are UNKNOWN — contradiction")
+        if (not verified) and rules_known:
+            errors.append(f"{rid}: source_verified!=yes but rule fields are filled — leave unverified rules UNKNOWN")
+        if (not verified) and has_src:
+            warns.append(f"{rid}: has a link but source_verified!=yes — link does not directly support the rules")
+        # selection discipline
+        if sel and not verified:
+            errors.append(f"{rid}: SELECTED but source not verified — only directly-sourced methods are selectable")
         if sel and ob:
             errors.append(f"{rid}: SELECTED but flagged order-book-dependent — contradiction")
         if sel and have == "no":
             errors.append(f"{rid}: SELECTED but have_data=no — cannot test with data in hand")
-        if sel and (r.get("missing_rules") or "").strip() and "paramet" not in (r.get("rationale") or "").lower() \
-                and "paramet" not in (r.get("missing_rules") or "").lower():
-            warns.append(f"{rid}: SELECTED with a missing rule not marked parameterizable — confirm it is tested, not invented")
         if ob:
             warns.append(f"{rid}: needs order-book depth we do NOT capture — parked (data we lack)")
 
-    selected = [r for r in rows if (r.get("selected") or "").strip().lower() in ("yes", "y", "true", "1")]
-    orderbook = [r for r in rows if (r.get("needs_orderbook") or "").strip().lower() in ("yes", "y", "true", "1")]
+    selected = [r for r in rows if _ss_yes(r.get("selected"))]
+    locked = [r for r in rows if _ss_yes(r.get("locked"))]
+    verified = [r for r in rows if (r.get("source_verified") or "").strip().lower() == "yes"]
+    unknown = [r for r in rows if (r.get("source_verified") or "").strip().lower() != "yes"]
+    orderbook = [r for r in rows if _ss_yes(r.get("needs_orderbook"))]
 
     os.makedirs(a.out, exist_ok=True)
     md = ["# Source-scan status", "",
-          f"- ledger: `{a.ledger}` · candidates: **{len(rows)}** · selected: **{len(selected)}** · "
-          f"order-book-dependent (parked): **{len(orderbook)}**",
+          f"- ledger: `{a.ledger}` · candidates: **{len(rows)}** · source-verified: **{len(verified)}** · "
+          f"UNKNOWN (unverified): **{len(unknown)}** · selected: **{len(selected)}** · locked (EA ready): "
+          f"**{len(locked)}**",
           "- Ads / profit-claims / cherry-picked winners are NOT counted as evidence.",
-          "- Vague rules are flagged; missing rules are parameterized+tested, never invented.", "",
-          "| id | method | family | data | code | cost | order-book | selected |",
-          "|---|---|---|---|---|---|---|---|"]
+          "- Every verified row cites a source that DIRECTLY supports its rules; `from_source` and "
+          "`our_adaptation` are kept separate; unverifiable rules are left UNKNOWN, never invented.", "",
+          "| id | method | family | verified | data | code | cost | order-book | selected | locked |",
+          "|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
-        md.append(f"| {r['id']} | {r['method']} | {r['family']} | {r['have_data']} | {r['codable']} | "
-                  f"{r['cost_sensitivity']} | {r['needs_orderbook']} | {r['selected']} |")
-    md += ["", "## Selected for first test"]
+        md.append(f"| {r['id']} | {r['method']} | {r['family']} | {r['source_verified']} | {r['have_data']} | "
+                  f"{r['codable']} | {r['cost_sensitivity']} | {r['needs_orderbook']} | {r['selected']} | "
+                  f"{r['locked']} |")
+    if locked:
+        md += ["", "## Locked (rules fixed, EA + sets exist)"]
+        for r in locked:
+            md.append(f"- **{r['id']} {r['method']}**: {r['rationale']}")
+    md += ["", "## Selected for first test (locked first, others QUEUED — no EA yet)"]
     for r in selected:
-        md.append(f"- **{r['id']} {r['method']}** ({r['family']}): {r['rationale']}")
+        q = "" if _ss_yes(r.get("locked")) else " _(queued — no EA)_"
+        md.append(f"- **{r['id']} {r['method']}** ({r['family']}){q}: {r['rationale']}")
+    if unknown:
+        md += ["", "## UNKNOWN — no directly-supporting source verified in scan #1"]
+        for r in unknown:
+            md.append(f"- **{r['id']} {r['method']}**: rules left UNKNOWN — {r['rationale']}")
     if orderbook:
         md += ["", "## Flagged — data we lack (parked)"]
         for r in orderbook:
@@ -1174,8 +1208,9 @@ def cmd_sources(a):
         print(f"ERROR {e}", file=sys.stderr)
     for w in warns:
         print(f"note  {w}")
-    print(f"sources: {len(rows)} candidates | selected {len(selected)} "
-          f"({', '.join(r['id'] for r in selected)}) | parked(order-book) {len(orderbook)}")
+    print(f"sources: {len(rows)} candidates | verified {len(verified)} | UNKNOWN {len(unknown)} | "
+          f"selected {len(selected)} ({', '.join(r['id'] for r in selected)}) | "
+          f"locked {len(locked)} ({', '.join(r['id'] for r in locked)}) | parked(order-book) {len(orderbook)}")
     print(f"out: {outp}")
     return 1 if errors else 0
 

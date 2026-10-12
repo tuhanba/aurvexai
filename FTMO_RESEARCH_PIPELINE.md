@@ -45,16 +45,21 @@ sources    [--ledger CSV] [--out DIR]
 7. **Source-scan research track** — `sources` + `FTMO_SOURCE_SCAN.md` +
    `research_out/source_scan_ledger.csv`. Scans how day-trading methods are *described* in
    public sources (blogs, indicator listings, forums) as **condition → entry → stop → exit**,
-   not limited to the names we picked for C1–C4. Each method records **source links**; ads /
-   profit-claims / cherry-picked winners are **not** evidence; aliases of one method are merged;
-   vague rules are **flagged** and missing rules are **parameterized + tested**, never invented.
-   `sources` validates the ledger (every row has a source; no **selected** method depends on data
-   we lack or an unflagged missing rule) and reports the catalog + the 3 first-test picks, exiting
-   non-zero on a contradiction. Scan #1: 11 candidates, selected **M05 inside-bar / M07 Turtle-Soup
-   false-break / M09 RSI(2)**, with **M11 liquidity-sweep parked** (needs order-book depth we do
-   not capture). Selected methods are compared on the **same symbols/periods/risk** as the current
-   system, reporting after-cost gain + time-to-target + drawdown + **account-limit violation rate**
-   together, and validated on reserved periods before being believed.
+   not limited to the names we picked for C1–C4. Each rule is backed by a source that **directly
+   describes that rule**; `from_source` and `our_adaptation` are **separate** columns; where a
+   method's rules can't be tied to a directly-supporting source the row is left **UNKNOWN** (rules
+   blanked, not guessed). Ads / profit-claims / cherry-picked winners are **not** evidence; aliases
+   are merged; vague rules are flagged and missing rules are parameterized + tested, never invented.
+   `sources` validates the ledger (verified rows have a direct source and real rules; unverified
+   rows keep rules UNKNOWN; a **selected** method must be verified and not depend on data we lack)
+   and reports the catalog + the locked/queued/UNKNOWN split, exiting non-zero on a contradiction or
+   a fabricated rule. Scan #1: 11 candidates, **6 source-verified / 5 UNKNOWN**; shortlisted M05 /
+   M07 / M09; **only M05 (inside-bar) is LOCKED** with a tester EA
+   (`mql5/AurvexInsideBarCandidate_m05.mq5`) + sets + `candidates/M05_INSIDEBAR_CONFIG.md`; M07/M09
+   stay **queued** (no EA); M11 parked (order-book depth we do not capture). A locked method is
+   compared on the **same symbols/periods/risk** as the current system, reporting after-cost gain +
+   time-to-target + drawdown + **account-limit violation rate** together, and validated on reserved
+   periods before being believed. No operator run-task is issued and the live EA/sets are untouched.
 
 ## Success criteria (met)
 
