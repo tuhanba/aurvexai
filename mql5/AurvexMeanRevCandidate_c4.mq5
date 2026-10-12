@@ -97,6 +97,10 @@ void OnTick()
    if(AcctDayIndex(u)!=g_acctDay) RefreshDay(u);
    CheckGuards();
    bool have=(PositionSelect(SYM)&&PositionGetInteger(POSITION_MAGIC)==Magic);
+
+   // while HALTED, keep retrying the close every tick until the position is actually gone
+   if((g_haltAll||g_haltDay) && have){ FlattenC(); return; }
+
    if(have)
    {
       if(TimeStopMin>0 && g_posOpenUtc>0 && (long)u-(long)g_posOpenUtc>=(long)TimeStopMin*60){ FlattenC(); return; }

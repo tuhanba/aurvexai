@@ -69,9 +69,13 @@ long    g_acctDay=0;
 datetime g_lastBar=0;
 int     g_tradesToday=0;
 bool    g_haltAll=false, g_haltDay=false;
-int     g_pendDir=0;                 // pending setup from the CLOSED inside bar: +1 up, -1 down, 0 none
-double  g_pendTrigger=0, g_pendStop=0, g_pendTp=0;   // breakout trigger, stop distance, TP distance
-int     g_pendAge=0;                 // bars since the setup was armed
+// BOTH directions are armed from one inside bar (OCO): the first realized breakout cancels the
+// other. Stops are FIXED at the mother high/low PRICE; lot/TP/cost-gate are computed at the
+// trigger from the REAL entry-stop distance (not pre-computed at setup).
+bool    g_pendUp=false, g_pendDn=false;        // long / short arm live?
+double  g_trigUp=0, g_trigDn=0;                // breakout trigger prices (mother high/low +/- buffer)
+double  g_stopUpPx=0, g_stopDnPx=0;            // FIXED stop PRICE: mother low (long) / mother high (short)
+int     g_pendAge=0;                           // bars since the pair was armed
 
 long ServerUtcOffset()
 {
@@ -108,6 +112,25 @@ int OnInit()
 }
 void OnDeinit(const int reason){ }
 
+// enter at the trigger: stop is the FIXED mother price (slPx); lot/TP/cost-gate from the REAL
+// entry-stop distance measured NOW. Returns true if a position was opened.
+bool TryEnter(bool isLong, double slPx)
+{
+   double ask=SymbolInfoDouble(SYM,SYMBOL_ASK), bid=SymbolInfoDouble(SYM,SYMBOL_BID), m=MoneyPerPricePerLot();
+   double entry=isLong?ask:bid;
+   double stopDist=isLong?(entry-slPx):(slPx-entry);           // real entry->stop distance at the trigger
+   if(stopDist<=0) return false;
+   double costPx=(ask-bid)+((m>0)?(2.0*CommissionPerLotUSD)/m:0.0)+SlippageBufferPts*PointSize();
+   if(stopDist < CostGateMult*costPx) return false;            // re-check the cost gate at the trigger
+   double lots=LotsForStop(stopDist); if(lots<=0) return false;
+   double tp=isLong?(entry+TpR*stopDist):(entry-TpR*stopDist); // TP from the real distance
+   if(isLong) trade.Buy (lots,SYM,0.0,slPx,tp,"insidebarM05"); // SL fixed at the mother low  PRICE
+   else       trade.Sell(lots,SYM,0.0,slPx,tp,"insidebarM05"); // SL fixed at the mother high PRICE
+   uint rc=trade.ResultRetcode();
+   if(rc==TRADE_RETCODE_DONE||rc==TRADE_RETCODE_PLACED){ g_tradesToday++; return true; }
+   return false;
+}
+
 void OnTick()
 {
    datetime u=NowUtc();
@@ -115,7 +138,10 @@ void OnTick()
    CheckGuards();
    bool have=(PositionSelect(SYM)&&PositionGetInteger(POSITION_MAGIC)==Magic);
 
-   // manage open position: SL/TP are broker-side (fixed-R, per source); only force weekend/Friday flat
+   // while HALTED, keep retrying the close every tick until the position is actually gone
+   if((g_haltAll||g_haltDay) && have){ FlattenC(); return; }
+
+   // manage open position: SL/TP are broker-side (fixed, per source); only force weekend/Friday flat
    if(have)
    {
       if(WeekendOrFriClose(u)){ FlattenC(); }
@@ -124,46 +150,44 @@ void OnTick()
    if(g_haltAll||g_haltDay||WeekendOrFriClose(u)) return;
 
    // On each NEW CLOSED bar of InsideTF, (re)build the pending setup from closed-bar data only.
-   // bar[2] = mother bar, bar[1] = inside bar (fully contained). Trigger = mother high/low. [ADAPTATION: closed-bar+tick]
+   // bar[2] = mother bar, bar[1] = inside bar (fully contained). BOTH directions are armed. [ADAPTATION: closed-bar+tick, OCO]
    datetime bar=iTime(SYM,InsideTF,0);
    if(bar!=g_lastBar)
    {
       g_lastBar=bar;
-      if(g_pendDir!=0 && ++g_pendAge>SetupValidBars) g_pendDir=0;   // expire an un-triggered setup
+      if((g_pendUp||g_pendDn) && ++g_pendAge>SetupValidBars){ g_pendUp=false; g_pendDn=false; }  // expire
       double mh=iHigh(SYM,InsideTF,2), ml=iLow(SYM,InsideTF,2);     // mother bar
       double ih=iHigh(SYM,InsideTF,1), il=iLow(SYM,InsideTF,1);     // inside bar
       bool inside=(mh>ml) && (ih<=mh) && (il>=ml) && !(ih==mh && il==ml);
       if(inside)
       {
-         double stopUp=(mh+BreakBufferPts*PointSize())-ml;         // long: stop at mother low (opposite end)
-         double stopDn=mh-(ml-BreakBufferPts*PointSize());         // short: stop at mother high (opposite end)
+         // setup-time pre-gate on the approximate (mother-range) distance; the AUTHORITATIVE
+         // cost-gate / lot / TP are re-computed at the trigger from the real distance.
          double ask=SymbolInfoDouble(SYM,SYMBOL_ASK), bid=SymbolInfoDouble(SYM,SYMBOL_BID), m=MoneyPerPricePerLot();
          double costPx=(ask-bid)+((m>0)?(2.0*CommissionPerLotUSD)/m:0.0)+SlippageBufferPts*PointSize();
-         // arm a FRESH setup (overrides any stale one so a new inside bar re-arms the trigger)
-         if(stopUp>0 && stopUp>=CostGateMult*costPx)
-         { g_pendDir=+1; g_pendTrigger=mh+BreakBufferPts*PointSize(); g_pendStop=stopUp; g_pendTp=TpR*stopUp; g_pendAge=0; }
-         else if(stopDn>0 && stopDn>=CostGateMult*costPx)
-         { g_pendDir=-1; g_pendTrigger=ml-BreakBufferPts*PointSize(); g_pendStop=stopDn; g_pendTp=TpR*stopDn; g_pendAge=0; }
+         double buf=BreakBufferPts*PointSize();
+         if((mh-ml) > 0 && (mh-ml) >= CostGateMult*costPx)
+         {
+            g_trigUp=mh+buf; g_stopUpPx=ml;     // long: trigger above mother high, FIXED stop at mother low
+            g_trigDn=ml-buf; g_stopDnPx=mh;     // short: trigger below mother low, FIXED stop at mother high
+            g_pendUp=true; g_pendDn=true; g_pendAge=0;
+         }
       }
    }
 
-   // watch the pending breakout on EVERY tick of the current bar
-   if(g_pendDir==0 || g_tradesToday>=MaxTradesPerDay) return;
+   // watch BOTH triggers on EVERY tick; the first realized breakout cancels the other (OCO)
+   if(!(g_pendUp||g_pendDn) || g_tradesToday>=MaxTradesPerDay) return;
    double ask=SymbolInfoDouble(SYM,SYMBOL_ASK), bid=SymbolInfoDouble(SYM,SYMBOL_BID);
-   double lots=LotsForStop(g_pendStop); if(lots<=0){ g_pendDir=0; return; }
-   // optional BOIB-Pro close-beyond confirmation: require the last CLOSED bar to close beyond the trigger
-   double c1=iClose(SYM,InsideTF,1);
-   if(g_pendDir>0 && ask>g_pendTrigger && (!RequireCloseBeyond || c1>g_pendTrigger))
+   double c1=iClose(SYM,InsideTF,1);           // optional BOIB-Pro close-beyond confirmation
+   if(g_pendUp && ask>g_trigUp && (!RequireCloseBeyond || c1>g_trigUp))
    {
-      trade.Buy(lots,SYM,0.0,ask-g_pendStop,ask+g_pendTp,"insidebarM05"); uint rc=trade.ResultRetcode();
-      if(rc==TRADE_RETCODE_DONE||rc==TRADE_RETCODE_PLACED){ g_tradesToday++; }
-      g_pendDir=0;                                           // setup consumed either way
+      g_pendUp=false; g_pendDn=false;          // realized breakout -> cancel the opposite side
+      TryEnter(true, g_stopUpPx);
    }
-   else if(g_pendDir<0 && bid<g_pendTrigger && (!RequireCloseBeyond || c1<g_pendTrigger))
+   else if(g_pendDn && bid<g_trigDn && (!RequireCloseBeyond || c1<g_trigDn))
    {
-      trade.Sell(lots,SYM,0.0,bid+g_pendStop,bid-g_pendTp,"insidebarM05"); uint rc=trade.ResultRetcode();
-      if(rc==TRADE_RETCODE_DONE||rc==TRADE_RETCODE_PLACED){ g_tradesToday++; }
-      g_pendDir=0;
+      g_pendUp=false; g_pendDn=false;
+      TryEnter(false, g_stopDnPx);
    }
 }
 //+------------------------------------------------------------------+

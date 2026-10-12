@@ -18,7 +18,7 @@ Subcommands (stdlib only, no pip, Windows-friendly):
 
 Nothing here edits live settings or the trading EA. Read-only inputs only.
 """
-import argparse, csv, datetime as dt, glob, hashlib, json, os, re, sqlite3, sys
+import argparse, csv, datetime as dt, glob, hashlib, json, os, re, sqlite3, sys, time
 
 COLLECTOR_SCHEMA_VERSION = "1.3"   # must match AurvexCollector importer SCHEMA_VERSION (v13 = true-UTC utc_time)
 
@@ -433,29 +433,47 @@ def _sig_diffs(rep, base, vary):
 def cmd_reports(a):
     from collections import Counter, OrderedDict
     files = sorted(glob.glob(os.path.join(a.dir, "*.htm*")))
-    parsed = [parse_mt5_report(p) for p in files]
-    os.makedirs(a.out, exist_ok=True)
     target_pct = getattr(a, "target_pct", None)
     # --expect: analyze ONLY this run's reports (tags from a batch's expected_reports.txt) and
     # ERROR on any missing (a failed / not-produced run). Without it, every *.htm in --dir is read.
-    expect_tags, missing_expected = [], []
+    # The expected file's `# run_id:` header scopes BOTH the matching (a report must carry the run
+    # id, so a stale report from an earlier run cannot satisfy this run) and the output folder (a
+    # per-run subdir, so an old analysis never overwrites or is mistaken for the new one).
+    expect_tags, missing_expected, run_id = [], [], None
     expect_path = getattr(a, "expect", None)
     if expect_path:
         if not os.path.exists(expect_path):
             print(f"reports: --expect file not found: {expect_path}", file=sys.stderr); return 3
-        expect_tags = [ln.strip() for ln in open(expect_path, encoding="utf-8") if ln.strip()]
+        for ln in open(expect_path, encoding="utf-8"):
+            s = ln.strip()
+            if not s:
+                continue
+            if s.startswith("#"):
+                m = re.match(r"#\s*run_id:\s*(\S+)", s)
+                if m:
+                    run_id = m.group(1)
+                continue
+            expect_tags.append(s)
+        if run_id:
+            a.out = os.path.join(a.out, run_id)         # per-run output folder
         keep, present = [], set()
         for p in files:
             bn = os.path.basename(p)
+            # a report matches only if it carries the expected tag AND (when known) the run id,
+            # so an earlier run's report with a different/absent run id is ignored, not accepted.
+            if run_id and run_id not in bn:
+                continue
             hit = next((t for t in expect_tags if t in bn), None)
             if hit:
                 keep.append(p); present.add(hit)
         missing_expected = [t for t in expect_tags if t not in present]
         ignored = len(files) - len(keep)
         files = keep
-        parsed = [parse_mt5_report(p) for p in files]
         if ignored:
-            print(f"reports: --expect active; ignoring {ignored} report(s) not from this run")
+            print(f"reports: --expect active (run_id={run_id or 'n/a'}); "
+                  f"ignoring {ignored} report(s) not from this run")
+    os.makedirs(a.out, exist_ok=True)
+    parsed = [parse_mt5_report(p) for p in files]
     rejected, valid = [], []
     for rep in parsed:
         sha = hashlib.sha256(open(os.path.join(a.dir, rep["file"]), "rb").read()).hexdigest()[:16]
@@ -887,6 +905,13 @@ def cmd_batch(a):
     ledger = _load_ledger(a.ledger)
     dst_sets = _parse_dst_sets(getattr(a, "dst_set", None))
     cand = a.candidate
+    # Unique run id so each experiment gets its OWN output folder and its OWN report tags; a stale
+    # report from an earlier run (different run id) can NEVER satisfy this run's expectation.
+    run_id = getattr(a, "run_id", None)
+    if not run_id:
+        seed = f"{cand}|{a.symbols}|{a.periods}|{a.tf}|{time.time_ns()}"
+        run_id = f"{cand}_{dt.datetime.utcnow():%Y%m%d-%H%M%S}_{hashlib.sha1(seed.encode()).hexdigest()[:6]}"
+    a.out = os.path.join(a.out, run_id)          # per-run output folder (separate per experiment)
     os.makedirs(os.path.join(a.out, "ini"), exist_ok=True)
     os.makedirs(os.path.join(a.out, "sets"), exist_ok=True)
     os.makedirs(os.path.join(a.out, "reports"), exist_ok=True)
@@ -901,7 +926,9 @@ def cmd_batch(a):
             if off is None:
                 skipped.append((sym, pf, pt, note)); continue
             seen = _exam_status(ledger, sym, pf, pt, dev_f, dev_t)
-            tag = f"{cand}_{_sym_tag(sym)}_{_dottag(pf)}_{_dottag(pt)}"
+            # the run id is part of every tag, so a report's filename carries it and an old run's
+            # report (different run id) cannot be mistaken for this run's expected report.
+            tag = f"{run_id}__{_sym_tag(sym)}_{_dottag(pf)}_{_dottag(pt)}"
             setname = tag + ".set"
             pt_date = _parse_date(pt)
             is_pending = pt_date is not None and pt_date > today
@@ -964,6 +991,8 @@ def cmd_batch(a):
 
     man = [f"# Batch tester manifest — candidate `{cand}` — {len(emitted)} runnable, "
            f"{len(pending)} pending", "",
+           f"- **run_id: `{run_id}`** — this run's own output folder; every report tag carries it, so "
+           "a report from an earlier run cannot satisfy this run.",
            f"- EA: `{a.ea}` · base-set pattern: `{a.set_pattern}` (in `{a.sets}`)",
            f"- Separate tester terminal: `{mt5}\\terminal64.exe` (edit in `run_all.bat`; keep it",
            "  distinct from the live terminal — this never touches the live install).",
@@ -1012,12 +1041,14 @@ def cmd_batch(a):
             man.append(f"- {sym}: expected `{base}`")
         man.append("")
     open(os.path.join(a.out, "MANIFEST.md"), "w", encoding="utf-8").write("\n".join(man) + "\n")
-    # expected-reports manifest: the RUNNABLE run tags. `reports --expect` uses it to analyze ONLY
-    # this run's reports and to ERROR if any expected report is missing (a failed/not-run cell).
+    # expected-reports manifest: the run id + the RUNNABLE run tags. `reports --expect` uses it to
+    # analyze ONLY this run's reports (tags carry the run id) and to ERROR if any expected report is
+    # missing (a failed/not-run cell). A stale report from an earlier run cannot match these tags.
+    exp_lines = [f"# run_id: {run_id}"] + [t for (_, _, _, _, _, t, _) in emitted]
     open(os.path.join(a.out, "expected_reports.txt"), "w", encoding="utf-8").write(
-        "\n".join(t for (_, _, _, _, _, t, _) in emitted) + ("\n" if emitted else ""))
+        "\n".join(exp_lines) + "\n")
 
-    print(f"batch[{cand}]: runnable {len(emitted)} | pending(future) {len(pending)} | "
+    print(f"batch[{cand}] run_id={run_id}: runnable {len(emitted)} | pending(future) {len(pending)} | "
           f"skipped(boundary) {len(skipped)} | missing-set {len(missing)}")
     print(f"out: {a.out}/ini/*.ini , {a.out}/sets/*.set , {a.out}/run_all.bat , {a.out}/MANIFEST.md")
     return 0
@@ -1259,6 +1290,9 @@ def main():
     b.add_argument("--dst-set", dest="dst_set", action="append", default=None,
                    help="per-period DST override 'KEY:winterVal:summerVal' (repeatable), e.g. "
                         "OrbRangeHourUTC:8:7 for a London open that is 08:00 UTC in winter / 07:00 in summer")
+    b.add_argument("--run-id", dest="run_id", default=None,
+                   help="override the auto run id (per-run output folder + report-tag prefix); "
+                        "default is a unique timestamped id so stale reports cannot satisfy a new run")
     b.add_argument("--out", default="batch_out")
     b.set_defaults(func=cmd_batch)
     d = sub.add_parser("derive", help="derive baseline .set files from validated MT5 reports")

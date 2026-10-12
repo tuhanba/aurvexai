@@ -447,23 +447,31 @@ def _make_base_set(sets_dir, sym):
 
 
 def _batch_ns(tmp_path, sets_dir, periods, symbols="GER40.cash", ledger=None, today="2026.10.03",
-              candidate="v314_baseline", ea="Advisors\\Aurvex_v314_test_utc.ex5"):
+              candidate="v314_baseline", ea="Advisors\\Aurvex_v314_test_utc.ex5", run_id=None):
+    # fixed run_id keeps the per-run output folder + report tags deterministic in tests
     return types.SimpleNamespace(
         ea=ea, candidate=candidate, symbols=symbols, sets=str(sets_dir),
         set_pattern="AurvexFTMO_v3_15_{sym}.set", periods=periods, tf="H1", deposit="25000",
         leverage="100", mt5_path="C:\\MT5Tester", dev_period="2026.09.01:2026.10.02",
-        ledger=ledger, today=today, out=str(tmp_path / "bout"))
+        ledger=ledger, today=today, dst_set=None, run_id=(run_id or candidate),
+        out=str(tmp_path / "bout"))
+
+
+def _bout(tmp_path, candidate="v314_baseline"):
+    # cmd_batch writes under <out>/<run_id>; the tests pin run_id = candidate
+    return tmp_path / "bout" / candidate
 
 
 def test_batch_pins_offset_per_dst_and_default_ea_is_v314(tmp_path):
     sets = tmp_path / "sets"; _make_base_set(sets, "GER40.cash")
     ns = _batch_ns(tmp_path, sets, "2026.01.05:2026.03.27,2026.03.30:2026.06.30")
     assert ar.cmd_batch(ns) == 0
-    winter = (tmp_path / "bout" / "sets" / "v314_baseline_GER40_cash_20260105_20260327.set").read_text()
-    summer = (tmp_path / "bout" / "sets" / "v314_baseline_GER40_cash_20260330_20260630.set").read_text()
+    bout = _bout(tmp_path)
+    winter = (bout / "sets" / "v314_baseline__GER40_cash_20260105_20260327.set").read_text()
+    summer = (bout / "sets" / "v314_baseline__GER40_cash_20260330_20260630.set").read_text()
     assert "TesterServerUtcOffsetHours=2" in winter
     assert "TesterServerUtcOffsetHours=3" in summer
-    ini = (tmp_path / "bout" / "ini" / "v314_baseline_GER40_cash_20260105_20260327.ini").read_text()
+    ini = (bout / "ini" / "v314_baseline__GER40_cash_20260105_20260327.ini").read_text()
     assert "Aurvex_v314_test_utc.ex5" in ini                     # v3.14 tester EA default
 
 
@@ -472,9 +480,11 @@ def test_batch_candidate_label_in_outputs(tmp_path):
     ns = _batch_ns(tmp_path, sets, "2026.03.30:2026.06.30", candidate="v315_candidate",
                    ea="Advisors\\AurvexFTMO_v3_15_live.ex5")
     ar.cmd_batch(ns)
-    assert (tmp_path / "bout" / "ini" / "v315_candidate_GER40_cash_20260330_20260630.ini").exists()
-    man = (tmp_path / "bout" / "MANIFEST.md").read_text()
+    bout = _bout(tmp_path, "v315_candidate")
+    assert (bout / "ini" / "v315_candidate__GER40_cash_20260330_20260630.ini").exists()
+    man = (bout / "MANIFEST.md").read_text()
     assert "candidate `v315_candidate`" in man
+    assert "run_id" in man                                       # per-run id surfaced in the manifest
 
 
 def test_batch_future_window_is_pending_not_runnable(tmp_path):
@@ -482,18 +492,19 @@ def test_batch_future_window_is_pending_not_runnable(tmp_path):
     # V4-style window ending after 'today' → pending
     ns = _batch_ns(tmp_path, sets, "2026.10.26:2026.12.18", today="2026.10.03")
     ar.cmd_batch(ns)
-    man = (tmp_path / "bout" / "MANIFEST.md").read_text()
+    bout = _bout(tmp_path)
+    man = (bout / "MANIFEST.md").read_text()
     assert "PENDING" in man
-    bat = (tmp_path / "bout" / "run_all.bat").read_text()
+    bat = (bout / "run_all.bat").read_text()
     assert "20261026" not in bat                                 # pending excluded from runner
-    assert (tmp_path / "bout" / "pending" / "ini").exists()
+    assert (bout / "pending" / "ini").exists()
 
 
 def test_batch_status_not_inferred_from_september(tmp_path):
     sets = tmp_path / "sets"; _make_base_set(sets, "GER40.cash")
     ns = _batch_ns(tmp_path, sets, "2026.01.05:2026.03.27")      # no ledger supplied
     ar.cmd_batch(ns)
-    man = (tmp_path / "bout" / "MANIFEST.md").read_text()
+    man = (_bout(tmp_path) / "MANIFEST.md").read_text()
     assert "UNKNOWN" in man                                      # not claimed as "not examined"
     assert "not previously examined" not in man
 
@@ -505,7 +516,7 @@ def test_batch_examined_status_from_ledger(tmp_path):
                       encoding="utf-8")
     ns = _batch_ns(tmp_path, sets, "2026.01.05:2026.03.27", ledger=str(ledger))
     ar.cmd_batch(ns)
-    man = (tmp_path / "bout" / "MANIFEST.md").read_text()
+    man = (_bout(tmp_path) / "MANIFEST.md").read_text()
     assert "previously run" in man
 
 
@@ -513,9 +524,69 @@ def test_batch_skips_boundary_and_reports_missing(tmp_path):
     sets = tmp_path / "sets"; _make_base_set(sets, "GER40.cash")
     ns = _batch_ns(tmp_path, sets, "2026.10.20:2026.11.05", symbols="GER40.cash,NOPE.cash")
     ar.cmd_batch(ns)
-    man = (tmp_path / "bout" / "MANIFEST.md").read_text()
+    man = (_bout(tmp_path) / "MANIFEST.md").read_text()
     assert "SKIPPED" in man and "DST" in man
     assert "MISSING base .set" in man and "NOPE" in man
+
+
+# --------------------------------------------------------------------------- #
+# per-run output folder / run id — a stale report cannot satisfy a new run
+# --------------------------------------------------------------------------- #
+def test_batch_run_id_folder_and_expected_header(tmp_path):
+    sets = tmp_path / "sets"; _make_base_set(sets, "GER40.cash")
+    ns = _batch_ns(tmp_path, sets, "2026.09.03:2026.09.30", run_id="RUNX")
+    assert ar.cmd_batch(ns) == 0
+    bout = tmp_path / "bout" / "RUNX"                            # per-run output folder
+    exp = (bout / "expected_reports.txt").read_text()
+    assert exp.splitlines()[0] == "# run_id: RUNX"              # run id stamped in the header
+    tag = [l for l in exp.splitlines() if not l.startswith("#")][0]
+    assert tag.startswith("RUNX__")                             # every tag carries the run id
+
+
+def test_reports_expect_run_id_rejects_stale_report(tmp_path):
+    # produce a batch (run id RUNX) and its expected list
+    sets = tmp_path / "sets"; _make_base_set(sets, "GER40.cash")
+    ar.cmd_batch(_batch_ns(tmp_path, sets, "2026.09.03:2026.09.30", run_id="RUNX"))
+    exp = tmp_path / "bout" / "RUNX" / "expected_reports.txt"
+    tag = [l for l in exp.read_text().splitlines() if not l.startswith("#")][0]
+
+    # only a STALE report is present — same cell but WITHOUT this run's id
+    reps = tmp_path / "reps"; reps.mkdir()
+    stale_name = tag.replace("RUNX__", "OLDRUN__")
+    make_report(reps / f"{stale_name}.html", "GER40.cash", *SUMMER, _trail(BASE_INPUTS, "0.5"), [10.0])
+    rc = ar.cmd_reports(_ns(reps, expect=str(exp)))
+    assert rc == 3                                              # expected report MISSING -> hard error
+    # analysis written under the run-scoped output folder, not the bare --out
+    se = (reps / "out" / "RUNX" / "settings_check.md").read_text()
+    assert "MISSING EXPECTED REPORTS" in se and "RUNX__" in se
+
+
+def test_reports_expect_run_id_accepts_matching_report(tmp_path):
+    sets = tmp_path / "sets"; _make_base_set(sets, "GER40.cash")
+    ar.cmd_batch(_batch_ns(tmp_path, sets, "2026.09.03:2026.09.30", run_id="RUNX"))
+    exp = tmp_path / "bout" / "RUNX" / "expected_reports.txt"
+    tag = [l for l in exp.read_text().splitlines() if not l.startswith("#")][0]
+    reps = tmp_path / "reps"; reps.mkdir()
+    make_report(reps / f"{tag}.html", "GER40.cash", *SUMMER, _trail(BASE_INPUTS, "0.5"), [10.0])
+    # a stale report for the same cell is also present but must be ignored (different run id)
+    make_report(reps / f"{tag.replace('RUNX__','OLDRUN__')}.html", "GER40.cash", *SUMMER,
+                _trail(BASE_INPUTS, "0.5"), [10.0])
+    rc = ar.cmd_reports(_ns(reps, expect=str(exp)))
+    assert rc == 0                                             # this-run report present -> no error
+    assert (reps / "out" / "RUNX" / "settings_check.md").exists()
+
+
+def test_reports_preserves_persistent_ledger(tmp_path):
+    # a persistent ledger with a prior row is never deleted/truncated by a reports run
+    ledger = tmp_path / "ledger.csv"
+    prior = "ingested_at,file_sha,file,ea,symbol\n2026-01-01,deadbeef,old.html,OldEA,XAUUSD\n"
+    ledger.write_text(prior, encoding="utf-8")
+    reps = tmp_path / "reps"; reps.mkdir()
+    make_report(reps / "a.html", "GER40.cash", *SUMMER, _trail(BASE_INPUTS, "0.5"), [10.0])
+    ar.cmd_reports(_ns(reps, ledger=str(ledger)))
+    txt = ledger.read_text()
+    assert "deadbeef" in txt and "old.html" in txt            # prior row survives
+    assert len(txt.strip().splitlines()) >= 2                 # appended, not replaced
 
 
 # --------------------------------------------------------------------------- #

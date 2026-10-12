@@ -97,6 +97,9 @@ void OnTick()
    CheckGuards();
    bool have=(PositionSelect(SYM)&&PositionGetInteger(POSITION_MAGIC)==Magic);
 
+   // while HALTED, keep retrying the close every tick until the position is actually gone
+   if((g_haltAll||g_haltDay) && have){ FlattenC(); return; }
+
    // manage open position: chandelier trail + session/weekend flatten
    if(have)
    {

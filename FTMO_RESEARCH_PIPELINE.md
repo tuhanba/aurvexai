@@ -7,7 +7,7 @@ of artefacts into checks. It never edits the live EA or live settings.
 reports    --dir DIR [--vary INPUT] [--ledger CSV] [--out DIR]
 collector  --db DB [--out DIR] [--max-gap-min N] [--stale-min N]
 batch      --symbols S1,S2 --sets DIR --set-pattern P --periods F:T,F:T
-           [--ea ..] [--candidate LABEL] [--ledger CSV] [--today D] [--out DIR]
+           [--ea ..] [--candidate LABEL] [--ledger CSV] [--today D] [--run-id ID] [--out DIR]
 derive     --dir DIR [--symbols ..] [--trail V] [--set-pattern P] [--label L] [--out DIR]
 sources    [--ledger CSV] [--out DIR]
 ```
@@ -37,7 +37,13 @@ sources    [--ledger CSV] [--out DIR]
 5. **Windows batch feasibility** — `FTMO_WINDOWS_BATCH.md` + the `batch` subcommand. Per-period
    `.ini`/`.set` with offset pinned per DST regime, boundary windows skipped, future windows set
    aside under `pending/`, a `--candidate` label tagging all outputs, and the separate-tester
-   path / EA↔set / dates / offset explicit in every file. Marks operator-required steps.
+   path / EA↔set / dates / offset explicit in every file. Marks operator-required steps. Each
+   invocation gets a **unique `run_id`**: outputs go to a per-run folder `<out>/<run_id>/`, every
+   report tag is prefixed with it, and `expected_reports.txt` carries a `# run_id:` header — so
+   `reports --expect` analyzes that run in its own `<out>/<run_id>/` folder and a **stale report
+   from an earlier run can never satisfy a new run** (it lacks the run id → counted MISSING, exit
+   3). The persistent experiment ledger is append-only (deduped by file hash), never deleted, and
+   all error exit codes are preserved.
 6. **Hidden importer launcher** — `windows/` (`run_importer_hidden.vbs` + `run_importer.cmd` +
    `IMPORTER_HIDDEN_LAUNCHER.md`). Runs the AurvexImporter v13 task with no console window, logs
    to a file, preserves the exit code, and prevents overlapping runs; with Task Scheduler steps

@@ -23,13 +23,16 @@ and are **not** claimed to come from the source.
 | pattern | inside bar: bar fully inside the prior ("mother") bar's range | **source** — [LuxAlgo](https://www.luxalgo.com/blog/inside-bar-breakouts-tight-risk-big-reward/) |
 | entry | break of the **mother** bar high (long) / low (short) | **source** — LuxAlgo |
 | entry (variant) | wait up to N bars; optional **close** beyond the level | **source** — [BOIB Pro](https://www.tradingview.com/script/XCcBBQ1t) (`SetupValidBars`, `RequireCloseBeyond`) |
-| stop | the **opposite end of the mother bar** | **source** — LuxAlgo |
+| stop | the **opposite end of the mother bar** — held at that **fixed price** (mother low for longs, mother high for shorts), not a distance applied to the fill | **source** — LuxAlgo (fixed-price mechanic is ours) |
 | take-profit | fixed **1R** (BOIB Pro default; 2R offered) | **source** — BOIB Pro (`TpR`, default 1.0) |
 | preferred TF | daily, for cleaner signals | **source** — LuxAlgo (we parameterize `InsideTF`) |
+| both directions (OCO) | arm the long and short triggers together; the **first realized breakout cancels the other** | **[ADAPTATION]** |
+| trigger-time sizing | lot, TP and the cost-gate re-check are computed **at the trigger** from the real entry→(mother-price) stop distance, not pre-computed at setup | **[ADAPTATION]** |
 | break buffer | points beyond the mother extreme | **[ADAPTATION]** — source value unspecified → `BreakBufferPts`, default 0 |
 | setup→trigger | detect inside bar on the CLOSED bar, trigger on later ticks | **[ADAPTATION]** — same discipline as C3 |
-| risk sizing | `RiskPct` of account to the stop distance | **[ADAPTATION]** — baseline risk, as C1–C4 |
-| cost gate | skip if R-stop < `CostGateMult`·(spread+commission+slippage) | **[ADAPTATION]** |
+| risk sizing | `RiskPct` of account to the real stop distance at the trigger | **[ADAPTATION]** — baseline risk, as C1–C4 |
+| cost gate | at setup a pre-gate on the mother range, then an **authoritative re-check at the trigger**: skip if stop-dist < `CostGateMult`·(spread+commission+slippage) | **[ADAPTATION]** |
+| halt close | while an FTMO halt is active, **retry the close every tick until the position is actually gone** | **[ADAPTATION]** (also in C1/C3/C4) |
 | FTMO overlay | weekend/Friday flat, daily & overall loss halt, account-rule daily reset | **[ADAPTATION]** |
 | tester clock | tester-safe UTC via `ServerUtcOffset()`; offset re-pinned per period | **[ADAPTATION]** |
 

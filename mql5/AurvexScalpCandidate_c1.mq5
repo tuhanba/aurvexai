@@ -168,6 +168,9 @@ void OnTick()
 
    bool haveOurPos=(PositionSelect(SYM) && PositionGetInteger(POSITION_MAGIC)==Magic);
 
+   // while HALTED, keep retrying the close every tick until the position is actually gone
+   if((g_haltAll||g_haltDay) && haveOurPos){ FlattenCandidate("halt-retry"); return; }
+
    // manage an open position: time-stop, window/weekend flatten (TP/SL are broker-side)
    if(haveOurPos)
    {
