@@ -307,7 +307,7 @@ LEDGER_COLS = ["ingested_at", "file_sha", "file", "ea", "symbol", "tf", "period_
                "net", "gross_profit", "gross_loss", "trades", "wins", "losses", "avg_win",
                "avg_loss", "max_win", "net_ex_top1", "realized_cost", "gate_comm_per_lot",
                "gate_slip_pts", "bal_dd_pct", "eq_dd_pct", "reached_target",
-               "days_to_target", "reconciled", "status"]
+               "days_to_target", "limit_viol", "reconciled", "status"]
 
 
 def _target_metrics(rep, target_pct):
@@ -360,6 +360,7 @@ def _ledger_row(rep, sha, status):
             "reached_target": ("" if rep.get("reached_target") is None else
                                ("yes" if rep["reached_target"] else "NO")),
             "days_to_target": rep.get("days_to_target") if rep.get("days_to_target") is not None else "",
+            "limit_viol": rep.get("limit_viol", ""),
             "reconciled": rep.get("reconciled", False), "status": status}
 
 
@@ -392,6 +393,24 @@ def _norm(v):
     if n is not None:
         return "%.10g" % n
     return s.lower()
+
+
+def _limit_violation(rep):
+    """A MEASURABLE FTMO-limit check from the report summary. The overall-loss limit is measurable
+    from the max equity drawdown; the DAILY-loss limit is NOT measurable from the standard summary
+    (it needs the per-day equity curve from each account-day's 00:00 balance), so it is reported as
+    not-measurable rather than guessed. Returns a short human string."""
+    inp = rep.get("inputs", {})
+    overall = _num(inp.get("OverallLossPct"))
+    eq = rep.get("eq_dd_pct")
+    parts = []
+    if overall is not None and eq is not None:
+        parts.append(f"overall {'BREACHED' if eq >= overall else 'ok'} (maxEqDD {eq:.2f}% "
+                     f"{'>=' if eq >= overall else '<'} {overall:g}%)")
+    else:
+        parts.append("overall n/a (no eq-DD or limit in report)")
+    parts.append("daily not-measurable-from-summary (needs per-account-day equity)")
+    return "; ".join(parts)
 
 
 def _cell_key(rep):
@@ -473,13 +492,23 @@ def cmd_reports(a):
             print(f"reports: --expect active (run_id={run_id or 'n/a'}); "
                   f"ignoring {ignored} report(s) not from this run")
     os.makedirs(a.out, exist_ok=True)
-    parsed = [parse_mt5_report(p) for p in files]
+    # Exclude DUPLICATE report files (identical content = same hash) from the analysis, not just the
+    # ledger — otherwise a stray copy of a report would be double-counted in a cell. Keep the first.
+    parsed, seen_sha, dup_files = [], {}, []
+    for p in files:
+        sha = hashlib.sha256(open(p, "rb").read()).hexdigest()[:16]
+        if sha in seen_sha:
+            dup_files.append((os.path.basename(p), seen_sha[sha])); continue
+        seen_sha[sha] = os.path.basename(p)
+        rep = parse_mt5_report(p); rep["_sha"] = sha
+        parsed.append(rep)
+    if dup_files:
+        print(f"reports: excluded {len(dup_files)} duplicate report file(s) (identical hash)")
     rejected, valid = [], []
     for rep in parsed:
-        sha = hashlib.sha256(open(os.path.join(a.dir, rep["file"]), "rb").read()).hexdigest()[:16]
-        rep["_sha"] = sha
         reached, days = _target_metrics(rep, target_pct)   # None/True/False; False = NOT reached
         rep["reached_target"], rep["days_to_target"] = reached, days
+        rep["limit_viol"] = _limit_violation(rep)          # measurable FTMO-limit breach
         (rejected if rep["errors"] else valid).append(rep)
 
     # Group valid runs by experiment CELL (symbol+EA+period+tf+deposit+leverage). Different
@@ -527,6 +556,16 @@ def cmd_reports(a):
             r = fam[0]
             se.append(f"- `{r['file']}` ({_cell_label(r)}): {a.vary}={r['inputs'].get(a.vary)} — "
                       "logged to ledger; comparison needs ≥2 runs in the SAME cell varying only this.")
+        se.append("")
+    if valid:
+        se += ["## FTMO limit check (measurable from the report summary)",
+               "Overall-loss limit is measurable from max equity DD; the DAILY-loss limit is NOT "
+               "measurable from the summary (needs per-account-day equity) and is flagged as such.", "",
+               "| run | symbol | period | net | maxEqDD | limit check |", "|---|---|---|---|---|---|"]
+        for r in valid:
+            se.append(f"| `{r['file']}` | {r['symbol'] or '?'} | {r['period_from']}..{r['period_to']} | "
+                      f"{r['net']:+.2f} | {('%.2f%%'%r['eq_dd_pct']) if r.get('eq_dd_pct') is not None else 'n/a'} "
+                      f"| {r.get('limit_viol','')} |")
         se.append("")
     open(os.path.join(a.out, "settings_check.md"), "w", encoding="utf-8").write("\n".join(se) + "\n")
 
@@ -904,6 +943,11 @@ def cmd_batch(a):
     today = _parse_date(a.today) or dt.date.today()
     ledger = _load_ledger(a.ledger)
     dst_sets = _parse_dst_sets(getattr(a, "dst_set", None))
+    set_overrides = {}
+    for kv in (getattr(a, "set_override", None) or []):
+        k, _, v = kv.partition("=")
+        if k.strip() and v != "":
+            set_overrides[k.strip()] = v.strip()
     cand = a.candidate
     # Unique run id so each experiment gets its OWN output folder and its OWN report tags; a stale
     # report from an earlier run (different run id) can NEVER satisfy this run's expectation.
@@ -940,6 +984,8 @@ def cmd_batch(a):
             if dst_sets:                              # pick winter/summer value per the period regime
                 summer = (off == 3)
                 _apply_set_overrides(setpath, {k: (v[1] if summer else v[0]) for k, v in dst_sets.items()})
+            if set_overrides:                         # fixed KEY=VAL overrides (e.g. risk-match RiskPct=0.46)
+                _apply_set_overrides(setpath, set_overrides)
             ini = (
                 "; GENERATED by aurvex_research batch — verify key names against YOUR MT5 build.\n"
                 f"; Candidate: {cand}\n"
@@ -988,6 +1034,23 @@ def cmd_batch(a):
             "pause"]
     open(os.path.join(a.out, "run_all.bat"), "w", encoding="utf-8",
          newline="\r\n").write("\n".join(bat) + "\n")
+
+    # No-block run method: a downloaded .bat carries the Mark-of-the-Web and Windows SmartScreen may
+    # block it (requiring "Run anyway" / Unblock = relaxing protection). Pasting these SAME commands
+    # into an ALREADY-OPEN Command Prompt executes them with NO file-execution block and WITHOUT
+    # turning any protection off. Edit the MT5 path on the first line, then paste the rest.
+    cmds = [f'set "MT5={mt5}"']
+    for _, pf, pt, off, _, tag, _ in emitted:
+        cmds.append(f'"%MT5%\\terminal64.exe" /config:"{os.path.join(a.out, "ini", tag + ".ini")}"')
+    run_cmds = (
+        "Paste these lines into an OPEN Command Prompt (cmd.exe) — no .bat is executed, so Windows\r\n"
+        "SmartScreen/Mark-of-the-Web does NOT block it and no protection needs to be turned off.\r\n"
+        "Edit the MT5 path on the first line to YOUR separate tester terminal, then paste the rest.\r\n"
+        "(Each terminal runs to completion before the next because /config has ShutdownTerminal=1.)\r\n"
+        "If you prefer the .bat, right-click run_all.bat > Properties > tick 'Unblock' first.\r\n\r\n"
+        + "\r\n".join(cmds) + "\r\n")
+    open(os.path.join(a.out, "run_commands.txt"), "w", encoding="utf-8",
+         newline="").write(run_cmds)
 
     man = [f"# Batch tester manifest — candidate `{cand}` — {len(emitted)} runnable, "
            f"{len(pending)} pending", "",
@@ -1290,6 +1353,9 @@ def main():
     b.add_argument("--dst-set", dest="dst_set", action="append", default=None,
                    help="per-period DST override 'KEY:winterVal:summerVal' (repeatable), e.g. "
                         "OrbRangeHourUTC:8:7 for a London open that is 08:00 UTC in winter / 07:00 in summer")
+    b.add_argument("--set-override", dest="set_override", action="append", default=None,
+                   help="fixed 'KEY=VALUE' applied to every generated set (repeatable), e.g. "
+                        "RiskPct=0.46 to risk-match a baseline to a candidate for a fair comparison")
     b.add_argument("--run-id", dest="run_id", default=None,
                    help="override the auto run id (per-run output folder + report-tag prefix); "
                         "default is a unique timestamped id so stale reports cannot satisfy a new run")

@@ -576,6 +576,32 @@ def test_reports_expect_run_id_accepts_matching_report(tmp_path):
     assert (reps / "out" / "RUNX" / "settings_check.md").exists()
 
 
+def test_reports_excludes_duplicate_report_files(tmp_path):
+    reps = tmp_path / "reps"; reps.mkdir()
+    # two byte-identical reports (same hash) -> counted once, not double
+    make_report(reps / "a.html", "GER40.cash", *SUMMER, _trail(BASE_INPUTS, "0.5"), [10.0])
+    make_report(reps / "a_copy.html", "GER40.cash", *SUMMER, _trail(BASE_INPUTS, "0.5"), [10.0])
+    ledger = tmp_path / "led.csv"
+    ar.cmd_reports(_ns(reps, ledger=str(ledger)))
+    data = [ln for ln in ledger.read_text().strip().splitlines()[1:]]
+    assert len(data) == 1                                     # duplicate excluded from the analysis+ledger
+
+
+def test_reports_excludes_empty_report(tmp_path):
+    reps = tmp_path / "reps"; reps.mkdir()
+    make_report(reps / "empty.html", "GER40.cash", *SUMMER, _trail(BASE_INPUTS, "0.5"), [])  # 0 deals
+    ar.cmd_reports(_ns(reps))
+    se = (reps / "out" / "settings_check.md").read_text()
+    assert "REJECTED" in se and ("0 result" in se or "no parseable deals" in se)
+
+
+def test_limit_violation_overall_measurable_daily_not():
+    breach = ar._limit_violation({"inputs": {"OverallLossPct": "10"}, "eq_dd_pct": 11.2})
+    assert "overall BREACHED" in breach and "daily not-measurable" in breach
+    ok = ar._limit_violation({"inputs": {"OverallLossPct": "10"}, "eq_dd_pct": 2.8})
+    assert "overall ok" in ok and "daily not-measurable" in ok
+
+
 def test_reports_preserves_persistent_ledger(tmp_path):
     # a persistent ledger with a prior row is never deleted/truncated by a reports run
     ledger = tmp_path / "ledger.csv"
