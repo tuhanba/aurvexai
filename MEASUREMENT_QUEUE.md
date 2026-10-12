@@ -1,10 +1,12 @@
 # Measurement queue — ready C1–C4 candidates (goal: faster net gain)
 
-M05 (inside-bar) is **parked**: net-negative in-sample on GER40 (−221.37, PF 0.86)
-even after the flatten fix, so we do **not** dwell on it — its remaining GER40 /
-XAUUSD / XAGUSD OOS runs stay available but are not the priority, and **JP225 M05
-stays a research candidate** (see `JP225_BASELINE_COMPARE.md`). The priority is to
-**measure the ready C1–C4 candidates** next.
+M05 (inside-bar) is **eliminated on the current version for GER40 / XAUUSD /
+XAGUSD** — OOS V1–V3 net-negative (XAGUSD −932 / −591 / −1005; XAUUSD V2 −1377,
+V3 −1811; GER40 per operator), and `net_ex_top1` stays negative so the result is
+not monster-driven. We do **not** dwell on it and do **not** re-run M05. **JP225
+M05 stays a research candidate** (risk-matched baseline comparison, see
+`JP225_BASELINE_COMPARE.md`). The priority is to **measure the ready C1–C4
+candidates** next.
 
 All packages are generated; **each actual run must use a NEW run id** — regenerate
 with the command shown (omit `--run-id` for an auto id) so a re-run never collides
@@ -19,7 +21,7 @@ MISSING).
 | 1 | **C2** session-breakout (ORB) | `Aurvex_v314_test_utc` | XAUUSD, XAGUSD, GER40.cash, JP225.cash | H1 | 12 | ORB hour pinned 8 (winter)/7 (summer) via `--dst-set` |
 | 2 | **C3** trend-continuation | `Aurvex_trend_c3` | GER40.cash, JP225.cash | H1 | 6 | |
 | 3 | **C4** mean-reversion | `Aurvex_meanrev_c4` | GER40.cash, JP225.cash | M5 | 6 | |
-| 4 | **C1** scalp | `Aurvex_scalp_c1` | XAUUSD, XAGUSD | M1 | 6 | scalp is a prior NO-GO; measured for completeness, lowest priority |
+| 4 | **C1** scalp | `Aurvex_scalp_c1` | XAUUSD, XAGUSD | M1 | 6 | measured on its own merits — the earlier scalp NO-GO was a **different engine** and is **not** evidence for or against this tester-only C1 |
 
 Prepared packages (each has `run_all.bat`, **`run_commands.txt`**, `expected_reports.txt`,
 `sets/`, `ini/`, `MANIFEST.md`):
@@ -47,11 +49,16 @@ A downloaded `.bat` carries the Mark-of-the-Web and SmartScreen may block it
 lines. Pasting into an open console is not a blocked file-execution, so nothing
 needs to be disabled.
 
-1. Edit the `set "MT5=…"` first line to your **separate** tester terminal path.
-2. Paste the remaining `"%MT5%\terminal64.exe" /config:"…\ini\<tag>.ini"` lines.
-   Each terminal runs to completion (the `.ini` sets `ShutdownTerminal=1`) before
-   the next. (If you prefer the `.bat`: right-click → Properties → tick **Unblock**.)
-3. Copy the produced `reports\` back, then analyze ONLY this run:
+1. Edit the two `set` lines to **absolute** paths: `MT5DIR` = your separate tester
+   terminal folder (default `C:\Users\pc\AurvexTester`), `PKG` = where you extracted
+   this run folder.
+2. Paste the rest. Each run is `start /wait "" "%MT5DIR%\terminal64.exe" /portable
+   /config:"%PKG%\ini\<tag>.ini"` — **/portable** (data folder inside the install,
+   so report paths are deterministic), **sequential** (`start /wait` +
+   `ShutdownTerminal=1`), and each line **checks its report was produced**. (The
+   `.bat` does the same with absolute `%~dp0` config paths and also fails if a report
+   is missing or empty; if you prefer it, right-click → Properties → tick **Unblock**.)
+3. Copy `%MT5DIR%\reports\` back, then analyze ONLY this run:
    ```
    python3 scripts/aurvex_research.py reports \
      --dir <reports> --expect <package>/expected_reports.txt \
@@ -60,8 +67,10 @@ needs to be disabled.
    `reports` parses each HTML, **reconciles net incl. commission+swap** against the
    summary, records rows **keyed by file hash**, and **excludes empty (0-trade) and
    duplicate (identical-hash) reports**. Nets, `net_ex_top1` (best-trade-removed),
-   equity/balance DD, reached-target/days, the measurable `limit_viol`, and realized
-   vs zero-gate cost are all written per run.
+   equity/balance DD, reached-target/days, the `limit_viol` check, and realized vs
+   zero-gate cost are all written per run.
 
 The experiment ledger is **append-only** (deduped by hash), never deleted; all
-error exit codes are preserved. No live-go decision is made from these runs.
+error exit codes are preserved. A period **absent from the ledger is UNKNOWN**
+(confirm with the operator) — never auto-declared "not examined". **No live-go
+decision** is made from these runs.

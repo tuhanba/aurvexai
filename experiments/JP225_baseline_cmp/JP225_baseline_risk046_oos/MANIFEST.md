@@ -2,7 +2,7 @@
 
 - **run_id: `JP225_baseline_risk046_oos`** — this run's own output folder; every report tag carries it, so a report from an earlier run cannot satisfy this run.
 - EA: `Advisors\Aurvex_v314_test_utc.ex5` · base-set pattern: `baseline_v314_{sym}.set` (in `validation_batch/baseline_sets_v314`)
-- Separate tester terminal: `C:\Program Files\MetaTrader 5 Tester\terminal64.exe` (edit in `run_all.bat`; keep it
+- Separate tester terminal: `C:\Users\pc\AurvexTester\terminal64.exe` (edit in `run_all.bat`; keep it
   distinct from the live terminal — this never touches the live install).
 - In-sample development window: `2026.09.01..2026.10.02` (overlap is flagged, not treated as OOS).
 - Examination status is taken from the ledger (NONE given); it is NEVER inferred from non-overlap with September.

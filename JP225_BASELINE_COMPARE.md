@@ -29,10 +29,15 @@ can't satisfy it).
 | V3 2026.07.01–08.31 | M05 | … | … | … | … |
 | V3 | baseline@0.46 | … | … | … | … |
 
-`reports` fills `net`, `reached_target`/`days_to_target`, `eq_dd_pct`, and the
-`limit_viol` column (overall-loss limit is measurable from max equity DD; the
-**daily-loss limit is NOT measurable from the summary** — needs per-account-day
-equity — and is reported as such, never guessed).
+`reports` fills `net`, `reached_target`/`days_to_target`, `eq_dd_pct` (context
+only), and the `limit_viol` column. The FTMO **overall** limit is **minimum
+equity vs the INITIAL balance** (`initial*(1-OverallLossPct/100)`), **not** the
+max drawdown from the running peak. We only have the balance curve, so a breach
+is reported **only** when the minimum *balance* already crosses that floor;
+otherwise **UNKNOWN**, because the minimum *equity* (which the rule tests, and
+which can dip below balance on floating losses) is not in the report. The
+**daily** limit needs per-account-day equity → **UNKNOWN**. Missing data is
+written UNKNOWN, never guessed.
 
 ## Cost: realized vs the zero-gate assumption (state separately)
 
@@ -57,13 +62,14 @@ of one or two outsized trades (net turns negative at `net_ex_top1`), the result
 does **not** hold — treat it as not-robust and do not advance it. (Extend to
 top-2/3 by inspecting the per-trade list if a single-trade removal is borderline.)
 
-## Next validation must use an UNEXAMINED window — proven from the ledger
+## Next validation window — examination status proven from the ledger
 
-V1–V3 are now examined; once the reports are analyzed they are written to the
-experiment ledger. The `batch` tool stamps each run's **examination status from
-the ledger** (`in ledger — previously run` vs `not found — UNKNOWN`), never from
-calendar guesswork. The next validation therefore uses the **reserved V4**
-window (`2026.10.26–12.18`), which is **pending** (future data) and **not in the
-ledger** — the batch emits it under `pending/`, excluded from the runner, until
-the window has elapsed and history exists. Do **not** reuse V1–V3 for
-validation, and do **not** make any live-go decision from these runs.
+V1–V3 are now in the experiment ledger (recorded by `reports`, keyed by file
+hash). The `batch` tool stamps each run's **examination status from the ledger**:
+a window found in the ledger reads `previously run`, and a window **absent** from
+the ledger reads **`UNKNOWN (confirm with operator)`** — it is **never
+auto-declared "not examined"** from calendar logic. The reserved **V4** window
+(`2026.10.26–12.18`) is a **pending** future window (data not yet available); the
+batch emits it under `pending/`, excluded from the runner, until it has elapsed
+and history exists. Do **not** reuse V1–V3 as "fresh" validation, and do **not**
+make any live-go decision from these runs.

@@ -223,7 +223,12 @@ def parse_mt5_report(path):
             rep["errors"].append(f"missing {fld}")
     if "TesterServerUtcOffsetHours" not in rep["inputs"]:
         rep["errors"].append("missing TesterServerUtcOffsetHours")
-    if "AvoidNews" not in rep["inputs"]:
+    # AvoidNews is a LIVE/baseline-EA news-filter input; it does not exist on the tester-only
+    # candidate EAs (C1/C3/C4/M05), so require it ONLY for the live/baseline EA family — otherwise
+    # a candidate report would be wrongly rejected for lacking a setting it never had.
+    _eal = (rep["ea"] or "").lower()
+    _live_ea = any(t in _eal for t in ("ftmo", "v3_14", "v3_15", "v314", "v315", "v3_1"))
+    if "AvoidNews" not in rep["inputs"] and _live_ea:
         rep["errors"].append("missing AvoidNews")
 
     # ---- tester broker-offset: reject 999 (auto) and check all DST transitions ----
@@ -396,21 +401,31 @@ def _norm(v):
 
 
 def _limit_violation(rep):
-    """A MEASURABLE FTMO-limit check from the report summary. The overall-loss limit is measurable
-    from the max equity drawdown; the DAILY-loss limit is NOT measurable from the standard summary
-    (it needs the per-day equity curve from each account-day's 00:00 balance), so it is reported as
-    not-measurable rather than guessed. Returns a short human string."""
+    """FTMO-limit check from the report. The FTMO OVERALL limit is minimum equity vs the INITIAL
+    balance (initial*(1-OverallLossPct/100)), NOT the max drawdown from the running peak — those
+    differ, so peak-DD is never used here. We only have the balance curve, so:
+      - if the minimum BALANCE already breaches the floor -> BREACHED (certain), else
+      - UNKNOWN, because the minimum EQUITY (which can dip below balance on floating losses) is not
+        in the report and is what the rule actually tests.
+    The DAILY limit needs per-account-day equity (from each day's 00:00 balance) -> UNKNOWN too.
+    Never guessed; missing data -> UNKNOWN."""
     inp = rep.get("inputs", {})
     overall = _num(inp.get("OverallLossPct"))
-    eq = rep.get("eq_dd_pct")
-    parts = []
-    if overall is not None and eq is not None:
-        parts.append(f"overall {'BREACHED' if eq >= overall else 'ok'} (maxEqDD {eq:.2f}% "
-                     f"{'>=' if eq >= overall else '<'} {overall:g}%)")
+    dep = rep.get("deposit")
+    curve = rep.get("curve") or []
+    min_bal = min((b for _, b in curve), default=None)
+    if overall is None or dep is None:
+        ov = "overall UNKNOWN (no initial balance or OverallLossPct in report)"
     else:
-        parts.append("overall n/a (no eq-DD or limit in report)")
-    parts.append("daily not-measurable-from-summary (needs per-account-day equity)")
-    return "; ".join(parts)
+        floor = dep * (1.0 - overall / 100.0)
+        if min_bal is not None and min_bal <= floor:
+            ov = f"overall BREACHED (min balance {min_bal:.2f} <= floor {floor:.2f} = initial*{1-overall/100:.2f})"
+        else:
+            ov = (f"overall UNKNOWN (min balance {min_bal:.2f} > floor {floor:.2f}, but min EQUITY "
+                  "not in report — the rule tests min equity vs initial, cannot confirm)"
+                  if min_bal is not None else
+                  "overall UNKNOWN (no balance curve; min equity vs initial not available)")
+    return ov + "; daily UNKNOWN (needs per-account-day equity)"
 
 
 def _cell_key(rep):
@@ -558,10 +573,14 @@ def cmd_reports(a):
                       "logged to ledger; comparison needs ≥2 runs in the SAME cell varying only this.")
         se.append("")
     if valid:
-        se += ["## FTMO limit check (measurable from the report summary)",
-               "Overall-loss limit is measurable from max equity DD; the DAILY-loss limit is NOT "
-               "measurable from the summary (needs per-account-day equity) and is flagged as such.", "",
-               "| run | symbol | period | net | maxEqDD | limit check |", "|---|---|---|---|---|---|"]
+        se += ["## FTMO limit check",
+               "The OVERALL limit is minimum equity vs the INITIAL balance "
+               "(initial*(1-OverallLossPct/100)), NOT drawdown from the running peak. We only have "
+               "the balance curve, so a breach is reported only when the minimum BALANCE already "
+               "crosses the floor; otherwise UNKNOWN (minimum EQUITY, which the rule tests, is not "
+               "in the report). The DAILY limit needs per-account-day equity -> UNKNOWN. maxEqDD "
+               "below is shown for context only; it is NOT the overall-limit test.", "",
+               "| run | symbol | period | net | maxEqDD(context) | limit check |", "|---|---|---|---|---|---|"]
         for r in valid:
             se.append(f"| `{r['file']}` | {r['symbol'] or '?'} | {r['period_from']}..{r['period_to']} | "
                       f"{r['net']:+.2f} | {('%.2f%%'%r['eq_dd_pct']) if r.get('eq_dd_pct') is not None else 'n/a'} "
@@ -1016,21 +1035,34 @@ def cmd_batch(a):
             open(os.path.join(a.out, sub, "ini", tag + ".ini"), "w", encoding="utf-8").write(ini)
             (pending if is_pending else emitted).append((sym, pf, pt, off, note, tag, seen))
 
-    # Windows run-loop — RUNNABLE (non-pending) runs only. MT5 points at the SEPARATE tester
-    # terminal (its own install/data folder, kept apart from the live terminal).
-    mt5 = a.mt5_path
-    bat = ["@echo off",
-           "REM Path to the SEPARATE tester MT5 terminal (NOT the live terminal). Edit if needed.",
-           f'set "MT5={mt5}"',
-           'if not exist "%MT5%\\terminal64.exe" ( echo EDIT MT5 path in this .bat & pause & exit /b 1 )',
-           'pushd "%~dp0"']
+    # Windows run-loop — RUNNABLE (non-pending) runs only. MT5 is the SEPARATE tester terminal
+    # (its own install/data folder, apart from the live terminal). /portable keeps the data folder
+    # inside the install dir so report paths are deterministic. Runs are sequential (start /wait)
+    # and each run's report is verified (exists + non-trivial size) before continuing.
+    mt5 = a.mt5_path.rstrip("\\/")
+    bat = ["@echo off", "setlocal EnableExtensions",
+           "REM === SEPARATE tester terminal (NOT the live terminal). Edit MT5DIR if your path differs. ===",
+           f'set "MT5DIR={mt5}"',
+           'set "MT5=%MT5DIR%\\terminal64.exe"',
+           'set "REPDIR=%MT5DIR%\\reports"',
+           'if not exist "%MT5%" ( echo EDIT MT5DIR - terminal64.exe not found at "%MT5%" & pause & exit /b 1 )',
+           'pushd "%~dp0"', 'set "FAIL=0"']
     for _, pf, pt, off, _, tag, _ in emitted:
         bat.append(f'echo === {tag}  [{pf}..{pt}]  offset=+{off} ===')
-        bat.append(f'start /wait "" "%MT5%\\terminal64.exe" /config:"%~dp0ini\\{tag}.ini"')
-    bat += ['popd',
-            "echo All runs done. Reports are in the terminal data-folder\\reports\\ (copy them out),",
-            "echo then on the analysis host run:",
-            "echo   python3 scripts/aurvex_research.py reports --dir <reports folder> --vary TrailStopR",
+        # absolute config path via %~dp0 (resolves to THIS file's folder at run time); /portable
+        bat.append(f'start /wait "" "%MT5%" /portable /config:"%~dp0ini\\{tag}.ini"')
+        bat.append(f'set "RPT=%REPDIR%\\{tag}"')
+        bat.append('set "GOT="')
+        bat.append('if exist "%RPT%.htm" set "GOT=%RPT%.htm"')
+        bat.append('if exist "%RPT%.html" set "GOT=%RPT%.html"')
+        bat.append(f'if not defined GOT ( echo [MISSING REPORT] {tag} & set "FAIL=1" & goto :done )')
+        bat.append(f'for %%F in ("%GOT%") do if %%~zF LSS 2000 ( echo [INVALID/EMPTY REPORT] {tag} & set "FAIL=1" & goto :done )')
+        bat.append(f'echo [OK] {tag}')
+    bat += [':done', 'popd',
+            'if "%FAIL%"=="1" ( echo ONE OR MORE RUNS FAILED OR PRODUCED NO VALID REPORT - see above & pause & exit /b 2 )',
+            'echo All runs done AND every report verified in "%REPDIR%".',
+            'echo Copy that folder to the analysis host, then run:',
+            f'echo   python3 scripts/aurvex_research.py reports --dir ^<reports^> --expect expected_reports.txt --ledger research_out/experiment_ledger.csv',
             "pause"]
     open(os.path.join(a.out, "run_all.bat"), "w", encoding="utf-8",
          newline="\r\n").write("\n".join(bat) + "\n")
@@ -1038,15 +1070,18 @@ def cmd_batch(a):
     # No-block run method: a downloaded .bat carries the Mark-of-the-Web and Windows SmartScreen may
     # block it (requiring "Run anyway" / Unblock = relaxing protection). Pasting these SAME commands
     # into an ALREADY-OPEN Command Prompt executes them with NO file-execution block and WITHOUT
-    # turning any protection off. Edit the MT5 path on the first line, then paste the rest.
-    cmds = [f'set "MT5={mt5}"']
+    # turning any protection off. Edit the two SET lines (absolute), then paste the rest.
+    cmds = [f'set "MT5DIR={mt5}"',
+            'set "PKG=<ABSOLUTE path to THIS extracted run folder, e.g. C:\\Users\\pc\\Downloads\\%s>"' % run_id]
     for _, pf, pt, off, _, tag, _ in emitted:
-        cmds.append(f'"%MT5%\\terminal64.exe" /config:"{os.path.join(a.out, "ini", tag + ".ini")}"')
+        cmds.append(f'start /wait "" "%MT5DIR%\\terminal64.exe" /portable /config:"%PKG%\\ini\\{tag}.ini"')
+        cmds.append(f'if not exist "%MT5DIR%\\reports\\{tag}.htm" if not exist "%MT5DIR%\\reports\\{tag}.html" echo [MISSING REPORT] {tag}')
     run_cmds = (
-        "Paste these lines into an OPEN Command Prompt (cmd.exe) — no .bat is executed, so Windows\r\n"
-        "SmartScreen/Mark-of-the-Web does NOT block it and no protection needs to be turned off.\r\n"
-        "Edit the MT5 path on the first line to YOUR separate tester terminal, then paste the rest.\r\n"
-        "(Each terminal runs to completion before the next because /config has ShutdownTerminal=1.)\r\n"
+        "Paste these lines into an OPEN Command Prompt (cmd.exe) - no .bat is executed, so Windows\r\n"
+        "SmartScreen / Mark-of-the-Web does NOT block it and no protection needs to be turned off.\r\n"
+        "Edit the two SET lines to ABSOLUTE paths (MT5DIR = your separate tester terminal folder;\r\n"
+        "PKG = where you extracted THIS run folder), then paste the rest. Runs are SEQUENTIAL\r\n"
+        "(start /wait + ShutdownTerminal=1), and each line checks that its report was produced.\r\n"
         "If you prefer the .bat, right-click run_all.bat > Properties > tick 'Unblock' first.\r\n\r\n"
         + "\r\n".join(cmds) + "\r\n")
     open(os.path.join(a.out, "run_commands.txt"), "w", encoding="utf-8",

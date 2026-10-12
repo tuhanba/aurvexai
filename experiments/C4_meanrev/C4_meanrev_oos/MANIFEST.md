@@ -2,7 +2,7 @@
 
 - **run_id: `C4_meanrev_oos`** — this run's own output folder; every report tag carries it, so a report from an earlier run cannot satisfy this run.
 - EA: `Advisors\Aurvex_meanrev_c4.ex5` · base-set pattern: `C4_meanrev_{sym}.set` (in `candidates/sets`)
-- Separate tester terminal: `C:\Program Files\MetaTrader 5 Tester\terminal64.exe` (edit in `run_all.bat`; keep it
+- Separate tester terminal: `C:\Users\pc\AurvexTester\terminal64.exe` (edit in `run_all.bat`; keep it
   distinct from the live terminal — this never touches the live install).
 - In-sample development window: `2026.09.01..2026.10.02` (overlap is flagged, not treated as OOS).
 - Examination status is taken from the ledger (NONE given); it is NEVER inferred from non-overlap with September.

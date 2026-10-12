@@ -595,11 +595,18 @@ def test_reports_excludes_empty_report(tmp_path):
     assert "REJECTED" in se and ("0 result" in se or "no parseable deals" in se)
 
 
-def test_limit_violation_overall_measurable_daily_not():
-    breach = ar._limit_violation({"inputs": {"OverallLossPct": "10"}, "eq_dd_pct": 11.2})
-    assert "overall BREACHED" in breach and "daily not-measurable" in breach
-    ok = ar._limit_violation({"inputs": {"OverallLossPct": "10"}, "eq_dd_pct": 2.8})
-    assert "overall ok" in ok and "daily not-measurable" in ok
+def test_limit_violation_min_balance_vs_initial_daily_unknown():
+    # min BALANCE already below initial*(1-10%) = 22500 -> certain overall breach
+    breach = ar._limit_violation({"inputs": {"OverallLossPct": "10"}, "deposit": 25000.0,
+                                  "curve": [("2026.01.05", 25000.0), ("2026.02.01", 22400.0)]})
+    assert "overall BREACHED" in breach and "daily UNKNOWN" in breach
+    # min balance above the floor -> UNKNOWN (min EQUITY not in report), never "ok" from peak-DD
+    unk = ar._limit_violation({"inputs": {"OverallLossPct": "10"}, "deposit": 25000.0,
+                               "curve": [("2026.01.05", 25000.0), ("2026.02.01", 23000.0)]})
+    assert "overall UNKNOWN" in unk and "min EQUITY not in report" in unk
+    # no initial balance -> UNKNOWN
+    nodep = ar._limit_violation({"inputs": {"OverallLossPct": "10"}, "deposit": None, "curve": []})
+    assert "overall UNKNOWN" in nodep
 
 
 def test_reports_preserves_persistent_ledger(tmp_path):

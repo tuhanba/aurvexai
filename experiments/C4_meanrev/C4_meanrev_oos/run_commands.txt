@@ -1,13 +1,21 @@
-Paste these lines into an OPEN Command Prompt (cmd.exe) — no .bat is executed, so Windows
-SmartScreen/Mark-of-the-Web does NOT block it and no protection needs to be turned off.
-Edit the MT5 path on the first line to YOUR separate tester terminal, then paste the rest.
-(Each terminal runs to completion before the next because /config has ShutdownTerminal=1.)
+Paste these lines into an OPEN Command Prompt (cmd.exe) - no .bat is executed, so Windows
+SmartScreen / Mark-of-the-Web does NOT block it and no protection needs to be turned off.
+Edit the two SET lines to ABSOLUTE paths (MT5DIR = your separate tester terminal folder;
+PKG = where you extracted THIS run folder), then paste the rest. Runs are SEQUENTIAL
+(start /wait + ShutdownTerminal=1), and each line checks that its report was produced.
 If you prefer the .bat, right-click run_all.bat > Properties > tick 'Unblock' first.
 
-set "MT5=C:\Program Files\MetaTrader 5 Tester"
-"%MT5%\terminal64.exe" /config:"experiments/C4_meanrev/C4_meanrev_oos/ini/C4_meanrev_oos__GER40_cash_20260105_20260327.ini"
-"%MT5%\terminal64.exe" /config:"experiments/C4_meanrev/C4_meanrev_oos/ini/C4_meanrev_oos__GER40_cash_20260330_20260630.ini"
-"%MT5%\terminal64.exe" /config:"experiments/C4_meanrev/C4_meanrev_oos/ini/C4_meanrev_oos__GER40_cash_20260701_20260831.ini"
-"%MT5%\terminal64.exe" /config:"experiments/C4_meanrev/C4_meanrev_oos/ini/C4_meanrev_oos__JP225_cash_20260105_20260327.ini"
-"%MT5%\terminal64.exe" /config:"experiments/C4_meanrev/C4_meanrev_oos/ini/C4_meanrev_oos__JP225_cash_20260330_20260630.ini"
-"%MT5%\terminal64.exe" /config:"experiments/C4_meanrev/C4_meanrev_oos/ini/C4_meanrev_oos__JP225_cash_20260701_20260831.ini"
+set "MT5DIR=C:\Users\pc\AurvexTester"
+set "PKG=<ABSOLUTE path to THIS extracted run folder, e.g. C:\Users\pc\Downloads\C4_meanrev_oos>"
+start /wait "" "%MT5DIR%\terminal64.exe" /portable /config:"%PKG%\ini\C4_meanrev_oos__GER40_cash_20260105_20260327.ini"
+if not exist "%MT5DIR%\reports\C4_meanrev_oos__GER40_cash_20260105_20260327.htm" if not exist "%MT5DIR%\reports\C4_meanrev_oos__GER40_cash_20260105_20260327.html" echo [MISSING REPORT] C4_meanrev_oos__GER40_cash_20260105_20260327
+start /wait "" "%MT5DIR%\terminal64.exe" /portable /config:"%PKG%\ini\C4_meanrev_oos__GER40_cash_20260330_20260630.ini"
+if not exist "%MT5DIR%\reports\C4_meanrev_oos__GER40_cash_20260330_20260630.htm" if not exist "%MT5DIR%\reports\C4_meanrev_oos__GER40_cash_20260330_20260630.html" echo [MISSING REPORT] C4_meanrev_oos__GER40_cash_20260330_20260630
+start /wait "" "%MT5DIR%\terminal64.exe" /portable /config:"%PKG%\ini\C4_meanrev_oos__GER40_cash_20260701_20260831.ini"
+if not exist "%MT5DIR%\reports\C4_meanrev_oos__GER40_cash_20260701_20260831.htm" if not exist "%MT5DIR%\reports\C4_meanrev_oos__GER40_cash_20260701_20260831.html" echo [MISSING REPORT] C4_meanrev_oos__GER40_cash_20260701_20260831
+start /wait "" "%MT5DIR%\terminal64.exe" /portable /config:"%PKG%\ini\C4_meanrev_oos__JP225_cash_20260105_20260327.ini"
+if not exist "%MT5DIR%\reports\C4_meanrev_oos__JP225_cash_20260105_20260327.htm" if not exist "%MT5DIR%\reports\C4_meanrev_oos__JP225_cash_20260105_20260327.html" echo [MISSING REPORT] C4_meanrev_oos__JP225_cash_20260105_20260327
+start /wait "" "%MT5DIR%\terminal64.exe" /portable /config:"%PKG%\ini\C4_meanrev_oos__JP225_cash_20260330_20260630.ini"
+if not exist "%MT5DIR%\reports\C4_meanrev_oos__JP225_cash_20260330_20260630.htm" if not exist "%MT5DIR%\reports\C4_meanrev_oos__JP225_cash_20260330_20260630.html" echo [MISSING REPORT] C4_meanrev_oos__JP225_cash_20260330_20260630
+start /wait "" "%MT5DIR%\terminal64.exe" /portable /config:"%PKG%\ini\C4_meanrev_oos__JP225_cash_20260701_20260831.ini"
+if not exist "%MT5DIR%\reports\C4_meanrev_oos__JP225_cash_20260701_20260831.htm" if not exist "%MT5DIR%\reports\C4_meanrev_oos__JP225_cash_20260701_20260831.html" echo [MISSING REPORT] C4_meanrev_oos__JP225_cash_20260701_20260831
