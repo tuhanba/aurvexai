@@ -39,6 +39,7 @@ input double SlippageBufferPts         = 0.0;    // extra slippage allowance (po
 input double DailyLossPct              = 5.0;    // FTMO daily-loss guard: halt the day past this DD
 input double OverallLossPct            = 10.0;   // FTMO overall guard: halt entirely past this DD
 input int    FridayFlattenUTCMin       = 1200;   // flatten + stop on Friday at/after this UTC minute (weekend-flat)
+input int    DailyResetHourUTC          = -1;    // account daily-loss reset: -1 = broker/server midnight (FTMO rule)
 input int    ServerUtcOffsetOverrideHours = 999; // 999 = auto from live server
 input int    TesterServerUtcOffsetHours   = 999; // tester: set to the broker's real offset (e.g. 3)
 input long   Magic                     = 880088; // candidate magic (distinct from live)
@@ -47,7 +48,8 @@ CTrade  trade;
 int     g_atr=INVALID_HANDLE;
 string  SYM;
 double  g_initBal=0, g_dayStartBal=0;
-datetime g_utcDay=0, g_lastEntryBar=0, g_posOpenUtc=0;
+long    g_acctDay=0;
+datetime g_lastEntryBar=0, g_posOpenUtc=0;
 int     g_tradesToday=0;
 bool    g_haltAll=false, g_haltDay=false;
 
@@ -67,7 +69,6 @@ datetime NowUtc()
       return (datetime)((long)TimeTradeServer()-ServerUtcOffset());
    return TimeGMT();
 }
-datetime UtcDayStart(datetime t){ return (datetime)((long)t/86400*86400); }
 
 //--------------------------- helpers ----------------------------------//
 double Atr()
@@ -110,17 +111,27 @@ bool InWindow(datetime u)
 double HighestN(){ int s=iHighest(SYM,PERIOD_M1,MODE_HIGH,NbarLookback,1); return (s<0)?0:iHigh(SYM,PERIOD_M1,s); }
 double LowestN(){  int s=iLowest (SYM,PERIOD_M1,MODE_LOW, NbarLookback,1); return (s<0)?0:iLow (SYM,PERIOD_M1,s); }
 
+// account-day index per the FTMO reset rule: default (-1) rolls at the BROKER/server midnight
+// (server = UTC + ServerUtcOffset); an explicit DailyResetHourUTC overrides it.
+long AcctDayIndex(datetime u)
+{
+   long sec=(DailyResetHourUTC>=0)?((long)u-(long)DailyResetHourUTC*3600):((long)u+ServerUtcOffset());
+   return sec/86400;
+}
 void FlattenCandidate(string why)
 {
    if(PositionSelect(SYM) && PositionGetInteger(POSITION_MAGIC)==Magic)
-      trade.PositionClose(SYM);
-   g_posOpenUtc=0;
+   {
+      if(!trade.PositionClose(SYM) || trade.ResultRetcode()!=TRADE_RETCODE_DONE)
+         return;                                 // close FAILED -> preserve management state, retry
+   }
+   g_posOpenUtc=0;                                // cleared only on a confirmed close (or already flat)
 }
 
 //--------------------------- FTMO guards ------------------------------//
 void RefreshDay(datetime u)
 {
-   g_utcDay=UtcDayStart(u); g_tradesToday=0; g_haltDay=false;
+   g_acctDay=AcctDayIndex(u); g_tradesToday=0; g_haltDay=false;
    g_dayStartBal=AccountInfoDouble(ACCOUNT_BALANCE);
 }
 void CheckGuards()
@@ -134,6 +145,7 @@ void CheckGuards()
 int OnInit()
 {
    SYM=_Symbol;
+   if(!(bool)MQLInfoInteger(MQL_TESTER)){ Print("Scalp C1 is a TESTER-ONLY candidate — refusing to run live."); return INIT_FAILED; }
    if(RequireAccountSize && AccountSize<=0){ Print("Scalp C1: AccountSize<=0"); return INIT_PARAMETERS_INCORRECT; }
    if(ScalpStartUTC<0||ScalpStartUTC>23||ScalpEndUTC<=ScalpStartUTC||ScalpEndUTC>24||NbarLookback<1){
       Print("Scalp C1: bad window/lookback inputs"); return INIT_PARAMETERS_INCORRECT; }
@@ -151,7 +163,7 @@ void OnDeinit(const int reason){ if(g_atr!=INVALID_HANDLE) IndicatorRelease(g_at
 void OnTick()
 {
    datetime u=NowUtc();
-   if(UtcDayStart(u)!=g_utcDay) RefreshDay(u);
+   if(AcctDayIndex(u)!=g_acctDay) RefreshDay(u);
    CheckGuards();
 
    bool haveOurPos=(PositionSelect(SYM) && PositionGetInteger(POSITION_MAGIC)==Magic);
@@ -185,15 +197,21 @@ void OnTick()
    double hiN=HighestN(), loN=LowestN(); if(hiN<=0||loN<=0) return;
    double lots=LotsForStop(stopPx); if(lots<=0) return;
 
+   // an entry attempt consumes this bar whether or not the fill confirms (no retry storm);
+   // state advances ONLY on a confirmed fill (retcode DONE/PLACED).
    if(ask>hiN)                                   // upside breakout -> buy
    {
-      double sl=ask-stopPx, tp=ask+targetPx;
-      if(trade.Buy(lots,SYM,0.0,sl,tp,"scalpC1")){ g_lastEntryBar=bar; g_posOpenUtc=u; g_tradesToday++; }
+      g_lastEntryBar=bar; double sl=ask-stopPx, tp=ask+targetPx;
+      trade.Buy(lots,SYM,0.0,sl,tp,"scalpC1");
+      uint rc=trade.ResultRetcode();
+      if(rc==TRADE_RETCODE_DONE||rc==TRADE_RETCODE_PLACED){ g_posOpenUtc=u; g_tradesToday++; }
    }
    else if(bid<loN)                              // downside breakout -> sell
    {
-      double sl=bid+stopPx, tp=bid-targetPx;
-      if(trade.Sell(lots,SYM,0.0,sl,tp,"scalpC1")){ g_lastEntryBar=bar; g_posOpenUtc=u; g_tradesToday++; }
+      g_lastEntryBar=bar; double sl=bid+stopPx, tp=bid-targetPx;
+      trade.Sell(lots,SYM,0.0,sl,tp,"scalpC1");
+      uint rc=trade.ResultRetcode();
+      if(rc==TRADE_RETCODE_DONE||rc==TRADE_RETCODE_PLACED){ g_posOpenUtc=u; g_tradesToday++; }
    }
 }
 //+------------------------------------------------------------------+

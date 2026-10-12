@@ -35,15 +35,19 @@ input double OverallLossPct            = 10.0;
 input int    FridayFlattenUTCMin       = 1200;
 input int    ServerUtcOffsetOverrideHours = 999;
 input int    TesterServerUtcOffsetHours   = 999;
+input int    DailyResetHourUTC          = -1;    // account daily-loss reset: -1 = broker/server midnight
 input long   Magic                     = 880033;
 
 CTrade  trade;
 int     g_emaF=INVALID_HANDLE, g_emaS=INVALID_HANDLE, g_atr=INVALID_HANDLE;
 string  SYM;
 double  g_initBal=0, g_dayStartBal=0, g_entryExtreme=0;
-datetime g_utcDay=0, g_lastBar=0;
+long    g_acctDay=0;
+datetime g_lastBar=0;
 int     g_tradesToday=0;
-bool    g_haltAll=false, g_haltDay=false, g_pulledback=false;
+bool    g_haltAll=false, g_haltDay=false;
+int     g_pendDir=0;                 // pending setup from the last CLOSED bar: +1 up, -1 down, 0 none
+double  g_pendTrigger=0, g_pendStop=0;   // breakout trigger level + stop distance for the setup
 
 long ServerUtcOffset()
 {
@@ -53,7 +57,6 @@ long ServerUtcOffset()
    return (long)(MathRound((double)diff/3600.0)*3600.0);
 }
 datetime NowUtc(){ return (bool)MQLInfoInteger(MQL_TESTER)?(datetime)((long)TimeTradeServer()-ServerUtcOffset()):TimeGMT(); }
-datetime UtcDayStart(datetime t){ return (datetime)((long)t/86400*86400); }
 
 double Buf(int h,int shift){ double b[]; if(h==INVALID_HANDLE||CopyBuffer(h,0,shift,1,b)<1) return 0; return b[0]; }
 double PointSize(){ return SymbolInfoDouble(SYM,SYMBOL_POINT); }
@@ -63,8 +66,9 @@ double LotsForStop(double stopPx){ double bal=(AccountSize>0)?AccountSize:Accoun
 double PriorDayClose(){ return iClose(SYM,PERIOD_D1,1); }
 bool WeekendOrFriClose(datetime u){ MqlDateTime d; TimeToStruct(u,d); if(d.day_of_week==0||d.day_of_week==6)return true; if(d.day_of_week==5 && d.hour*60+d.min>=FridayFlattenUTCMin)return true; return false; }
 
-void FlattenC(){ if(PositionSelect(SYM)&&PositionGetInteger(POSITION_MAGIC)==Magic) trade.PositionClose(SYM); g_entryExtreme=0; }
-void RefreshDay(datetime u){ g_utcDay=UtcDayStart(u); g_tradesToday=0; g_haltDay=false; g_dayStartBal=AccountInfoDouble(ACCOUNT_BALANCE); }
+long AcctDayIndex(datetime u){ long sec=(DailyResetHourUTC>=0)?((long)u-(long)DailyResetHourUTC*3600):((long)u+ServerUtcOffset()); return sec/86400; }
+void FlattenC(){ if(PositionSelect(SYM)&&PositionGetInteger(POSITION_MAGIC)==Magic){ if(!trade.PositionClose(SYM)||trade.ResultRetcode()!=TRADE_RETCODE_DONE) return; } g_entryExtreme=0; }
+void RefreshDay(datetime u){ g_acctDay=AcctDayIndex(u); g_tradesToday=0; g_haltDay=false; g_dayStartBal=AccountInfoDouble(ACCOUNT_BALANCE); }
 void CheckGuards(){ double eq=AccountInfoDouble(ACCOUNT_EQUITY);
    if(g_initBal>0&&eq<=g_initBal*(1.0-OverallLossPct/100.0)&&!g_haltAll){g_haltAll=true;FlattenC();}
    if(g_dayStartBal>0&&eq<=g_dayStartBal*(1.0-DailyLossPct/100.0)&&!g_haltDay){g_haltDay=true;FlattenC();} }
@@ -72,6 +76,7 @@ void CheckGuards(){ double eq=AccountInfoDouble(ACCOUNT_EQUITY);
 int OnInit()
 {
    SYM=_Symbol;
+   if(!(bool)MQLInfoInteger(MQL_TESTER)){Print("C3 is a TESTER-ONLY candidate — refusing to run live.");return INIT_FAILED;}
    if(RequireAccountSize&&AccountSize<=0){Print("C3: AccountSize<=0");return INIT_PARAMETERS_INCORRECT;}
    g_emaF=iMA(SYM,PERIOD_H1,EmaFast,0,MODE_EMA,PRICE_CLOSE);
    g_emaS=iMA(SYM,PERIOD_H1,EmaSlow,0,MODE_EMA,PRICE_CLOSE);
@@ -88,7 +93,7 @@ void OnDeinit(const int reason){ if(g_emaF!=INVALID_HANDLE)IndicatorRelease(g_em
 void OnTick()
 {
    datetime u=NowUtc();
-   if(UtcDayStart(u)!=g_utcDay) RefreshDay(u);
+   if(AcctDayIndex(u)!=g_acctDay) RefreshDay(u);
    CheckGuards();
    bool have=(PositionSelect(SYM)&&PositionGetInteger(POSITION_MAGIC)==Magic);
 
@@ -107,28 +112,43 @@ void OnTick()
       return;
    }
    if(g_haltAll||g_haltDay||WeekendOrFriClose(u)) return;
-   if(g_tradesToday>=MaxTradesPerDay) return;
 
+   // On each NEW CLOSED H1 bar, (re)build the pending setup from closed-bar data only. The
+   // breakout TRIGGER is the prior bar's high/low; it is then watched on subsequent ticks.
    datetime bar=iTime(SYM,PERIOD_H1,0);
-   if(bar==g_lastBar) return;                      // evaluate once per new H1 bar
-
-   double emaF=Buf(g_emaF,1), emaS=Buf(g_emaS,1), atr=Buf(g_atr,1);
-   if(emaF<=0||emaS<=0||atr<=0) return;
-   double c1=iClose(SYM,PERIOD_H1,1), h1=iHigh(SYM,PERIOD_H1,1), l1=iLow(SYM,PERIOD_H1,1);
-   double pdc=PriorDayClose(); if(pdc<=0) return;
-   double stopPx=AtrStopMult*atr;
-   double ask=SymbolInfoDouble(SYM,SYMBOL_ASK), bid=SymbolInfoDouble(SYM,SYMBOL_BID), m=MoneyPerPricePerLot();
-   double costPx=(ask-bid)+((m>0)?(2.0*CommissionPerLotUSD)/m:0.0)+SlippageBufferPts*PointSize();
-   if(stopPx < CostGateMult*costPx) { g_lastBar=bar; return; }   // cost gate
-   double lots=LotsForStop(stopPx); if(lots<=0){ g_lastBar=bar; return; }
-
-   bool up   = (c1>emaS && c1>pdc);
-   bool down = (c1<emaS && c1<pdc);
-   // pullback = prior bar tagged EMA20; resume = break of prior bar's high/low
-   if(up && l1<=emaF && ask>h1)
-   { double sl=ask-stopPx; if(trade.Buy(lots,SYM,0.0,sl,0.0,"trendC3")){g_entryExtreme=ask;g_tradesToday++;} }
-   else if(down && h1>=emaF && bid<l1)
-   { double sl=bid+stopPx; if(trade.Sell(lots,SYM,0.0,sl,0.0,"trendC3")){g_entryExtreme=bid;g_tradesToday++;} }
-   g_lastBar=bar;
+   if(bar!=g_lastBar)
+   {
+      g_lastBar=bar; g_pendDir=0;
+      double emaF=Buf(g_emaF,1), emaS=Buf(g_emaS,1), atr=Buf(g_atr,1);
+      double c1=iClose(SYM,PERIOD_H1,1), h1=iHigh(SYM,PERIOD_H1,1), l1=iLow(SYM,PERIOD_H1,1);
+      double pdc=PriorDayClose();
+      if(emaF>0&&emaS>0&&atr>0&&pdc>0)
+      {
+         double stopPx=AtrStopMult*atr;
+         double ask=SymbolInfoDouble(SYM,SYMBOL_ASK), bid=SymbolInfoDouble(SYM,SYMBOL_BID), m=MoneyPerPricePerLot();
+         double costPx=(ask-bid)+((m>0)?(2.0*CommissionPerLotUSD)/m:0.0)+SlippageBufferPts*PointSize();
+         if(stopPx>=CostGateMult*costPx)                     // cost gate at setup time
+         {
+            if(c1>emaS && c1>pdc && l1<=emaF){ g_pendDir=+1; g_pendTrigger=h1; g_pendStop=stopPx; }   // up pullback
+            else if(c1<emaS && c1<pdc && h1>=emaF){ g_pendDir=-1; g_pendTrigger=l1; g_pendStop=stopPx; } // down pullback
+         }
+      }
+   }
+   // watch the pending breakout on EVERY tick of the current bar (not only at the bar edge)
+   if(g_pendDir==0 || g_tradesToday>=MaxTradesPerDay) return;
+   double ask=SymbolInfoDouble(SYM,SYMBOL_ASK), bid=SymbolInfoDouble(SYM,SYMBOL_BID);
+   double lots=LotsForStop(g_pendStop); if(lots<=0){ g_pendDir=0; return; }
+   if(g_pendDir>0 && ask>g_pendTrigger)
+   {
+      trade.Buy(lots,SYM,0.0,ask-g_pendStop,0.0,"trendC3"); uint rc=trade.ResultRetcode();
+      if(rc==TRADE_RETCODE_DONE||rc==TRADE_RETCODE_PLACED){ g_entryExtreme=ask; g_tradesToday++; }
+      g_pendDir=0;                                           // setup consumed this bar either way
+   }
+   else if(g_pendDir<0 && bid<g_pendTrigger)
+   {
+      trade.Sell(lots,SYM,0.0,bid+g_pendStop,0.0,"trendC3"); uint rc=trade.ResultRetcode();
+      if(rc==TRADE_RETCODE_DONE||rc==TRADE_RETCODE_PLACED){ g_entryExtreme=bid; g_tradesToday++; }
+      g_pendDir=0;
+   }
 }
 //+------------------------------------------------------------------+

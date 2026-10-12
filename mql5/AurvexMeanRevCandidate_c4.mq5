@@ -38,13 +38,15 @@ input double OverallLossPct            = 10.0;
 input int    FridayFlattenUTCMin       = 1200;
 input int    ServerUtcOffsetOverrideHours = 999;
 input int    TesterServerUtcOffsetHours   = 999;
+input int    DailyResetHourUTC          = -1;    // account daily-loss reset: -1 = broker/server midnight
 input long   Magic                     = 880044;
 
 CTrade  trade;
 int     g_bb=INVALID_HANDLE, g_rsi=INVALID_HANDLE, g_adx=INVALID_HANDLE, g_atr=INVALID_HANDLE;
 string  SYM;
 double  g_initBal=0, g_dayStartBal=0;
-datetime g_utcDay=0, g_lastBar=0, g_posOpenUtc=0;
+long    g_acctDay=0;
+datetime g_lastBar=0, g_posOpenUtc=0;
 int     g_tradesToday=0;
 bool    g_haltAll=false, g_haltDay=false;
 
@@ -56,7 +58,6 @@ long ServerUtcOffset()
    return (long)(MathRound((double)diff/3600.0)*3600.0);
 }
 datetime NowUtc(){ return (bool)MQLInfoInteger(MQL_TESTER)?(datetime)((long)TimeTradeServer()-ServerUtcOffset()):TimeGMT(); }
-datetime UtcDayStart(datetime t){ return (datetime)((long)t/86400*86400); }
 
 double Buf(int h,int idx,int shift){ double b[]; if(h==INVALID_HANDLE||CopyBuffer(h,idx,shift,1,b)<1) return 0; return b[0]; }
 double PointSize(){ return SymbolInfoDouble(SYM,SYMBOL_POINT); }
@@ -65,8 +66,9 @@ double NormalizeLots(double lots){ double mn=SymbolInfoDouble(SYM,SYMBOL_VOLUME_
 double LotsForStop(double stopPx){ double bal=(AccountSize>0)?AccountSize:AccountInfoDouble(ACCOUNT_BALANCE),m=MoneyPerPricePerLot(); if(stopPx<=0||m<=0)return 0; return NormalizeLots((bal*RiskPct/100.0)/(stopPx*m)); }
 bool WeekendOrFriClose(datetime u){ MqlDateTime d; TimeToStruct(u,d); if(d.day_of_week==0||d.day_of_week==6)return true; if(d.day_of_week==5 && d.hour*60+d.min>=FridayFlattenUTCMin)return true; return false; }
 
-void FlattenC(){ if(PositionSelect(SYM)&&PositionGetInteger(POSITION_MAGIC)==Magic) trade.PositionClose(SYM); g_posOpenUtc=0; }
-void RefreshDay(datetime u){ g_utcDay=UtcDayStart(u); g_tradesToday=0; g_haltDay=false; g_dayStartBal=AccountInfoDouble(ACCOUNT_BALANCE); }
+long AcctDayIndex(datetime u){ long sec=(DailyResetHourUTC>=0)?((long)u-(long)DailyResetHourUTC*3600):((long)u+ServerUtcOffset()); return sec/86400; }
+void FlattenC(){ if(PositionSelect(SYM)&&PositionGetInteger(POSITION_MAGIC)==Magic){ if(!trade.PositionClose(SYM)||trade.ResultRetcode()!=TRADE_RETCODE_DONE) return; } g_posOpenUtc=0; }
+void RefreshDay(datetime u){ g_acctDay=AcctDayIndex(u); g_tradesToday=0; g_haltDay=false; g_dayStartBal=AccountInfoDouble(ACCOUNT_BALANCE); }
 void CheckGuards(){ double eq=AccountInfoDouble(ACCOUNT_EQUITY);
    if(g_initBal>0&&eq<=g_initBal*(1.0-OverallLossPct/100.0)&&!g_haltAll){g_haltAll=true;FlattenC();}
    if(g_dayStartBal>0&&eq<=g_dayStartBal*(1.0-DailyLossPct/100.0)&&!g_haltDay){g_haltDay=true;FlattenC();} }
@@ -74,6 +76,7 @@ void CheckGuards(){ double eq=AccountInfoDouble(ACCOUNT_EQUITY);
 int OnInit()
 {
    SYM=_Symbol;
+   if(!(bool)MQLInfoInteger(MQL_TESTER)){Print("C4 is a TESTER-ONLY candidate — refusing to run live.");return INIT_FAILED;}
    if(RequireAccountSize&&AccountSize<=0){Print("C4: AccountSize<=0");return INIT_PARAMETERS_INCORRECT;}
    g_bb =iBands(SYM,PERIOD_M5,BbPeriod,0,BbDev,PRICE_CLOSE);
    g_rsi=iRSI(SYM,PERIOD_M5,RsiPeriod,PRICE_CLOSE);
@@ -91,7 +94,7 @@ void OnDeinit(const int reason){ if(g_bb!=INVALID_HANDLE)IndicatorRelease(g_bb);
 void OnTick()
 {
    datetime u=NowUtc();
-   if(UtcDayStart(u)!=g_utcDay) RefreshDay(u);
+   if(AcctDayIndex(u)!=g_acctDay) RefreshDay(u);
    CheckGuards();
    bool have=(PositionSelect(SYM)&&PositionGetInteger(POSITION_MAGIC)==Magic);
    if(have)
@@ -120,13 +123,13 @@ void OnTick()
    {
       double sl=up+AtrStopMult*atr, tp=mid, stopPx=sl-bid;
       if(stopPx>0 && (bid-tp) >= CostGateMult*costPx)
-      { double lots=LotsForStop(stopPx); if(lots>0 && trade.Sell(lots,SYM,0.0,sl,tp,"meanrevC4")){g_posOpenUtc=u;g_tradesToday++;} }
+      { double lots=LotsForStop(stopPx); if(lots>0){ trade.Sell(lots,SYM,0.0,sl,tp,"meanrevC4"); uint rc=trade.ResultRetcode(); if(rc==TRADE_RETCODE_DONE||rc==TRADE_RETCODE_PLACED){g_posOpenUtc=u;g_tradesToday++;} } }
    }
    else if(c1<lo && rsi<rsiLo)                       // over-extended down -> fade long
    {
       double sl=lo-AtrStopMult*atr, tp=mid, stopPx=ask-sl;
       if(stopPx>0 && (tp-ask) >= CostGateMult*costPx)
-      { double lots=LotsForStop(stopPx); if(lots>0 && trade.Buy(lots,SYM,0.0,sl,tp,"meanrevC4")){g_posOpenUtc=u;g_tradesToday++;} }
+      { double lots=LotsForStop(stopPx); if(lots>0){ trade.Buy(lots,SYM,0.0,sl,tp,"meanrevC4"); uint rc=trade.ResultRetcode(); if(rc==TRADE_RETCODE_DONE||rc==TRADE_RETCODE_PLACED){g_posOpenUtc=u;g_tradesToday++;} } }
    }
 }
 //+------------------------------------------------------------------+

@@ -436,6 +436,26 @@ def cmd_reports(a):
     parsed = [parse_mt5_report(p) for p in files]
     os.makedirs(a.out, exist_ok=True)
     target_pct = getattr(a, "target_pct", None)
+    # --expect: analyze ONLY this run's reports (tags from a batch's expected_reports.txt) and
+    # ERROR on any missing (a failed / not-produced run). Without it, every *.htm in --dir is read.
+    expect_tags, missing_expected = [], []
+    expect_path = getattr(a, "expect", None)
+    if expect_path:
+        if not os.path.exists(expect_path):
+            print(f"reports: --expect file not found: {expect_path}", file=sys.stderr); return 3
+        expect_tags = [ln.strip() for ln in open(expect_path, encoding="utf-8") if ln.strip()]
+        keep, present = [], set()
+        for p in files:
+            bn = os.path.basename(p)
+            hit = next((t for t in expect_tags if t in bn), None)
+            if hit:
+                keep.append(p); present.add(hit)
+        missing_expected = [t for t in expect_tags if t not in present]
+        ignored = len(files) - len(keep)
+        files = keep
+        parsed = [parse_mt5_report(p) for p in files]
+        if ignored:
+            print(f"reports: --expect active; ignoring {ignored} report(s) not from this run")
     rejected, valid = [], []
     for rep in parsed:
         sha = hashlib.sha256(open(os.path.join(a.dir, rep["file"]), "rb").read()).hexdigest()[:16]
@@ -568,6 +588,14 @@ def cmd_reports(a):
           f"mismatched {len(mismatched)} | rejected {len(rejected)}")
     print(f"ledger += {added} rows -> {ledger}")
     print(f"out: {a.out}/settings_check.md , {a.out}/comparison.md")
+    if missing_expected:
+        with open(os.path.join(a.out, "settings_check.md"), "a", encoding="utf-8") as fh:
+            fh.write("\n## MISSING EXPECTED REPORTS (failed / not-produced runs)\n")
+            for t in missing_expected:
+                fh.write(f"- `{t}` — no report file found in {a.dir}\n")
+        print(f"reports: ERROR — {len(missing_expected)} expected report(s) MISSING "
+              f"(failed/not-run): {', '.join(missing_expected)}", file=sys.stderr)
+        return 3                                    # a run is missing -> hard error
     return 2 if (rejected or mismatched) else 0   # non-zero exit on any settings error
 
 
@@ -984,6 +1012,10 @@ def cmd_batch(a):
             man.append(f"- {sym}: expected `{base}`")
         man.append("")
     open(os.path.join(a.out, "MANIFEST.md"), "w", encoding="utf-8").write("\n".join(man) + "\n")
+    # expected-reports manifest: the RUNNABLE run tags. `reports --expect` uses it to analyze ONLY
+    # this run's reports and to ERROR if any expected report is missing (a failed/not-run cell).
+    open(os.path.join(a.out, "expected_reports.txt"), "w", encoding="utf-8").write(
+        "\n".join(t for (_, _, _, _, _, t, _) in emitted) + ("\n" if emitted else ""))
 
     print(f"batch[{cand}]: runnable {len(emitted)} | pending(future) {len(pending)} | "
           f"skipped(boundary) {len(skipped)} | missing-set {len(missing)}")
@@ -1077,6 +1109,9 @@ def main():
     r.add_argument("--ledger", default=None)
     r.add_argument("--target-pct", dest="target_pct", type=float, default=10.0,
                    help="FTMO step target %% for reached/days-to-target (step-1=10, step-2=5)")
+    r.add_argument("--expect", default=None,
+                   help="a batch's expected_reports.txt: analyze ONLY those run tags and error "
+                        "(exit 3) if any expected report is missing (failed/not-produced run)")
     r.add_argument("--out", default="research_out")
     r.set_defaults(func=cmd_reports)
     c = sub.add_parser("collector", help="analyse the collector SQLite (read-only)")

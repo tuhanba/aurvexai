@@ -293,6 +293,23 @@ def test_singleton_standalone_not_error(tmp_path):
     assert "Standalone runs" in cmp_md and "XAUUSD" in cmp_md    # shown with metrics, not compared
 
 
+def test_expect_filters_this_run_and_errors_on_missing(tmp_path):
+    # two produced reports + a stray one; expected list names run A, run B, and a MISSING run C
+    make_report(tmp_path / "runA_GER40.html", "GER40.cash", *SUMMER, _trail(BASE_INPUTS, "0.5"), [10.0])
+    make_report(tmp_path / "runB_JP225.html", "JP225.cash", *SUMMER,
+                dict(_trail(BASE_INPUTS, "0.5"), RiskPct="0.59"), [11.0])
+    make_report(tmp_path / "stray_other.html", "XAUUSD", *SUMMER, _trail(BASE_INPUTS, "0.0"), [12.0])
+    exp = tmp_path / "expected.txt"
+    exp.write_text("runA_GER40\nrunB_JP225\nrunC_MISSING\n", encoding="utf-8")
+    rc = ar.cmd_reports(_ns(tmp_path, expect=str(exp)))
+    assert rc == 3                                           # a run is missing -> hard error
+    se = (tmp_path / "out" / "settings_check.md").read_text()
+    assert "MISSING EXPECTED REPORTS" in se and "runC_MISSING" in se
+    cmp_md = (tmp_path / "out" / "comparison.md").read_text()
+    assert "GER40.cash" in cmp_md and "JP225.cash" in cmp_md
+    assert "XAUUSD" not in cmp_md                            # stray report ignored (not this run)
+
+
 def test_ledger_dedup_and_columns(tmp_path):
     make_report(tmp_path / "a.html", "GER40.cash", *SUMMER, _trail(BASE_INPUTS, "0.3"), [10.0])
     make_report(tmp_path / "b.html", "GER40.cash", *SUMMER, _trail(BASE_INPUTS, "0.5"), [20.0])
