@@ -52,3 +52,46 @@ validated on reserved (OOS) periods before it is believed.
 > sets. When F7 compiles clean (0 errors) and MT5 is verified, M05 can be added
 > to a batch exactly like C1–C4; M07/M09 remain queued until their rules are
 > locked and their EAs exist.
+
+## First measurement (Sept 2026 dev, GER40) — result + fix
+
+Operator-run in the MT5 tester (recorded in `research_out/source_scan_results.csv`):
+
+| candidate | symbol | period | trades | net | PF | equity DD |
+|---|---|---|---|---|---|---|
+| M05 | GER40.cash | 2026.09 (in-sample dev) | 27 | **−270.98** | **0.83** | 2.80% |
+
+**Verdict: no edge on the first scan — net-negative, PF < 1. NOT advancing to
+parameter optimization** (per instruction). The result is recorded as a tried
+method; M05's catalog row is `status: tested-dev-negative`.
+
+### Weekend-carry bug (2 Fri→Mon positions) — root cause + fix
+
+Two positions survived the weekend although weekend-flat is a hard rule. Cause:
+the Friday flatten was a **fixed** `FridayFlattenUTCMin=1200` (20:00 UTC). GER40's
+Friday session (FTMO server = EET) **closes before that in UTC**, so no tick
+arrived after the threshold on Friday and the tick-driven flatten never fired.
+
+Fix (applied to M05 **and** C1/C3/C4): the Friday flatten is now aligned to the
+**symbol's own session close** — `SymbolInfoSessionTrade(SYM, FRIDAY, …)` minus
+`FridayFlattenBufferMin` (default 15), converted to UTC — so the close is
+attempted while the session is still open and ticks still flow. Controlled by
+`UseSessionFlatten=true`; falls back to `FridayFlattenUTCMin` if session info is
+unavailable. **Verify in the tester:** OnInit logs
+`friFlattenUTCmin=<n> (session-aligned=yes)`; re-run Sept and confirm **0
+Fri→Mon carries** before trusting any further M05 number.
+
+### Pre-defined OOS tests prepared (not yet run)
+
+`experiments/M05_oos/M05_oos_v1v4/` — M05 over the validation-plan windows
+(`FTMO_VALIDATION_PLAN.md`), DST-correct offset pinned per period, run id
+`M05_oos_v1v4`:
+
+- **Runnable now (12):** V1 `2026.01.05–03.27` (+2), V2 `2026.03.30–06.30` (+3),
+  V3 `2026.07.01–08.31` (+3) × {GER40, JP225, XAUUSD, XAGUSD}.
+- **Pending (4):** V4 `2026.10.26–12.18` (+2) — future window, under `pending/`,
+  excluded from `run_all.bat`.
+
+Operator: compile the **fixed** EA, run `run_all.bat`, then analyze with
+`reports --expect experiments/M05_oos/M05_oos_v1v4/expected_reports.txt` (its
+run id scopes the analysis; a stale report cannot satisfy this run).

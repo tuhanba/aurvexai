@@ -1,0 +1,23 @@
+; M05 inside-bar breakout base set for AurvexInsideBarCandidate_m05.ex5 (tester-only). NOT a live set.
+; Rules LOCKED from source (FTMO_SOURCE_SCAN.md M05); [ADAPTATION] fields are ours, declared in the EA header.
+; Timeframe: set the tester --tf to match InsideTF (16385 = PERIOD_H1). Offset re-pinned per period by the batch.
+RiskPct=0.46
+AccountSize=25000
+RequireAccountSize=true
+InsideTF=16385
+TpR=1.0
+BreakBufferPts=0
+SetupValidBars=3
+RequireCloseBeyond=false
+MaxTradesPerDay=3
+CostGateMult=2.0
+CommissionPerLotUSD=0.0
+SlippageBufferPts=0.0
+DailyLossPct=5.0
+OverallLossPct=10.0
+FridayFlattenUTCMin=1200
+UseSessionFlatten=true
+FridayFlattenBufferMin=15
+ServerUtcOffsetOverrideHours=999
+TesterServerUtcOffsetHours=2
+Magic=880055

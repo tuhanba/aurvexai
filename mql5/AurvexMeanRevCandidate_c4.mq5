@@ -35,7 +35,9 @@ input double CommissionPerLotUSD       = 0.0;
 input double SlippageBufferPts         = 0.0;
 input double DailyLossPct              = 5.0;
 input double OverallLossPct            = 10.0;
-input int    FridayFlattenUTCMin       = 1200;
+input int    FridayFlattenUTCMin       = 1200;   // fallback Friday flatten (UTC min) if session info missing
+input bool   UseSessionFlatten         = true;   // align Friday flatten to the SYMBOL's session close
+input int    FridayFlattenBufferMin    = 15;     // flatten this many minutes BEFORE the Friday session close
 input int    ServerUtcOffsetOverrideHours = 999;
 input int    TesterServerUtcOffsetHours   = 999;
 input int    DailyResetHourUTC          = -1;    // account daily-loss reset: -1 = broker/server midnight
@@ -64,7 +66,19 @@ double PointSize(){ return SymbolInfoDouble(SYM,SYMBOL_POINT); }
 double MoneyPerPricePerLot(){ double ts=SymbolInfoDouble(SYM,SYMBOL_TRADE_TICK_SIZE),tv=SymbolInfoDouble(SYM,SYMBOL_TRADE_TICK_VALUE); return ts>0?tv/ts:0; }
 double NormalizeLots(double lots){ double mn=SymbolInfoDouble(SYM,SYMBOL_VOLUME_MIN),st=SymbolInfoDouble(SYM,SYMBOL_VOLUME_STEP),mx=SymbolInfoDouble(SYM,SYMBOL_VOLUME_MAX); if(st>0)lots=MathFloor(lots/st)*st; if(lots<mn)return 0; if(lots>mx)lots=mx; return lots; }
 double LotsForStop(double stopPx){ double bal=(AccountSize>0)?AccountSize:AccountInfoDouble(ACCOUNT_BALANCE),m=MoneyPerPricePerLot(); if(stopPx<=0||m<=0)return 0; return NormalizeLots((bal*RiskPct/100.0)/(stopPx*m)); }
-bool WeekendOrFriClose(datetime u){ MqlDateTime d; TimeToStruct(u,d); if(d.day_of_week==0||d.day_of_week==6)return true; if(d.day_of_week==5 && d.hour*60+d.min>=FridayFlattenUTCMin)return true; return false; }
+// Friday flatten (UTC min) = the SYMBOL's last session close (server time) minus a buffer, in UTC,
+// so the close fires while the session is still OPEN and ticks arrive (a fixed UTC time after the
+// symbol's Friday close gets no tick → weekend carry). Falls back to FridayFlattenUTCMin if missing.
+int FriFlattenUtcMin()
+{
+   if(!UseSessionFlatten) return FridayFlattenUTCMin;
+   datetime f,t; int idx=0; long lastTo=-1;
+   while(SymbolInfoSessionTrade(SYM,FRIDAY,(uint)idx,f,t)){ lastTo=(long)t%86400; idx++; }
+   if(lastTo<0) return FridayFlattenUTCMin;
+   long utcSec=(((( lastTo-ServerUtcOffset()-(long)FridayFlattenBufferMin*60 )%86400)+86400)%86400);
+   return (int)(utcSec/60);
+}
+bool WeekendOrFriClose(datetime u){ MqlDateTime d; TimeToStruct(u,d); if(d.day_of_week==0||d.day_of_week==6)return true; if(d.day_of_week==5 && d.hour*60+d.min>=FriFlattenUtcMin())return true; return false; }
 
 long AcctDayIndex(datetime u){ long sec=(DailyResetHourUTC>=0)?((long)u-(long)DailyResetHourUTC*3600):((long)u+ServerUtcOffset()); return sec/86400; }
 void FlattenC(){ if(PositionSelect(SYM)&&PositionGetInteger(POSITION_MAGIC)==Magic){ if(!trade.PositionClose(SYM)||trade.ResultRetcode()!=TRADE_RETCODE_DONE) return; } g_posOpenUtc=0; }

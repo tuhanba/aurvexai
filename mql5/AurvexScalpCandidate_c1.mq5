@@ -38,7 +38,9 @@ input double CommissionPerLotUSD       = 0.0;    // round-turn commission per lo
 input double SlippageBufferPts         = 0.0;    // extra slippage allowance (points) folded into the cost gate
 input double DailyLossPct              = 5.0;    // FTMO daily-loss guard: halt the day past this DD
 input double OverallLossPct            = 10.0;   // FTMO overall guard: halt entirely past this DD
-input int    FridayFlattenUTCMin       = 1200;   // flatten + stop on Friday at/after this UTC minute (weekend-flat)
+input int    FridayFlattenUTCMin       = 1200;   // fallback Friday flatten (UTC min) if session info missing
+input bool   UseSessionFlatten         = true;   // align Friday flatten to the SYMBOL's session close
+input int    FridayFlattenBufferMin    = 15;     // flatten this many minutes BEFORE the Friday session close
 input int    DailyResetHourUTC          = -1;    // account daily-loss reset: -1 = broker/server midnight (FTMO rule)
 input int    ServerUtcOffsetOverrideHours = 999; // 999 = auto from live server
 input int    TesterServerUtcOffsetHours   = 999; // tester: set to the broker's real offset (e.g. 3)
@@ -101,11 +103,23 @@ double LotsForStop(double stopPx)
    double riskMoney=bal*RiskPct/100.0;
    return NormalizeLots(riskMoney/(stopPx*money));
 }
+// Friday flatten (UTC min) = the SYMBOL's last session close (server time) minus a buffer, in UTC,
+// so the close fires while the session is still OPEN and ticks arrive (a fixed UTC time after the
+// symbol's Friday close gets no tick → weekend carry). Falls back to FridayFlattenUTCMin if missing.
+int FriFlattenUtcMin()
+{
+   if(!UseSessionFlatten) return FridayFlattenUTCMin;
+   datetime f,t; int idx=0; long lastTo=-1;
+   while(SymbolInfoSessionTrade(SYM,FRIDAY,(uint)idx,f,t)){ lastTo=(long)t%86400; idx++; }
+   if(lastTo<0) return FridayFlattenUTCMin;
+   long utcSec=(((( lastTo-ServerUtcOffset()-(long)FridayFlattenBufferMin*60 )%86400)+86400)%86400);
+   return (int)(utcSec/60);
+}
 bool InWindow(datetime u)
 {
    MqlDateTime d; TimeToStruct(u,d);
    if(d.day_of_week==0 || d.day_of_week==6) return false;              // weekend flat
-   if(d.day_of_week==5 && d.hour*60+d.min>=FridayFlattenUTCMin) return false;
+   if(d.day_of_week==5 && d.hour*60+d.min>=FriFlattenUtcMin()) return false;
    return (d.hour>=ScalpStartUTC && d.hour<ScalpEndUTC);
 }
 double HighestN(){ int s=iHighest(SYM,PERIOD_M1,MODE_HIGH,NbarLookback,1); return (s<0)?0:iHigh(SYM,PERIOD_M1,s); }
