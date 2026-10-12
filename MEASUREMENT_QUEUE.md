@@ -74,3 +74,32 @@ The experiment ledger is **append-only** (deduped by hash), never deleted; all
 error exit codes are preserved. A period **absent from the ledger is UNKNOWN**
 (confirm with the operator) — never auto-declared "not examined". **No live-go
 decision** is made from these runs.
+
+## Active next: C2 (ready)
+
+The next measurement is the ready **C2** package
+(`experiments/C2_sessionbreak/C2_sessionbreak_oos/`, 12 runs, V1–V3, ORB hour
+8/7, /portable runner). JP225 M05 vs the risk-matched baseline is done (see
+`JP225_BASELINE_COMPARE.md`): at 0.46% M05 JP225 is net-ahead and robust on V2/V3
+while the baseline's small positives are one-trade fragile — M05 JP225 stays a
+research candidate, pending reserved-period validation below. No live change.
+
+## Reserved / unused-period validation (planned separately)
+
+Validation must run on a window the strategy was **not** examined on. Proven from
+the ledger (`research_out/experiment_ledger.csv`), not from the calendar:
+
+- **Examined (in the ledger, do NOT reuse as validation):** V1 `2026.01.05–03.27`,
+  V2 `2026.03.30–06.30`, V3 `2026.07.01–08.31` — for M05 (all symbols) and, after
+  their runs, C2–C4. September `2026.09` is the in-sample dev month.
+- **Reserved / unused:** **V4 `2026.10.26–12.18`** (EET +2). It is **pending**
+  (future data) and **absent from the ledger** → its status reads UNKNOWN, and the
+  batch emits it under `pending/`, excluded from the runner, until the window has
+  fully elapsed and real tick history exists.
+- **Plan:** once V4 data is available, re-run the surviving candidates — first
+  **M05 JP225** (the only M05 cell with a robust OOS edge) and whichever of C2–C4
+  survive V1–V3 — on V4 only, analyze with a fresh `run_id`'s `--expect`, and
+  require the V4 result to **hold** (positive and robust to best-trade removal)
+  before any further step. V4 is validation-only; it is never used to tune.
+- **Guard:** do not treat a ledger-absent period as "clean/unexamined" — confirm
+  with the operator; and do not make a live-go decision from V1–V4 alone.

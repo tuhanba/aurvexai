@@ -20,23 +20,50 @@ can't satisfy it).
 
 ## Comparison to fill (same symbol JP225, same period, same 0.46% risk)
 
-| period | side | net | reached target? | overall-limit check | net_ex_top1 (robustness) |
-|---|---|---|---|---|---|
-| V1 2026.01.05–03.27 | **M05 (measured)** | **−480.48** | NO | UNKNOWN (min bal 24087.81 > floor; min equity n/a) | −615.73 |
-| V1 | baseline@0.46 | _run pkg_ | … | … | … |
-| V2 2026.03.30–06.30 | **M05 (measured)** | **+617.50** | NO | UNKNOWN (min bal 24885.00 > floor; min equity n/a) | **+488.75** |
-| V2 | baseline@0.46 | _run pkg_ | … | … | … |
-| V3 2026.07.01–08.31 | **M05 (measured)** | **+1141.09** | NO | UNKNOWN (min bal 24883.03 > floor; min equity n/a) | **+970.01** |
-| V3 | baseline@0.46 | _run pkg_ | … | … | … |
+Both sides measured, JP225.cash, same V1–V3, **RiskPct 0.46**, same conditions
+(reconciled, recorded in `research_out/experiment_ledger.csv` by file hash):
 
-**M05 JP225 OOS (measured, 10 of 12 arrived last; all 12 now in the ledger):**
-sum V1–V3 ≈ **+1278** net (realized comm+swap included). V2 and V3 are positive
-**and** stay positive with the single best trade removed (`net_ex_top1` +488.75 /
-+970.01), so the JP225 result is **not** monster-driven — this is why JP225
-remains a live research candidate while GER40/XAUUSD/XAGUSD were eliminated. The
-baseline@0.46 column is filled by running the prepared package
-(`experiments/JP225_baseline_cmp/`). Reached-target is NO per single OOS leg
-(no +10% within one leg); none of this is a live-go signal on its own.
+| period | side | trades | net | reached? | maxEqDD (context) | net_ex_top1 (robustness) |
+|---|---|---|---|---|---|---|
+| V1 2026.01.05–03.27 | **M05** | 104 | **−480.48** | NO | 7.02%† | −615.73 (neg) |
+| V1 | baseline@0.46 | 21 | +89.91 | NO | 1.45% | **−79.76 (one best trade)** |
+| V2 2026.03.30–06.30 | **M05** | 115 | **+617.50** | NO | ~6%† | **+488.75 (robust)** |
+| V2 | baseline@0.46 | 21 | +44.72 | NO | 2.59% | **−129.72 (one best trade)** |
+| V3 2026.07.01–08.31 | **M05** | 74 | **+1141.09** | NO | ~6%† | **+970.01 (robust)** |
+| V3 | baseline@0.46 | 14 | −498.39 | NO | 2.32% | −646.53 (neg) |
+
+(†M05 maxEqDD shown for context only, not the limit test. Overall-limit check =
+UNKNOWN for every cell both sides: min balance stayed above the initial-based
+floor, but min equity is not in the report. Daily limit UNKNOWN. **No cell
+breaches a measurable limit; none is confirmable either.**)
+
+### Read-out (same period, same 0.46% risk)
+
+- **Net:** M05 sum V1–V3 ≈ **+1278**; baseline sum ≈ **−364**. M05 is ahead on
+  the pair that matters (V2, V3) and the baseline is net-negative overall.
+- **Reached target:** **NO for all 6** — neither reaches +10% within a single
+  OOS leg (time-to-target not achieved; not inferred from winners).
+- **Drawdown:** baseline runs much smaller equity DD (1.4–2.6%) on far fewer
+  trades (14–21 vs 74–115); M05 trades a lot more and swings wider.
+- **Robustness (best-trade-removed):** the decisive gap. **M05 V2/V3 stay
+  positive** with the single best trade removed (`net_ex_top1` +488.75 / +970.01)
+  — not monster-driven. The **baseline's small V1/V2 positives are entirely one
+  trade** (`net_ex_top1` turns −79.76 / −129.72), so the baseline edge here is
+  **fragile**, not real.
+
+**Verdict:** at matched 0.46% risk over V1–V3, M05 JP225 is the stronger and more
+robust of the two, but still **reaches no target** and is **not validated on a
+reserved period**. M05 JP225 **stays a research candidate** — no live-config
+change, no live-go.
+
+### Cost caveat (unchanged)
+
+Both sides carry **CommissionPerLotUSD=0 / SlippageBufferPts=0** at the entry
+gate (an assumption). Realized commission+swap is small here (M05 JP225 ≈ −52 to
+−62; baseline ≈ −1.6 to −2.6, one leg 0.0) and already in the nets above, but
+**execution slippage beyond spread is NOT modelled** — a real-cost re-run with the
+broker's per-lot commission + a slippage buffer is required before trusting the
+after-cost edge.
 
 `reports` fills `net`, `reached_target`/`days_to_target`, `eq_dd_pct` (context
 only), and the `limit_viol` column. The FTMO **overall** limit is **minimum
