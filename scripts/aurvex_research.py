@@ -1100,6 +1100,86 @@ def cmd_derive(a):
     return 0 if written else 2
 
 
+SOURCE_SCAN_COLS = [
+    "id", "method", "family", "aliases", "condition", "entry", "stop", "exit",
+    "data_need", "have_data", "codable", "cost_sensitivity", "needs_orderbook",
+    "evidence", "vague_flags", "missing_rules", "source_urls", "selected", "rationale",
+    "status", "decision",
+]
+
+
+def cmd_sources(a):
+    """Validate + report the source-scan ledger (read-only). Never fabricates a
+    rule and never lets a 'selected' method depend on data we lack."""
+    if not os.path.exists(a.ledger):
+        print(f"sources: ledger not found: {a.ledger}", file=sys.stderr)
+        return 2
+    with open(a.ledger, newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    if not rows:
+        print("sources: ledger is empty", file=sys.stderr)
+        return 2
+    missing_cols = [c for c in SOURCE_SCAN_COLS if c not in rows[0]]
+    if missing_cols:
+        print(f"sources: ledger missing columns: {missing_cols}", file=sys.stderr)
+        return 2
+
+    errors, warns = [], []
+    for r in rows:
+        rid = r.get("id") or "?"
+        if not (r.get("source_urls") or "").strip():
+            errors.append(f"{rid}: no source link (ads/claims are not evidence; a real source is required)")
+        sel = (r.get("selected") or "").strip().lower() in ("yes", "y", "true", "1")
+        ob = (r.get("needs_orderbook") or "").strip().lower() in ("yes", "y", "true", "1")
+        have = (r.get("have_data") or "").strip().lower()
+        if sel and ob:
+            errors.append(f"{rid}: SELECTED but flagged order-book-dependent — contradiction")
+        if sel and have == "no":
+            errors.append(f"{rid}: SELECTED but have_data=no — cannot test with data in hand")
+        if sel and (r.get("missing_rules") or "").strip() and "paramet" not in (r.get("rationale") or "").lower() \
+                and "paramet" not in (r.get("missing_rules") or "").lower():
+            warns.append(f"{rid}: SELECTED with a missing rule not marked parameterizable — confirm it is tested, not invented")
+        if ob:
+            warns.append(f"{rid}: needs order-book depth we do NOT capture — parked (data we lack)")
+
+    selected = [r for r in rows if (r.get("selected") or "").strip().lower() in ("yes", "y", "true", "1")]
+    orderbook = [r for r in rows if (r.get("needs_orderbook") or "").strip().lower() in ("yes", "y", "true", "1")]
+
+    os.makedirs(a.out, exist_ok=True)
+    md = ["# Source-scan status", "",
+          f"- ledger: `{a.ledger}` · candidates: **{len(rows)}** · selected: **{len(selected)}** · "
+          f"order-book-dependent (parked): **{len(orderbook)}**",
+          "- Ads / profit-claims / cherry-picked winners are NOT counted as evidence.",
+          "- Vague rules are flagged; missing rules are parameterized+tested, never invented.", "",
+          "| id | method | family | data | code | cost | order-book | selected |",
+          "|---|---|---|---|---|---|---|---|"]
+    for r in rows:
+        md.append(f"| {r['id']} | {r['method']} | {r['family']} | {r['have_data']} | {r['codable']} | "
+                  f"{r['cost_sensitivity']} | {r['needs_orderbook']} | {r['selected']} |")
+    md += ["", "## Selected for first test"]
+    for r in selected:
+        md.append(f"- **{r['id']} {r['method']}** ({r['family']}): {r['rationale']}")
+    if orderbook:
+        md += ["", "## Flagged — data we lack (parked)"]
+        for r in orderbook:
+            md.append(f"- **{r['id']} {r['method']}**: {r['missing_rules']}")
+    if warns:
+        md += ["", "## Notes"] + [f"- {w}" for w in warns]
+    if errors:
+        md += ["", "## ERRORS"] + [f"- {e}" for e in errors]
+    outp = os.path.join(a.out, "source_scan_status.md")
+    open(outp, "w", encoding="utf-8").write("\n".join(md) + "\n")
+
+    for e in errors:
+        print(f"ERROR {e}", file=sys.stderr)
+    for w in warns:
+        print(f"note  {w}")
+    print(f"sources: {len(rows)} candidates | selected {len(selected)} "
+          f"({', '.join(r['id'] for r in selected)}) | parked(order-book) {len(orderbook)}")
+    print(f"out: {outp}")
+    return 1 if errors else 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="Aurvex research automation (read-only).")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1154,6 +1234,11 @@ def main():
     d.add_argument("--label", default="v314_baseline")
     d.add_argument("--out", default="sets_baseline")
     d.set_defaults(func=cmd_derive)
+    s = sub.add_parser("sources", help="validate + report the source-scan ledger (read-only)")
+    s.add_argument("--ledger", default="research_out/source_scan_ledger.csv",
+                   help="source-scan methods ledger CSV")
+    s.add_argument("--out", default="research_out")
+    s.set_defaults(func=cmd_sources)
     a = ap.parse_args()
     sys.exit(a.func(a))
 

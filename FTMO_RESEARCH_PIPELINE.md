@@ -8,6 +8,8 @@ reports    --dir DIR [--vary INPUT] [--ledger CSV] [--out DIR]
 collector  --db DB [--out DIR] [--max-gap-min N] [--stale-min N]
 batch      --symbols S1,S2 --sets DIR --set-pattern P --periods F:T,F:T
            [--ea ..] [--candidate LABEL] [--ledger CSV] [--today D] [--out DIR]
+derive     --dir DIR [--symbols ..] [--trail V] [--set-pattern P] [--label L] [--out DIR]
+sources    [--ledger CSV] [--out DIR]
 ```
 
 ## Deliverables
@@ -40,6 +42,19 @@ batch      --symbols S1,S2 --sets DIR --set-pattern P --periods F:T,F:T
    `IMPORTER_HIDDEN_LAUNCHER.md`). Runs the AurvexImporter v13 task with no console window, logs
    to a file, preserves the exit code, and prevents overlapping runs; with Task Scheduler steps
    and a post-setup check that the window is gone **and** the DB keeps importing.
+7. **Source-scan research track** — `sources` + `FTMO_SOURCE_SCAN.md` +
+   `research_out/source_scan_ledger.csv`. Scans how day-trading methods are *described* in
+   public sources (blogs, indicator listings, forums) as **condition → entry → stop → exit**,
+   not limited to the names we picked for C1–C4. Each method records **source links**; ads /
+   profit-claims / cherry-picked winners are **not** evidence; aliases of one method are merged;
+   vague rules are **flagged** and missing rules are **parameterized + tested**, never invented.
+   `sources` validates the ledger (every row has a source; no **selected** method depends on data
+   we lack or an unflagged missing rule) and reports the catalog + the 3 first-test picks, exiting
+   non-zero on a contradiction. Scan #1: 11 candidates, selected **M05 inside-bar / M07 Turtle-Soup
+   false-break / M09 RSI(2)**, with **M11 liquidity-sweep parked** (needs order-book depth we do
+   not capture). Selected methods are compared on the **same symbols/periods/risk** as the current
+   system, reporting after-cost gain + time-to-target + drawdown + **account-limit violation rate**
+   together, and validated on reserved periods before being believed.
 
 ## Success criteria (met)
 

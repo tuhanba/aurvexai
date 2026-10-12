@@ -552,3 +552,63 @@ def test_derive_skips_unvalidated_report(tmp_path):
     assert ar.cmd_derive(_derive_ns(tmp_path, reps)) == 2        # no validated report → non-zero
     prov = (tmp_path / "bsets" / "PROVENANCE.md").read_text()
     assert "SKIPPED" in prov and "GER40.cash" in prov
+
+
+# --------------------------------------------------------------------------- #
+# sources — source-scan ledger validation + report  (Part B)
+# --------------------------------------------------------------------------- #
+def _write_scan(path, rows):
+    import csv
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=ar.SOURCE_SCAN_COLS)
+        w.writeheader()
+        for r in rows:
+            w.writerow({c: r.get(c, "") for c in ar.SOURCE_SCAN_COLS})
+
+
+def _scan_row(**kw):
+    base = dict(id="M01", method="Inside-bar breakout", family="breakout", aliases="IB",
+                condition="inside bar", entry="stop beyond", stop="opposite side", exit="R",
+                data_need="OHLC", have_data="yes", codable="high", cost_sensitivity="med",
+                needs_orderbook="no", evidence="blog; no cited data", vague_flags="", missing_rules="",
+                source_urls="https://example.com/ib", selected="no", rationale="")
+    base.update(kw)
+    return base
+
+
+def test_sources_reports_selection_and_parks_orderbook(tmp_path):
+    led = tmp_path / "scan.csv"
+    _write_scan(led, [
+        _scan_row(id="M05", selected="yes", rationale="OHLC-only mechanical"),
+        _scan_row(id="M11", method="Liquidity sweep", family="mean-reversion",
+                  have_data="no", needs_orderbook="yes", selected="no",
+                  missing_rules="needs L2 order-book depth we do not capture"),
+    ])
+    ns = types.SimpleNamespace(ledger=str(led), out=str(tmp_path / "out"))
+    assert ar.cmd_sources(ns) == 0
+    md = (tmp_path / "out" / "source_scan_status.md").read_text()
+    assert "M05" in md and "Selected for first test" in md
+    assert "data we lack" in md.lower() and "M11" in md           # order-book method parked
+
+
+def test_sources_errors_when_selected_needs_orderbook(tmp_path):
+    led = tmp_path / "scan.csv"
+    _write_scan(led, [_scan_row(id="M11", needs_orderbook="yes", have_data="no", selected="yes")])
+    ns = types.SimpleNamespace(ledger=str(led), out=str(tmp_path / "out"))
+    assert ar.cmd_sources(ns) == 1                                # contradiction → hard error
+    md = (tmp_path / "out" / "source_scan_status.md").read_text()
+    assert "ERRORS" in md
+
+
+def test_sources_errors_when_no_source_link(tmp_path):
+    led = tmp_path / "scan.csv"
+    _write_scan(led, [_scan_row(id="M05", source_urls="", selected="no")])
+    ns = types.SimpleNamespace(ledger=str(led), out=str(tmp_path / "out"))
+    assert ar.cmd_sources(ns) == 1                                # a method with no source is rejected
+
+
+def test_shipped_source_scan_ledger_is_valid(tmp_path):
+    # the real ledger that ships with the repo must pass its own validator
+    ns = types.SimpleNamespace(ledger=str(ROOT / "research_out" / "source_scan_ledger.csv"),
+                               out=str(tmp_path))                 # write status to tmp, not the repo
+    assert ar.cmd_sources(ns) == 0
