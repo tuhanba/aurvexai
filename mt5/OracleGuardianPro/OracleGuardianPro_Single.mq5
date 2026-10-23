@@ -140,7 +140,7 @@ input group "=== 2. Internal risk (robot limits, far inside firm rules) ==="
 input ENUM_OGP_LOT_MODE InpLotMode     = OGP_LOT_RISK; // Lot mode (RISK: equal $ per R; fixed lots act as MAX)
 input double   InpFixedLotGold          = 0.10;     // Fixed lots per position - gold
 input double   InpFixedLotSilver        = 0.10;     // Fixed lots per position - silver (silver 0.10 lot ~ 10x gold risk per $!)
-input double   InpRiskPct               = 0.50;     // Risk mode: risk per SIGNAL, % of CURRENT equity (split over positions)
+input double   InpRiskPct               = 0.25;     // Risk mode: risk per SIGNAL, % of CURRENT equity (split over positions)
 input double   InpMaxTotalRiskPct       = 1.00;     // Max combined planned risk of open EA positions, % of initial balance
 input double   InpCorrelatedRiskFactor  = 0.50;     // Risk multiplier when other metal is open SAME direction
 input bool     InpBlockOppositeMetals   = false;    // Block gold/silver in OPPOSITE directions at the same time
