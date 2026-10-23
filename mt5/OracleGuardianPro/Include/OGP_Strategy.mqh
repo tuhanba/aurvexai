@@ -1,0 +1,471 @@
+//+------------------------------------------------------------------+
+//| OGP_Strategy.mqh - per-symbol data, signal detection, filters    |
+//|                                                                  |
+//| Signal: EMA(9, Close, M3) crossing the session VWAP (OHLC/4).    |
+//|  Confirmed mode (default): sign(EMA-VWAP) differs between closed |
+//|   bars [2] and [1]; evaluated once, on the first tick of bar[0]. |
+//|  Live mode: sign(liveEMA-liveVWAP) changes tick-to-tick; the     |
+//|   baseline is tracked on every tick, one attempt per bar.        |
+//| Filters are independent modules; each returns a reason.          |
+//+------------------------------------------------------------------+
+#ifndef OGP_STRATEGY_MQH
+#define OGP_STRATEGY_MQH
+
+enum ENUM_OGP_EVAL
+  {
+   OGP_EVAL_OK     = 0,
+   OGP_EVAL_REJECT = 1,
+   OGP_EVAL_CHASED = 2
+  };
+
+struct OgpEntryIntent
+  {
+   int               dir;
+   double            entry;
+   double            slDist;
+   double            tpDist;
+   string            source;   // "confirmed" / "live" / "pullback"
+   string            detail;
+  };
+
+class COgpSymbol
+  {
+private:
+   int               m_hEma;
+   int               m_hAtr;
+   int               m_hT15;
+   int               m_hT60;
+   long              m_lastTickMsc;
+   datetime          m_lastTickTime;
+   int               m_prevSign;
+   datetime          m_signAnchor;
+   bool              m_firstRun;
+   int               m_need;
+
+   int               SignOf(const double diff) const
+     {
+      if(diff > 0.0)
+         return 1;
+      if(diff < 0.0)
+         return -1;
+      return 0;
+     }
+
+   bool              TrendOk(const int handle, const ENUM_TIMEFRAMES tf, const int dir, string &txt)
+     {
+      double e[];
+      ArraySetAsSeries(e, true);
+      int need = InpTrendSlopeBars + 2;
+      if(CopyBuffer(handle, 0, 1, need, e) != need)
+        {
+         txt = "no data";
+         return false;
+        }
+      double c = iClose(sym, tf, 1);
+      if(c <= 0.0)
+        {
+         txt = "no close";
+         return false;
+        }
+      bool up = (c > e[0] && e[0] > e[InpTrendSlopeBars]);
+      bool dn = (c < e[0] && e[0] < e[InpTrendSlopeBars]);
+      txt = up ? "UP" : (dn ? "DOWN" : "FLAT");
+      return (dir > 0) ? up : dn;
+     }
+
+   double            HighestHigh(const int from, const int count) const
+     {
+      double h = r[from].high;
+      for(int i = from + 1; i < from + count && i < ArraySize(r); i++)
+         h = MaxD(h, r[i].high);
+      return h;
+     }
+
+   double            LowestLow(const int from, const int count) const
+     {
+      double l = r[from].low;
+      for(int i = from + 1; i < from + count && i < ArraySize(r); i++)
+         l = MinD(l, r[i].low);
+      return l;
+     }
+
+   bool              BreakoutOk(const int dir, string &why)
+     {
+      int L = InpBreakoutLookback;
+      double a = atr[1];
+      double body = r[1].close - r[1].open;
+      if(!InpBreakoutRetest)
+        {
+         double lvl = (dir > 0) ? HighestHigh(2, L) : LowestLow(2, L);
+         bool brk = (dir > 0) ? (r[1].close > lvl) : (r[1].close < lvl);
+         bool mom = (dir > 0) ? (body >= InpMomentumBodyAtr * a) : (-body >= InpMomentumBodyAtr * a);
+         if(brk || mom)
+            return true;
+         why = StringFormat("breakout filter: no close beyond %s swing %s and no momentum bar", dir > 0 ? "high" : "low", Px(sym, lvl));
+         return false;
+        }
+      for(int k = 2; k <= InpRetestMaxBars + 1; k++)
+        {
+         double lvl = (dir > 0) ? HighestHigh(k + 1, L) : LowestLow(k + 1, L);
+         bool broke = (dir > 0) ? (r[k].close > lvl) : (r[k].close < lvl);
+         if(!broke)
+            continue;
+         double tol = 0.1 * a;
+         bool retest = (dir > 0) ? (r[1].low <= lvl + tol && r[1].close > lvl) : (r[1].high >= lvl - tol && r[1].close < lvl);
+         if(retest)
+            return true;
+        }
+      why = "breakout filter: no break + retest within " + IntegerToString(InpRetestMaxBars) + " bars";
+      return false;
+     }
+
+public:
+   string            sym;
+   bool              isGold;
+   double            minAtr;
+   double            maxAtr;
+   double            maxSpread;
+   double            slip;
+   double            slBuffer;
+   CSessionVwap      vwap;
+   MqlRates          r[];
+   double            ema[];
+   double            atr[];
+   MqlTick           tick;
+   double            vwapLive;
+   bool              vwapLiveOk;
+   bool              newBar;
+   bool              dataOk;
+   datetime          curBar;
+   //--- re-entry / pullback state
+   int               lastEntryDir;
+   bool              rearmed;
+   datetime          lastEntryBar;
+   bool              pbActive;
+   int               pbDir;
+   int               pbBarsLeft;
+   //--- display
+   string            lastSignal;
+   string            lastDecision;
+   string            trendText;
+
+                     COgpSymbol(void) : m_hEma(INVALID_HANDLE), m_hAtr(INVALID_HANDLE), m_hT15(INVALID_HANDLE), m_hT60(INVALID_HANDLE),
+                     m_lastTickMsc(0), m_lastTickTime(0), m_prevSign(0), m_signAnchor(0), m_firstRun(true), m_need(0), sym(""),
+                     isGold(true), minAtr(0), maxAtr(0), maxSpread(0), slip(0), slBuffer(0), vwapLive(0), vwapLiveOk(false),
+                     newBar(false), dataOk(false), curBar(0), lastEntryDir(0), rearmed(true), lastEntryBar(0), pbActive(false),
+                     pbDir(0), pbBarsLeft(0), lastSignal("-"), lastDecision("-"), trendText("-") {}
+
+   bool              Init(const string s, const bool gold)
+     {
+      sym = s;
+      isGold = gold;
+      minAtr    = gold ? InpGoldMinAtr : InpSilverMinAtr;
+      maxAtr    = gold ? InpGoldMaxAtr : InpSilverMaxAtr;
+      maxSpread = gold ? InpGoldMaxSpread : InpSilverMaxSpread;
+      slip      = gold ? InpGoldSlippage : InpSilverSlippage;
+      slBuffer  = gold ? InpGoldSlBuffer : InpSilverSlBuffer;
+      vwap.Init(s);
+      ArraySetAsSeries(r, true);
+      ArraySetAsSeries(ema, true);
+      ArraySetAsSeries(atr, true);
+      int a = InpBreakoutLookback + InpRetestMaxBars + 4;
+      int b = InpSwingLookback + 3;
+      m_need = (a > b) ? a : b;
+      if(m_need < 30)
+         m_need = 30;
+
+      m_hEma = iMA(s, OGP_SIG_TF, InpEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
+      m_hAtr = iATR(s, OGP_SIG_TF, InpAtrPeriod);
+      m_hT15 = iMA(s, PERIOD_M15, InpTrendEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
+      m_hT60 = iMA(s, PERIOD_H1, InpTrendEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
+      if(m_hEma == INVALID_HANDLE || m_hAtr == INVALID_HANDLE || m_hT15 == INVALID_HANDLE || m_hT60 == INVALID_HANDLE)
+        {
+         OgpLog(StringFormat("INIT ERROR %s: indicator handle creation failed (err %d)", s, GetLastError()));
+         return false;
+        }
+      Journal("SYSTEM", s, StringFormat("ready: digits=%d point=%s tick=%s tickValue=%.4f contract=%.2f vol %.2f/%.2f/%.2f stops=%d freeze=%d spread=%d pts exec=%s",
+                                        SymDigits(s), DoubleToString(SymPoint(s), SymDigits(s)),
+                                        DoubleToString(SymbolInfoDouble(s, SYMBOL_TRADE_TICK_SIZE), SymDigits(s)),
+                                        SymbolInfoDouble(s, SYMBOL_TRADE_TICK_VALUE), SymbolInfoDouble(s, SYMBOL_TRADE_CONTRACT_SIZE),
+                                        SymbolInfoDouble(s, SYMBOL_VOLUME_MIN), SymbolInfoDouble(s, SYMBOL_VOLUME_STEP),
+                                        SymbolInfoDouble(s, SYMBOL_VOLUME_MAX), (int)SymbolInfoInteger(s, SYMBOL_TRADE_STOPS_LEVEL),
+                                        (int)SymbolInfoInteger(s, SYMBOL_TRADE_FREEZE_LEVEL), (int)SymbolInfoInteger(s, SYMBOL_SPREAD),
+                                        EnumToString((ENUM_SYMBOL_TRADE_EXECUTION)SymbolInfoInteger(s, SYMBOL_TRADE_EXEMODE))));
+      return true;
+     }
+
+   void              Deinit(void)
+     {
+      if(m_hEma != INVALID_HANDLE)
+         IndicatorRelease(m_hEma);
+      if(m_hAtr != INVALID_HANDLE)
+         IndicatorRelease(m_hAtr);
+      if(m_hT15 != INVALID_HANDLE)
+         IndicatorRelease(m_hT15);
+      if(m_hT60 != INVALID_HANDLE)
+         IndicatorRelease(m_hT60);
+      m_hEma = INVALID_HANDLE;
+      m_hAtr = INVALID_HANDLE;
+      m_hT15 = INVALID_HANDLE;
+      m_hT60 = INVALID_HANDLE;
+     }
+
+   void              ResetBaseline(const string why)
+     {
+      if(m_prevSign != 0)
+         Journal("SIGNAL", sym, "live cross baseline reset: " + why);
+      m_prevSign = 0;
+     }
+
+   void              OnReconnect(void)
+     {
+      ResetBaseline("reconnect");
+      vwap.Invalidate();
+     }
+
+   //--- load fresh data; returns true only when a NEW tick was processed
+   bool              Refresh(const datetime anchor)
+     {
+      newBar = false;
+      if(!SymbolInfoTick(sym, tick) || tick.bid <= 0.0)
+        {
+         LogThrottled(sym + "tick", "DATA", sym, StringFormat("no tick (err %d)", GetLastError()), 60);
+         return false;
+        }
+      if(tick.time_msc == m_lastTickMsc)
+         return false;
+      dataOk = false;
+      int bars = Bars(sym, OGP_SIG_TF);
+      int need = (m_need > InpEmaPeriod * 5) ? m_need : InpEmaPeriod * 5;
+      if(bars < need || BarsCalculated(m_hEma) < need || BarsCalculated(m_hAtr) < need)
+        {
+         LogThrottled(sym + "ready", "DATA", sym, StringFormat("waiting for M3 history / indicators (%d bars, need %d)", bars, need), 60);
+         ResetBaseline("data not ready");
+         return false;
+        }
+      ResetLastError();
+      if(CopyRates(sym, OGP_SIG_TF, 0, m_need, r) != m_need || CopyBuffer(m_hEma, 0, 0, 3, ema) != 3 || CopyBuffer(m_hAtr, 0, 0, 3, atr) != 3)
+        {
+         LogThrottled(sym + "copy", "DATA", sym, StringFormat("CopyRates/CopyBuffer failed (err %d)", GetLastError()), 60);
+         ResetBaseline("copy failed");
+         return false;
+        }
+      if(ema[1] == EMPTY_VALUE || atr[1] == EMPTY_VALUE || atr[1] <= 0.0)
+        {
+         LogThrottled(sym + "empty", "DATA", sym, "indicator values empty", 60);
+         return false;
+        }
+      if(m_lastTickTime > 0 && (long)(tick.time - m_lastTickTime) > 180)
+         ResetBaseline(StringFormat("tick gap %I64d s", (long)(tick.time - m_lastTickTime)));
+      m_lastTickMsc = tick.time_msc;
+      m_lastTickTime = tick.time;
+
+      vwapLiveOk = false;
+      if(anchor > 0 && vwap.UpdateClosed(anchor, r[1].time))
+         vwapLiveOk = vwap.Live(r[0], vwapLive);
+
+      newBar = (r[0].time != curBar);
+      if(newBar)
+        {
+         m_firstRun = (curBar == 0);
+         curBar = r[0].time;
+         if(InpLogEveryBar)
+            Journal("DATA", sym, StringFormat("bar %s C=%s EMA=%s VWAP=%s(%s,%d bars) ATR=%s spread=%s",
+                                              Ts(r[1].time), Px(sym, r[1].close), Px(sym, ema[1]),
+                                              vwap.Bar1Valid() ? Px(sym, vwap.Bar1()) : "n/a", vwap.VolumeType(), vwap.ClosedCount(),
+                                              Px(sym, atr[1]), Px(sym, tick.ask - tick.bid)));
+        }
+      dataOk = true;
+      return true;
+     }
+
+   //--- crossover detection (confirmed or live). 0 = none
+   int               DetectCross(const datetime anchor)
+     {
+      bool enoughBars = vwap.ClosedCount() > InpMinBarsAfterReset;
+      if(InpEntryMode == OGP_ENTRY_CONFIRMED)
+        {
+         if(!newBar || m_firstRun || !vwap.Bar2Valid() || !enoughBars)
+            return 0;
+         int s2 = SignOf(ema[2] - vwap.Bar2());
+         int s1 = SignOf(ema[1] - vwap.Bar1());
+         return (s2 != 0 && s1 != 0 && s1 != s2) ? s1 : 0;
+        }
+      //--- live
+      if(!vwapLiveOk)
+        {
+         ResetBaseline("live VWAP unavailable");
+         return 0;
+        }
+      if(anchor != m_signAnchor)
+        {
+         m_signAnchor = anchor;
+         m_prevSign = 0;            // VWAP reset is not a crossover
+        }
+      int s = SignOf(ema[0] - vwapLive);
+      int dir = 0;
+      if(s != 0)
+        {
+         if(m_prevSign != 0 && s != m_prevSign && enoughBars)
+            dir = s;
+         m_prevSign = s;
+        }
+      return dir;
+     }
+
+   //--- called for every detected cross, accepted or not
+   void              OnCrossObserved(const int dir)
+     {
+      if(lastEntryDir != 0 && dir != lastEntryDir)
+         rearmed = true;
+      if(pbActive && dir != pbDir)
+        {
+         pbActive = false;
+         Journal("SIGNAL", sym, "pullback setup cancelled by opposite cross");
+        }
+     }
+
+   void              OnEntry(const int dir)
+     {
+      lastEntryDir = dir;
+      rearmed = false;
+      lastEntryBar = curBar;
+      pbActive = false;
+     }
+
+   //--- pullback re-entry check on each new bar. 0 = none
+   int               CheckPullback(void)
+     {
+      if(!pbActive || !newBar || !vwap.Bar1Valid())
+         return 0;
+      pbBarsLeft--;
+      if(pbBarsLeft < 0)
+        {
+         pbActive = false;
+         Journal("SIGNAL", sym, "pullback setup expired");
+         return 0;
+        }
+      double e1 = ema[1], v1 = vwap.Bar1(), a = atr[1];
+      if(SignOf(e1 - v1) != pbDir)
+        {
+         pbActive = false;
+         Journal("SIGNAL", sym, "pullback setup invalid: EMA back on the other side of VWAP");
+         return 0;
+        }
+      bool trig = (pbDir > 0) ? (r[1].low <= MaxD(e1, v1) + InpPullbackZoneAtr * a && r[1].close > e1 && r[1].close > v1)
+                  : (r[1].high >= MinD(e1, v1) - InpPullbackZoneAtr * a && r[1].close < e1 && r[1].close < v1);
+      return trig ? pbDir : 0;
+     }
+
+   void              ArmPullback(const int dir)
+     {
+      pbActive = true;
+      pbDir = dir;
+      pbBarsLeft = InpPullbackMaxBars;
+      Journal("SIGNAL", sym, StringFormat("%s cross skipped (price extended) -> waiting up to %d bars for pullback to EMA/VWAP zone + confirmation",
+                                          dir > 0 ? "BUY" : "SELL", InpPullbackMaxBars));
+     }
+
+   //--- strategy filters + stop/target. Order of checks = order of reasons.
+   ENUM_OGP_EVAL     Evaluate(const int dir, const string source, OgpEntryIntent &it, string &why)
+     {
+      double a = atr[1];
+      double spread = tick.ask - tick.bid;
+      it.dir = dir;
+      it.source = source;
+      it.entry = (dir > 0) ? tick.ask : tick.bid;
+
+      if(InpRequireNewSignal && source != "pullback" && lastEntryDir == dir && !rearmed)
+        {
+         why = "no new independent signal since last " + (dir > 0 ? string("BUY") : string("SELL")) + " entry (needs opposite cross first)";
+         return OGP_EVAL_REJECT;
+        }
+      //--- volatility / spread (safety, always on)
+      if(a < minAtr)
+        {
+         why = StringFormat("volatility too low: ATR %s < %s", Px(sym, a), Px(sym, minAtr));
+         return OGP_EVAL_REJECT;
+        }
+      if(a > maxAtr)
+        {
+         why = StringFormat("abnormal volatility: ATR %s > %s", Px(sym, a), Px(sym, maxAtr));
+         return OGP_EVAL_REJECT;
+        }
+      if(r[1].high - r[1].low > InpMaxBarRangeAtr * a)
+        {
+         why = StringFormat("spike bar: range %s > %.1f x ATR", Px(sym, r[1].high - r[1].low), InpMaxBarRangeAtr);
+         return OGP_EVAL_REJECT;
+        }
+      if(spread > maxSpread)
+        {
+         why = StringFormat("spread %s > max %s", Px(sym, spread), Px(sym, maxSpread));
+         return OGP_EVAL_REJECT;
+        }
+      if(spread > InpMaxSpreadToAtr * a)
+        {
+         why = StringFormat("spread %s > %.2f x ATR", Px(sym, spread), InpMaxSpreadToAtr);
+         return OGP_EVAL_REJECT;
+        }
+      //--- higher-timeframe trend
+      string t15 = "-", t60 = "-";
+      if(InpUseTrendM15 && !TrendOk(m_hT15, PERIOD_M15, dir, t15))
+        {
+         why = "M15 trend filter: trend " + t15;
+         return OGP_EVAL_REJECT;
+        }
+      if(InpUseTrendH1 && !TrendOk(m_hT60, PERIOD_H1, dir, t60))
+        {
+         why = "H1 trend filter: trend " + t60;
+         return OGP_EVAL_REJECT;
+        }
+      //--- structure break / momentum
+      if(InpUseBreakoutFilter && !BreakoutOk(dir, why))
+         return OGP_EVAL_REJECT;
+      //--- anti-chase
+      double vref = (InpEntryMode == OGP_ENTRY_LIVE && vwapLiveOk) ? vwapLive : vwap.Bar1();
+      double ext = (dir > 0) ? it.entry - vref : vref - it.entry;
+      if(InpUseChaseFilter && ext > InpMaxChaseAtr * a)
+        {
+         why = StringFormat("price extended %s from VWAP (> %.2f x ATR) - not chasing", Px(sym, ext), InpMaxChaseAtr);
+         return OGP_EVAL_CHASED;
+        }
+      //--- stop-loss: ATR and structure
+      double dist = InpSlAtrMult * a;
+      string slInfo = StringFormat("ATR stop %s", Px(sym, dist));
+      if(InpUseStructureSL)
+        {
+         double swing = (dir > 0) ? LowestLow(1, InpSwingLookback) - slBuffer : HighestHigh(1, InpSwingLookback) + slBuffer;
+         double sdist = (dir > 0) ? it.entry - swing : swing - it.entry;
+         if(sdist > dist)
+           {
+            dist = sdist;
+            slInfo = StringFormat("structure stop %s (swing %s)", Px(sym, sdist), Px(sym, swing));
+           }
+        }
+      double minDist = MinStopDistance(sym) + spread;
+      if(dist < minDist)
+         dist = minDist;
+      if(dist > InpMaxSlAtrMult * a)
+        {
+         why = StringFormat("stop too wide: %s > %.1f x ATR (%s)", Px(sym, dist), InpMaxSlAtrMult, slInfo);
+         return OGP_EVAL_REJECT;
+        }
+      it.slDist = dist;
+      it.tpDist = (InpTpRR > 0.0) ? MaxD(dist * InpTpRR, minDist) : 0.0;
+      it.detail = StringFormat("%s, TP %s (RR %.2f), ATR %s, VWAP %s, EMA %s", slInfo,
+                               it.tpDist > 0.0 ? Px(sym, it.tpDist) : "none", InpTpRR, Px(sym, a), Px(sym, vref),
+                               Px(sym, (InpEntryMode == OGP_ENTRY_LIVE) ? ema[0] : ema[1]));
+      return OGP_EVAL_OK;
+     }
+
+   string            TrendSummary(void)
+     {
+      string a = "-", b = "-";
+      TrendOk(m_hT15, PERIOD_M15, 1, a);
+      TrendOk(m_hT60, PERIOD_H1, 1, b);
+      trendText = "M15 " + a + " / H1 " + b;
+      return trendText;
+     }
+  };
+
+#endif
