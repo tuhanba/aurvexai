@@ -8,7 +8,7 @@
 //|  risk 4) trade quality 5) daily target.                          |
 //+------------------------------------------------------------------+
 #property copyright   "Personal EA - use at your own risk"
-#property version     "1.41"
+#property version     "1.42"
 #property description "Oracle Guardian Pro: Session VWAP (OHLC/4) x EMA9 on M3 for XAUUSD/XAGUSD"
 #property description "with Upcomers Oracle rule guard, equity-based dynamic sizing and mandatory stop-loss."
 #property description "No profit is guaranteed. Test on demo first."
@@ -520,7 +520,7 @@ void DrawDashboard(const datetime now)
       return;
    DashClear();
    color hdr = clrGold, ok = clrLimeGreen, bad = clrTomato, warn = clrOrange, txt = clrSilver;
-   DashAdd("ORACLE GUARDIAN PRO v1.41  (no profit guarantee)", hdr);
+   DashAdd("ORACLE GUARDIAN PRO v1.42  (no profit guarantee)", hdr);
    DashAdd(StringFormat("Server %s | UTC %s | NY %s", TimeToString(now, TIME_MINUTES),
                         TimeToString(ServerToUtc(now), TIME_MINUTES), TimeToString(NyLocal(now), TIME_MINUTES)), txt);
    DashAdd(g_entryBlock == "" ? "ENTRIES: ALLOWED [" + g_sessName + "]" : "ENTRIES: BLOCKED - " + g_entryBlock,
@@ -682,7 +682,7 @@ void FreeSymbols()
 int OnInit()
   {
    OgpLog("==================================================================");
-   OgpLog("Oracle Guardian Pro v1.41 - NO PROFIT GUARANTEE - verify every rule on Upcomers");
+   OgpLog("Oracle Guardian Pro v1.42 - NO PROFIT GUARANTEE - verify every rule on Upcomers");
    if(!ValidateInputs() || !SessionsInit())
       return INIT_PARAMETERS_INCORRECT;
    JournalOpen();
@@ -752,6 +752,19 @@ void OnDeinit(const int reason)
    g_dash.Destroy();
    Journal("SYSTEM", "", StringFormat("deinit (reason %d). Open positions keep their broker-side SL/TP but are NOT managed now.", reason));
    JournalClose();
+  }
+
+//--- custom optimisation criterion (Strategy Tester: "Custom max")
+//--- rewards a profit factor above 1 that holds over many trades, penalises drawdown;
+//--- fewer than 40 trades scores 0 so the optimiser cannot pick lucky small samples.
+double OnTester()
+  {
+   double trades = TesterStatistics(STAT_TRADES);
+   double pf = TesterStatistics(STAT_PROFIT_FACTOR);
+   double ddPct = TesterStatistics(STAT_EQUITY_DDREL_PERCENT);
+   if(trades < 40.0 || pf <= 1.0)
+      return 0.0;
+   return (pf - 1.0) * MathSqrt(trades) / (1.0 + ddPct);
   }
 
 void OnTick()  { ProcessAll(); }

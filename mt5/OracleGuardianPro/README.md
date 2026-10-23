@@ -599,3 +599,42 @@ fazla giriş" için hangi filtrenin gevşetileceğine karar verilemez.
 **Düzeltme (`InpLossCooldownBars` = 10):** Bir pozisyon zararla kapanınca o
 sembolde **aynı yönde** 10 mum (30 dakika) yeni giriş yapılmaz. Ters yöndeki
 girişler serbest kalır.
+
+## 17. v1.42 — Beşinci rapor (v1.41, 1 Ağustos – 22 Ekim, 50 işlem)
+
+**Ayarlar:** sabit 0,10 lot, risk %0,25, TRAILING Shield. Bunlar tester'da
+kalmış eski değerler; v1.30'dan beri varsayılan risk modu.
+
+**Sonuç:** −60 $, profit factor 0,94, toplam **+1,1R**.
+
+| | İşlem | R |
+|---|---|---|
+| TP | 8 | +12,2 |
+| SL | 16 | −16,2 |
+| Runner / BE trail | 4 | +5,3 |
+| EMA çıkışı | 22 | −0,2 |
+| Pozisyon #2 (runner) | 9 | +1,9 |
+| Ağustos / Eylül / Ekim | 16 / 21 / 13 | +1,2 / −3,6 / +3,5 |
+
+**Gözlemler:**
+- **12 haftada strateji yaklaşık 0R üretti.** Bu sonuçla stratejinin bir
+  avantajı (edge) olduğu gösterilemez.
+- **Grade A sinyaller (0,10 lot) B'lerden kötü:** A'da 13 işlem, %23 kazanma,
+  −4,7R. B'de (0,06 lot) 10 işlem, %80 kazanma, +5,2R. Örneklem küçük, ama
+  kalite skorunun bu dönemde öngörü gücü göstermediği açık.
+- **Sabit lot hâlâ dolar/R asimetrisi yaratıyor:** kazançta 1R ≈ 47 $,
+  kayıpta 1R ≈ 53 $.
+
+**v1.42:** Optimizasyon için özel kriter (`OnTester`) eklendi. Profit factor'ın
+1'in üstündeki kısmı × √işlem sayısı ÷ (1 + max DD%) olarak hesaplanır. 40'tan
+az işlemli sonuçlar 0 puan alır, böylece birkaç şanslı işlemle iyi görünen
+ayarlar elenir. Tester'da optimizasyon kriteri olarak **"Custom max"**
+seçilmeli.
+
+**Karar noktası:** Bundan sonraki küçük değişiklikleri 3 haftalık veya 3 aylık
+tek testlerle değerlendirmek, geçmiş veriye uydurmaya (overfitting) yol açar.
+Doğru adım, Ocak–Ekim için **forward 1/3'lük optimizasyonu** çalıştırmak:
+- Forward döneminde de PF ≥ 1,2 ve ≥ 40 işlem veren bir ayar bölgesi çıkarsa
+  o ayarlarla demo hesaba geçilir.
+- Çıkmazsa EMA9×VWAP M3 kesişiminin altında anlamlı bir avantaj yok demektir.
+  O durumda filtre eklemeye devam etmek yerine sinyalin kendisi değişmeli.
