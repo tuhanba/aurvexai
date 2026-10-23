@@ -638,3 +638,66 @@ Doğru adım, Ocak–Ekim için **forward 1/3'lük optimizasyonu** çalıştırm
   o ayarlarla demo hesaba geçilir.
 - Çıkmazsa EMA9×VWAP M3 kesişiminin altında anlamlı bir avantaj yok demektir.
   O durumda filtre eklemeye devam etmek yerine sinyalin kendisi değişmeli.
+
+## 18. v1.50 — Fiyat verisiyle taktik araştırması ve "time-hold" planı
+
+### Yöntem
+Dukascopy XAUUSD M1 verisi (2 Ocak – 15 Mart 2026, 57 gün) ile bir Python
+simülatörü kuruldu (`research/` klasörü). M3 mumları, EMA9, OHLC/4 seans VWAP'ı
+(18:00 NY reset), ATR14 ve H1 EMA50 trendi EA ile aynı mantıkla hesaplandı.
+Sonuçlar R cinsinden, işlem başına 0,35 $ maliyet düşülerek verildi.
+
+- **Ayarlama dönemi (IS):** 2 Ocak – 14 Şubat.
+- **Görülmemiş kontrol dönemi (OOS):** 15 Şubat – 15 Mart.
+- **Doğrulama:** simülatördeki mevcut taktik (S0) işlem başına +0,04R çıktı.
+  MT5 tester'daki gerçek sonuç da ≈ 0'dı (PF 1,03). İkisi tutarlı.
+
+### Ana bulgu: kesişim sonrası fiyat hareketi (ATR cinsinden)
+
+| | 5 mum | 10 mum | 20 mum | **40 mum** |
+|---|---|---|---|---|
+| H1 trendi yönündeki kesişimler | +0,12 | −0,31 | +0,01 | **+0,86** |
+| Trende karşı / trendsiz kesişimler | −0,06 | −0,10 | −0,62 | **−0,69** |
+
+Trend yönündeki kesişimden sonra fiyat **ilk 10 mumda (30 dk) geri çekiliyor**,
+sonra **2 saat içinde trend yönünde devam ediyor**. Mevcut taktik 1,5R hedef ve
+erken EMA çıkışıyla tam bu geri çekilmede çıkıyor ya da stop oluyordu.
+
+### Taktik karşılaştırması (seçilenler)
+
+| Taktik | IS | OOS |
+|---|---|---|
+| S0 mevcut (kesişim + trend, TP 1,5R, EMA çıkışı) | +0,6R (PF 1,05) | +1,9R (PF 1,21) |
+| S1 kesişimin tersine işlem | +0,1R | +2,8R |
+| S2 EMA'ya geri çekilmede giriş | +24R | **−15,5R** (dengesiz) |
+| S3 VWAP bandından dönüş | +7R | **−21R** |
+| **S5 kesişim + trend, stop 2 ATR, hedef yok, 40 mum sonra çık** | **+17,4R (PF 1,33, 78 işlem)** | **+5,1R (PF 1,19, 47 işlem)** |
+| S5 ama 60 mum tut | +19,8R | −17,3R |
+| S5 ama stop 1,5 ATR | +26,3R | −3,5R |
+
+Hem IS'te hem OOS'ta pozitif kalan **tek** taktik S5 oldu: SL 2 ATR, TP yok,
+40 mumluk zaman çıkışı. Komşu ayarlar (30–50 mum, 1,5–2,5 ATR) da
+bakılmaya değer. 60 mum ve 1,5 ATR OOS'ta kötüleşiyor.
+
+### v1.50: `InpTradePlan = TIME_HOLD` (varsayılan)
+- **Giriş:** onaylı EMA9 × VWAP kesişimi + H1 trendi aynı yönde. Kovalama
+  filtresi, kalite skoru, devam girişleri ve #2 pozisyon **yok**.
+- **Stop:** 2 × ATR. **Hedef yok.**
+- **Çıkış:** 40 M3 mumu (2 saat) sonra kapatılır. EMA çıkışı, BE ve trailing
+  yok.
+- **Pozisyon kuralı:** pozisyon açıkken ters sinyal yok sayılır. Zarar sonrası
+  aynı yönde 10 mumluk bekleme sürer.
+- **Korumalar aynı kalır:** Oracle kuralları, günlük zarar/hedef, dinamik risk
+  azaltma, haber, rollover ve Cuma kapanışı.
+- Eski plan için `InpTradePlan = TARGETS` seçin.
+
+### Riskler ve dürüst değerlendirme
+- **Veri sadece 10 hafta, tek bir piyasa dönemi.** OOS'taki +5,1R de 47
+  işlemlik bir sonuç; şans payı yüksek.
+- **Kazanma oranı düşük (~%31), kayıp serileri uzun:** simülasyonda en büyük
+  düşüş 15R. İşlem başına %0,25 risk (≈62 $) ile bu ~940 $ eder; Oracle
+  sınırlarına yakın. **Risk bu planda %0,15–0,25 arasında tutulmalı.**
+- Beklenen kazanç ~0,18R/işlem, günde ~2 işlem. %0,25 riskle günde
+  ortalama ~20–25 $ eder. 200 $ günlük hedef bu taktikle gerçekçi değil.
+- **Doğrulama şart:** MT5 tester'da **16 Mart – 22 Ekim** dönemi araştırmada
+  hiç kullanılmadı. Bu dönemde de pozitifse taktik ciddiye alınabilir.

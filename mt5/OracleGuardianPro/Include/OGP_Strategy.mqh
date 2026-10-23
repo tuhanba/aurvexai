@@ -605,6 +605,19 @@ public:
       //--- anti-chase
       double vref = (InpEntryMode == OGP_ENTRY_LIVE && vwapLiveOk) ? vwapLive : vwap.Bar1();
       double ext = (dir > 0) ? it.entry - vref : vref - it.entry;
+      if(InpTradePlan == OGP_PLAN_TIME_HOLD)
+        {
+         //--- research plan: fixed ATR stop, no target, exit by time (managed in OGP_Positions)
+         double hdist = MaxD(InpHoldSlAtr * a, MinStopDistance(sym) + spread);
+         it.slDist = hdist;
+         it.tpDist = 0.0;
+         it.score = 0;
+         it.grade = "-";
+         it.riskMult = 1.0;
+         it.detail = StringFormat("TIME-HOLD plan: stop %.1f ATR = %s, no TP, exit after %d bars, ATR %s, VWAP %s, EMA %s",
+                                  InpHoldSlAtr, Px(sym, hdist), InpHoldBars, Px(sym, a), Px(sym, vref), Px(sym, ema[1]));
+         return OGP_EVAL_OK;
+        }
       if(InpUseChaseFilter && ext > InpMaxChaseAtr * a)
         {
          why = StringFormat("price extended %s from VWAP (> %.2f x ATR) - not chasing", Px(sym, ext), InpMaxChaseAtr);

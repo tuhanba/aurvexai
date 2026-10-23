@@ -138,6 +138,20 @@ public:
          double initD = InitialDistance(k, t, open, sl);
          bool isSecond = (StringFind(PositionGetString(POSITION_COMMENT), "#2") >= 0);
 
+         //--- time-hold plan: exit after InpHoldBars M3 bars, no EMA exit / BE / trailing
+         if(InpTradePlan == OGP_PLAN_TIME_HOLD)
+           {
+            datetime pt = (datetime)PositionGetInteger(POSITION_TIME);
+            datetime entryBar = (datetime)((long)pt - (long)pt % OGP_M3_SEC);
+            long barsHeld = (long)(s.curBar - entryBar) / OGP_M3_SEC;
+            if(s.newBar && barsHeld >= InpHoldBars && held >= InpMinHoldSeconds)
+              {
+               Journal("SIGNAL", s.sym, StringFormat("EXIT %s #%I64u: time exit after %I64d bars", side, t, barsHeld));
+               TryClose(k, t, StringFormat("time exit (%I64d bars)", barsHeld), now);
+              }
+            continue;
+           }
+
          //--- EMA candle-close exit
          bool emaArmed = (InpEmaExitMode == OGP_EMAX_ALWAYS) ||
                          (InpEmaExitMode == OGP_EMAX_AFTER_MFE && initD > 0.0 && m_mfe[k] >= InpEmaExitMinR * initD);

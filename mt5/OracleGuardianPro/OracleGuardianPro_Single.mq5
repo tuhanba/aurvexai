@@ -8,7 +8,7 @@
 //|  risk 4) trade quality 5) daily target.                          |
 //+------------------------------------------------------------------+
 #property copyright   "Personal EA - use at your own risk"
-#property version     "1.42"
+#property version     "1.50"
 #property description "Oracle Guardian Pro: Session VWAP (OHLC/4) x EMA9 on M3 for XAUUSD/XAGUSD"
 #property description "with Upcomers Oracle rule guard, equity-based dynamic sizing and mandatory stop-loss."
 #property description "No profit is guaranteed. Test on demo first."
@@ -106,6 +106,12 @@ enum ENUM_OGP_SL_STRUCT
    OGP_SLS_ORDER_BLOCK = 1  // Beyond the last opposite candle before the move (order block); swing fallback
   };
 
+enum ENUM_OGP_PLAN
+  {
+   OGP_PLAN_TIME_HOLD = 0, // Time hold: cross with H1 trend, stop 2 ATR, NO target, exit after N bars (research winner)
+   OGP_PLAN_TARGETS   = 1  // Targets: v1.4x plan (TP/RR, EMA exit, #2/runner, continuation, quality score)
+  };
+
 enum ENUM_OGP_NEWS_FAIL
   {
    OGP_NEWS_FAIL_ALLOW = 0, // Calendar unavailable -> allow entries (dashboard warning)
@@ -150,6 +156,9 @@ input double   InpCommissionPerLot      = 7.0;      // Round-turn commission per
 input bool     InpBlockIfUnprotected    = true;     // Block entries if ANY account position has no stop-loss
 
 input group "=== 3. Strategy core: Session VWAP (OHLC/4) x EMA (M3) ==="
+input ENUM_OGP_PLAN InpTradePlan        = OGP_PLAN_TIME_HOLD; // Trade plan (see README section 18)
+input int      InpHoldBars              = 40;       // Time-hold plan: close after N M3 bars (40 = 2 hours)
+input double   InpHoldSlAtr             = 2.0;      // Time-hold plan: stop-loss distance in ATR (no take-profit)
 input ENUM_OGP_ENTRY_MODE InpEntryMode  = OGP_ENTRY_CONFIRMED; // Entry mode
 input int      InpEmaPeriod             = 9;        // EMA period (Close, M3)
 input ENUM_OGP_VWAP_VOL InpVwapVolume   = OGP_VOL_AUTO; // VWAP volume source
@@ -3120,6 +3129,19 @@ public:
       //--- anti-chase
       double vref = (InpEntryMode == OGP_ENTRY_LIVE && vwapLiveOk) ? vwapLive : vwap.Bar1();
       double ext = (dir > 0) ? it.entry - vref : vref - it.entry;
+      if(InpTradePlan == OGP_PLAN_TIME_HOLD)
+        {
+         //--- research plan: fixed ATR stop, no target, exit by time (managed in OGP_Positions)
+         double hdist = MaxD(InpHoldSlAtr * a, MinStopDistance(sym) + spread);
+         it.slDist = hdist;
+         it.tpDist = 0.0;
+         it.score = 0;
+         it.grade = "-";
+         it.riskMult = 1.0;
+         it.detail = StringFormat("TIME-HOLD plan: stop %.1f ATR = %s, no TP, exit after %d bars, ATR %s, VWAP %s, EMA %s",
+                                  InpHoldSlAtr, Px(sym, hdist), InpHoldBars, Px(sym, a), Px(sym, vref), Px(sym, ema[1]));
+         return OGP_EVAL_OK;
+        }
       if(InpUseChaseFilter && ext > InpMaxChaseAtr * a)
         {
          why = StringFormat("price extended %s from VWAP (> %.2f x ATR) - not chasing", Px(sym, ext), InpMaxChaseAtr);
@@ -3352,6 +3374,20 @@ public:
             m_mfe[k] = fav;
          double initD = InitialDistance(k, t, open, sl);
          bool isSecond = (StringFind(PositionGetString(POSITION_COMMENT), "#2") >= 0);
+
+         //--- time-hold plan: exit after InpHoldBars M3 bars, no EMA exit / BE / trailing
+         if(InpTradePlan == OGP_PLAN_TIME_HOLD)
+           {
+            datetime pt = (datetime)PositionGetInteger(POSITION_TIME);
+            datetime entryBar = (datetime)((long)pt - (long)pt % OGP_M3_SEC);
+            long barsHeld = (long)(s.curBar - entryBar) / OGP_M3_SEC;
+            if(s.newBar && barsHeld >= InpHoldBars && held >= InpMinHoldSeconds)
+              {
+               Journal("SIGNAL", s.sym, StringFormat("EXIT %s #%I64u: time exit after %I64d bars", side, t, barsHeld));
+               TryClose(k, t, StringFormat("time exit (%I64d bars)", barsHeld), now);
+              }
+            continue;
+           }
 
          //--- EMA candle-close exit
          bool emaArmed = (InpEmaExitMode == OGP_EMAX_ALWAYS) ||
@@ -3744,6 +3780,11 @@ void HandleCandidate(COgpSymbol *s, const int dir, const string src, const datet
          Reject(s, side, src, "an EA position in this direction is already open");
          return;
         }
+      if(InpTradePlan == OGP_PLAN_TIME_HOLD)
+        {
+         Reject(s, side, src, "time-hold plan: position open, opposite signal ignored until the time exit");
+         return;
+        }
       if(!InpCloseOnOpposite)
         {
          Reject(s, side, src, "opposite EA position open (InpCloseOnOpposite=false)");
@@ -3786,7 +3827,7 @@ void HandleCandidate(COgpSymbol *s, const int dir, const string src, const datet
      }
    //--- 6. sizing (one or two positions per signal)
    bool hedging = (AccountInfoInteger(ACCOUNT_MARGIN_MODE) == ACCOUNT_MARGIN_MODE_RETAIL_HEDGING);
-   ENUM_OGP_SECOND mode2 = hedging ? InpSecondEntry : OGP_2ND_OFF;
+   ENUM_OGP_SECOND mode2 = (hedging && InpTradePlan == OGP_PLAN_TARGETS) ? InpSecondEntry : OGP_2ND_OFF;
    bool twoNow = (mode2 == OGP_2ND_AT_SIGNAL);
    string dynInfo = "";
    double dyn = DynamicRiskFactor(dynInfo) * it.riskMult;
@@ -3975,6 +4016,8 @@ void ProcessAll()
          s.OnCrossObserved(dir);
          HandleCandidate(s, dir, InpEntryMode == OGP_ENTRY_LIVE ? "live" : "confirmed", now);
         }
+      if(InpTradePlan == OGP_PLAN_TIME_HOLD)
+         continue;                            // time-hold plan: cross entries only (as researched)
       int pb = s.CheckPullback();
       if(pb != 0)
          HandleCandidate(s, pb, "pullback", now);
@@ -4030,7 +4073,7 @@ void DrawDashboard(const datetime now)
       return;
    DashClear();
    color hdr = clrGold, ok = clrLimeGreen, bad = clrTomato, warn = clrOrange, txt = clrSilver;
-   DashAdd("ORACLE GUARDIAN PRO v1.42  (no profit guarantee)", hdr);
+   DashAdd("ORACLE GUARDIAN PRO v1.50  (no profit guarantee)", hdr);
    DashAdd(StringFormat("Server %s | UTC %s | NY %s", TimeToString(now, TIME_MINUTES),
                         TimeToString(ServerToUtc(now), TIME_MINUTES), TimeToString(NyLocal(now), TIME_MINUTES)), txt);
    DashAdd(g_entryBlock == "" ? "ENTRIES: ALLOWED [" + g_sessName + "]" : "ENTRIES: BLOCKED - " + g_entryBlock,
@@ -4147,6 +4190,10 @@ bool ValidateInputs()
       e = "dynamic risk factors must be in (0, 1] (they may only REDUCE risk)";
    else if(InpRunnerRR <= 0.0 || InpRunnerTrailAtr <= 0.0 || InpContMinBarsSide < 2 || InpContMaxPerLeg < 1)
       e = "runner / continuation inputs out of range";
+   else if(InpHoldBars < 2 || InpHoldSlAtr <= 0.0)
+      e = "time-hold plan needs InpHoldBars >= 2 and InpHoldSlAtr > 0";
+   else if(InpTradePlan == OGP_PLAN_TIME_HOLD && !InpUseTrend)
+      e = "time-hold plan was researched WITH the H1 trend filter - set InpUseTrend=true";
    else if(InpMaxTradesPerDay < 1 || InpEmaPeriod < 1 || InpAtrPeriod < 1 || InpSwingLookback < 2 || InpBreakoutLookback < 2)
       e = "periods / lookbacks / max trades out of range";
    if(e != "")
@@ -4192,7 +4239,7 @@ void FreeSymbols()
 int OnInit()
   {
    OgpLog("==================================================================");
-   OgpLog("Oracle Guardian Pro v1.42 - NO PROFIT GUARANTEE - verify every rule on Upcomers");
+   OgpLog("Oracle Guardian Pro v1.50 - NO PROFIT GUARANTEE - verify every rule on Upcomers");
    if(!ValidateInputs() || !SessionsInit())
       return INIT_PARAMETERS_INCORRECT;
    JournalOpen();
@@ -4234,6 +4281,8 @@ int OnInit()
                                       EnumToString(InpLotMode), InpFixedLotGold, InpFixedLotSilver, EnumToString(InpSecondEntry), InpMaxTotalRiskPct));
    if(InpSecondEntry != OGP_2ND_OFF && AccountInfoInteger(ACCOUNT_MARGIN_MODE) != ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
       Journal("SYSTEM", "", "WARNING: netting account - second position disabled");
+   Journal("SYSTEM", "", StringFormat("TRADE PLAN %s%s", EnumToString(InpTradePlan),
+                                      InpTradePlan == OGP_PLAN_TIME_HOLD ? StringFormat(" (stop %.1f ATR, no TP, exit after %d bars)", InpHoldSlAtr, InpHoldBars) : ""));
    Journal("SYSTEM", "", StringFormat("shield model %s%s | FVG filter %s | SL structure %s",
                                       EnumToString(InpShieldModel), InpTrustManualFloor ? " (manual floor TRUSTED)" : "",
                                       InpUseFvgFilter ? "ON" : "off", EnumToString(InpSlStructure)));

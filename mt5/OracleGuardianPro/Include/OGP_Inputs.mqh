@@ -86,6 +86,12 @@ enum ENUM_OGP_SL_STRUCT
    OGP_SLS_ORDER_BLOCK = 1  // Beyond the last opposite candle before the move (order block); swing fallback
   };
 
+enum ENUM_OGP_PLAN
+  {
+   OGP_PLAN_TIME_HOLD = 0, // Time hold: cross with H1 trend, stop 2 ATR, NO target, exit after N bars (research winner)
+   OGP_PLAN_TARGETS   = 1  // Targets: v1.4x plan (TP/RR, EMA exit, #2/runner, continuation, quality score)
+  };
+
 enum ENUM_OGP_NEWS_FAIL
   {
    OGP_NEWS_FAIL_ALLOW = 0, // Calendar unavailable -> allow entries (dashboard warning)
@@ -130,6 +136,9 @@ input double   InpCommissionPerLot      = 7.0;      // Round-turn commission per
 input bool     InpBlockIfUnprotected    = true;     // Block entries if ANY account position has no stop-loss
 
 input group "=== 3. Strategy core: Session VWAP (OHLC/4) x EMA (M3) ==="
+input ENUM_OGP_PLAN InpTradePlan        = OGP_PLAN_TIME_HOLD; // Trade plan (see README section 18)
+input int      InpHoldBars              = 40;       // Time-hold plan: close after N M3 bars (40 = 2 hours)
+input double   InpHoldSlAtr             = 2.0;      // Time-hold plan: stop-loss distance in ATR (no take-profit)
 input ENUM_OGP_ENTRY_MODE InpEntryMode  = OGP_ENTRY_CONFIRMED; // Entry mode
 input int      InpEmaPeriod             = 9;        // EMA period (Close, M3)
 input ENUM_OGP_VWAP_VOL InpVwapVolume   = OGP_VOL_AUTO; // VWAP volume source
