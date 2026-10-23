@@ -8,7 +8,7 @@
 //|  risk 4) trade quality 5) daily target.                          |
 //+------------------------------------------------------------------+
 #property copyright   "Personal EA - use at your own risk"
-#property version     "1.20"
+#property version     "1.21"
 #property description "Oracle Guardian Pro: Session VWAP (OHLC/4) x EMA9 on M3 for XAUUSD/XAGUSD"
 #property description "with Upcomers Oracle rule guard, equity-based dynamic sizing and mandatory stop-loss."
 #property description "No profit is guaranteed. Test on demo first."
@@ -1196,7 +1196,9 @@ public:
       m_initTime = now;
       datetime stCycle = 0;
       double stInit = 0.0;
-      bool loaded = LoadState(stCycle, stInit);
+      //--- Strategy Tester: the agent's Files folder survives between runs, so a state
+      //--- file from a PREVIOUS test (other period, other peak) must never be reused.
+      bool loaded = OgpIsTester() ? false : LoadState(stCycle, stInit);
       if(loaded && (stCycle != InpCycleStart || MathAbs(stInit - InpInitialBalance) > 0.009))
         {
          Journal("ORACLE", "", StringFormat("payout cycle / initial balance changed (state %s / %s -> inputs %s / %s): peak reference rebuilt",
@@ -3376,15 +3378,67 @@ bool SymbolAllowsDirection(const string sym, const int dir, string &why)
 //==================================================================//
 // Entry decision pipeline                                          //
 //==================================================================//
+//--- rejection statistics (printed at the end of a test / on removal)
+string g_rejKeys[];
+int    g_rejCounts[];
+int    g_signalCount = 0;
+
+void CountReject(const string why)
+  {
+   string key = why;
+   int p = StringFind(key, ":");
+   if(p > 0)
+      key = StringSubstr(key, 0, p);
+   int q = StringFind(key, "(");
+   if(q > 0)
+      key = StringSubstr(key, 0, q);
+   if(StringLen(key) > 60)
+      key = StringSubstr(key, 0, 60);
+   for(int i = 0; i < ArraySize(g_rejKeys); i++)
+      if(g_rejKeys[i] == key)
+        {
+         g_rejCounts[i]++;
+         return;
+        }
+   int n = ArraySize(g_rejKeys);
+   ArrayResize(g_rejKeys, n + 1);
+   ArrayResize(g_rejCounts, n + 1);
+   g_rejKeys[n] = key;
+   g_rejCounts[n] = 1;
+  }
+
+void PrintRejectSummary()
+  {
+   OgpLog(StringFormat("===== SIGNAL SUMMARY: %d signals detected, rejection reasons below =====", g_signalCount));
+   int n = ArraySize(g_rejKeys);
+   bool used[];
+   ArrayResize(used, n);
+   ArrayInitialize(used, false);
+   for(int k = 0; k < n; k++)
+     {
+      int best = -1;
+      for(int i = 0; i < n; i++)
+         if(!used[i] && (best < 0 || g_rejCounts[i] > g_rejCounts[best]))
+            best = i;
+      used[best] = true;
+      OgpLog(StringFormat("  %5d x  %s", g_rejCounts[best], g_rejKeys[best]));
+     }
+   OgpLog("=====================================================================");
+  }
+
 void Reject(COgpSymbol *s, const string side, const string src, const string why)
   {
    s.lastDecision = "REJECTED: " + why;
+   CountReject(why);
    Journal("REJECT", s.sym, StringFormat("%s (%s): %s", side, src, why));
   }
+
+string g_lastBlockLogged = "#";
 
 void HandleCandidate(COgpSymbol *s, const int dir, const string src, const datetime now)
   {
    string side = (dir > 0) ? "BUY" : "SELL";
+   g_signalCount++;
    double vref = (InpEntryMode == OGP_ENTRY_LIVE && s.vwapLiveOk) ? s.vwapLive : s.vwap.Bar1();
    double eref = (InpEntryMode == OGP_ENTRY_LIVE) ? s.ema[0] : s.ema[1];
    s.lastSignal = StringFormat("%s %s %s", side, src, TimeToString(now, TIME_MINUTES));
@@ -3689,6 +3743,21 @@ void ProcessAll()
             if(g_news.Blocks(now, why))
                g_entryBlock = why;
    g_sessName = sess;
+   //--- log every change of the global entry state (visible in tester Journal)
+   string blk = (g_entryBlock == "") ? "" : g_entryBlock;
+   int cut = StringFind(blk, "(");
+   string blkKey = (cut > 0) ? StringSubstr(blk, 0, cut) : blk;
+   if(StringFind(blkKey, "equity") == 0)
+      blkKey = "equity near floor";
+   if(StringFind(blkKey, "EMERGENCY") == 0)
+      blkKey = "EMERGENCY";
+   if(StringFind(blkKey, "news window") == 0)
+      blkKey = "news window";
+   if(blkKey != g_lastBlockLogged)
+     {
+      g_lastBlockLogged = blkKey;
+      Journal("STATUS", "", blk == "" ? "entries ALLOWED" : "entries BLOCKED: " + blk);
+     }
 
    if(now != g_lastDash)
      {
@@ -3703,7 +3772,7 @@ void DrawDashboard(const datetime now)
       return;
    DashClear();
    color hdr = clrGold, ok = clrLimeGreen, bad = clrTomato, warn = clrOrange, txt = clrSilver;
-   DashAdd("ORACLE GUARDIAN PRO v1.20  (no profit guarantee)", hdr);
+   DashAdd("ORACLE GUARDIAN PRO v1.21  (no profit guarantee)", hdr);
    DashAdd(StringFormat("Server %s | UTC %s | NY %s", TimeToString(now, TIME_MINUTES),
                         TimeToString(ServerToUtc(now), TIME_MINUTES), TimeToString(NyLocal(now), TIME_MINUTES)), txt);
    DashAdd(g_entryBlock == "" ? "ENTRIES: ALLOWED [" + g_sessName + "]" : "ENTRIES: BLOCKED - " + g_entryBlock,
@@ -3851,7 +3920,7 @@ void FreeSymbols()
 int OnInit()
   {
    OgpLog("==================================================================");
-   OgpLog("Oracle Guardian Pro v1.20 - NO PROFIT GUARANTEE - verify every rule on Upcomers");
+   OgpLog("Oracle Guardian Pro v1.21 - NO PROFIT GUARANTEE - verify every rule on Upcomers");
    if(!ValidateInputs() || !SessionsInit())
       return INIT_PARAMETERS_INCORRECT;
    JournalOpen();
@@ -3910,6 +3979,7 @@ int OnInit()
 void OnDeinit(const int reason)
   {
    EventKillTimer();
+   PrintRejectSummary();
    g_acc.Save();
    FreeSymbols();
    g_dash.Destroy();

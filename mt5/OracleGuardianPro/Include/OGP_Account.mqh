@@ -218,7 +218,9 @@ public:
       m_initTime = now;
       datetime stCycle = 0;
       double stInit = 0.0;
-      bool loaded = LoadState(stCycle, stInit);
+      //--- Strategy Tester: the agent's Files folder survives between runs, so a state
+      //--- file from a PREVIOUS test (other period, other peak) must never be reused.
+      bool loaded = OgpIsTester() ? false : LoadState(stCycle, stInit);
       if(loaded && (stCycle != InpCycleStart || MathAbs(stInit - InpInitialBalance) > 0.009))
         {
          Journal("ORACLE", "", StringFormat("payout cycle / initial balance changed (state %s / %s -> inputs %s / %s): peak reference rebuilt",
