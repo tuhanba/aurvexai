@@ -29,7 +29,9 @@ private:
    bool              m_cacheValid;
    double            m_cumPV;
    double            m_cumV;
+   double            m_cumPV2;      // sum(vol * typical^2) for the standard deviation bands
    int               m_closedCount;
+   double            m_sdBar1;
    double            m_vwapBar1;
    double            m_vwapBar2;
 
@@ -72,7 +74,7 @@ private:
 
 public:
                      CSessionVwap(void) : m_symbol(""), m_volumeKnown(false), m_useReal(false), m_anchorBar(0), m_lastClosed(0),
-                     m_cacheValid(false), m_cumPV(0), m_cumV(0), m_closedCount(0), m_vwapBar1(0), m_vwapBar2(0) {}
+                     m_cacheValid(false), m_cumPV(0), m_cumV(0), m_cumPV2(0), m_closedCount(0), m_sdBar1(0), m_vwapBar1(0), m_vwapBar2(0) {}
 
    void              Init(const string sym) { m_symbol = sym; m_volumeKnown = false; Invalidate(); }
    void              Invalidate(void) { m_cacheValid = false; m_anchorBar = 0; m_lastClosed = 0; }
@@ -83,6 +85,21 @@ public:
    bool              Bar2Valid(void) const { return m_cacheValid && m_closedCount >= 2; }
    double            Bar1(void) const { return m_vwapBar1; }
    double            Bar2(void) const { return m_vwapBar2; }
+   //--- volume-weighted standard deviation: sqrt(sum(v*tp^2)/sum(v) - vwap^2) (TradingView band basis)
+   double            SdBar1(void) const { return m_sdBar1; }
+   bool              LiveSd(const MqlRates &bar0, double &sd) const
+     {
+      if(!m_cacheValid || bar0.time < m_anchorBar)
+         return false;
+      double v = BarVolume(bar0), tp = Typical(bar0);
+      double vv = m_cumV + v;
+      if(vv <= 0.0)
+         return false;
+      double mean = (m_cumPV + tp * v) / vv;
+      double var = (m_cumPV2 + tp * tp * v) / vv - mean * mean;
+      sd = (var > 0.0) ? MathSqrt(var) : 0.0;
+      return true;
+     }
 
    bool              UpdateClosed(const datetime anchor, const datetime lastClosed)
      {
@@ -100,6 +117,8 @@ public:
       m_lastClosed = lastClosed;
       m_cumPV = 0.0;
       m_cumV = 0.0;
+      m_cumPV2 = 0.0;
+      m_sdBar1 = 0.0;
       m_closedCount = 0;
       m_vwapBar1 = 0.0;
       m_vwapBar2 = 0.0;
@@ -123,7 +142,9 @@ public:
          if(rr[i].time < anchorBar || rr[i].time > lastClosed)
             continue;
          double v = BarVolume(rr[i]);
-         m_cumPV += Typical(rr[i]) * v;
+         double tp = Typical(rr[i]);
+         m_cumPV += tp * v;
+         m_cumPV2 += tp * tp * v;
          m_cumV  += v;
          m_closedCount++;
          if(m_cumV > 0.0)
@@ -138,6 +159,11 @@ public:
                       m_closedCount, Ts(anchorBar), m_useReal ? "REAL" : "TICK"), 300);
          m_cacheValid = false;
          return false;
+        }
+      if(m_cumV > 0.0)
+        {
+         double var = m_cumPV2 / m_cumV - m_vwapBar1 * m_vwapBar1;
+         m_sdBar1 = (var > 0.0) ? MathSqrt(var) : 0.0;
         }
       m_cacheValid = true;
       return true;

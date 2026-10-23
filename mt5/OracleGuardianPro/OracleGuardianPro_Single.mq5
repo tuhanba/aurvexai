@@ -8,7 +8,7 @@
 //|  risk 4) trade quality 5) daily target.                          |
 //+------------------------------------------------------------------+
 #property copyright   "Personal EA - use at your own risk"
-#property version     "1.10"
+#property version     "1.20"
 #property description "Oracle Guardian Pro: Session VWAP (OHLC/4) x EMA9 on M3 for XAUUSD/XAGUSD"
 #property description "with Upcomers Oracle rule guard, equity-based dynamic sizing and mandatory stop-loss."
 #property description "No profit is guaranteed. Test on demo first."
@@ -81,6 +81,19 @@ enum ENUM_OGP_EMA_EXIT
    OGP_EMAX_AFTER_MFE = 2  // Only once the trade has run >= InpEmaExitMinR in favour
   };
 
+enum ENUM_OGP_VWAP_ANCHOR
+  {
+   OGP_VWAP_DAILY    = 0, // Once per trading day (TradingView "Session" anchor)
+   OGP_VWAP_SESSIONS = 1, // At every enabled session start
+   OGP_VWAP_BOTH     = 2  // Daily open + every session start
+  };
+
+enum ENUM_OGP_TP_MODE
+  {
+   OGP_TP_RR        = 0, // Fixed risk:reward (InpTpRR)
+   OGP_TP_VWAP_BAND = 1  // VWAP +/- k standard deviations (TradingView band), skip if < min RR
+  };
+
 enum ENUM_OGP_NEWS_FAIL
   {
    OGP_NEWS_FAIL_ALLOW = 0, // Calendar unavailable -> allow entries (dashboard warning)
@@ -111,10 +124,10 @@ input double   InpRiskPct               = 0.25;     // Risk mode: risk per SIGNA
 input double   InpMaxTotalRiskPct       = 1.00;     // Max combined planned risk of open EA positions, % of initial balance
 input double   InpCorrelatedRiskFactor  = 0.50;     // Risk multiplier when other metal is open SAME direction
 input bool     InpBlockOppositeMetals   = false;    // Block gold/silver in OPPOSITE directions at the same time
-input double   InpDailyLossLockUSD      = 250.0;    // Internal daily loss lock (equity vs day start)
+input double   InpDailyLossLockUSD      = 200.0;    // Daily max loss (equity vs UTC day start, incl. open risk)
 input double   InpDailyTargetUSD        = 200.0;    // Daily net profit target
 input bool     InpStopAtDailyTarget     = true;     // Stop new entries once today's realized net >= target
-input int      InpMaxTradesPerDay       = 4;        // Max new EA trades per UTC day
+input int      InpMaxTradesPerDay       = 10;       // Max new EA signals per UTC day
 input double   InpMaxSingleTradeLossUSD = 250.0;    // Internal max planned loss per trade (incl. costs)
 input double   InpPositionEmergencyUSD  = 350.0;    // Close a position if its floating loss reaches this
 input double   InpFloorSafetyUSD        = 300.0;    // Block entries when equity is this close to a firm floor
@@ -126,8 +139,10 @@ input group "=== 3. Strategy core: Session VWAP (OHLC/4) x EMA (M3) ==="
 input ENUM_OGP_ENTRY_MODE InpEntryMode  = OGP_ENTRY_CONFIRMED; // Entry mode
 input int      InpEmaPeriod             = 9;        // EMA period (Close, M3)
 input ENUM_OGP_VWAP_VOL InpVwapVolume   = OGP_VOL_AUTO; // VWAP volume source
-input bool     InpVwapDailyReset        = true;     // Also reset VWAP at metals daily open (18:00 New York)
+input ENUM_OGP_VWAP_ANCHOR InpVwapAnchor = OGP_VWAP_DAILY; // VWAP reset (match your TradingView anchor)
+input string   InpVwapDailyResetNY      = "18:00";  // Daily VWAP reset time, New York (check where TradingView VWAP restarts)
 input bool     InpRequireNewSignal      = true;     // Same-direction re-entry only after an opposite cross
+input bool     InpCloseOnOpposite       = true;     // Opposite signal closes open EA positions (after min hold), then may enter
 input int      InpMinBarsAfterReset     = 2;        // Ignore crosses in the first N closed bars after a VWAP reset
 
 input group "=== 3b. Two positions per signal ==="
@@ -139,8 +154,10 @@ input double   InpTp1RR                 = 1.0;      // AT_SIGNAL mode: target of
 input bool     InpBeAfterTp1            = true;     // AT_SIGNAL mode: move #2 to break-even once price reaches TP1
 
 input group "=== 4. Filters (each independent; untested -> OFF unless safety) ==="
-input bool     InpUseTrendM15           = false;    // M15 EMA trend filter
-input bool     InpUseTrendH1            = false;    // H1 EMA trend filter
+input bool     InpUseTrend              = true;     // Higher-timeframe trend filter (trade only with the trend)
+input ENUM_TIMEFRAMES InpTrendTF        = PERIOD_H1; // Trend timeframe
+input bool     InpUseTrend2             = false;    // Second trend timeframe must agree too
+input ENUM_TIMEFRAMES InpTrendTF2       = PERIOD_M15; // Second trend timeframe
 input int      InpTrendEmaPeriod        = 50;       // Trend EMA period
 input int      InpTrendSlopeBars        = 3;        // Trend EMA slope lookback (bars)
 input bool     InpUseBreakoutFilter     = false;    // Require structure break or strong momentum
@@ -160,7 +177,10 @@ input double   InpSlAtrMult             = 1.5;      // ATR stop multiple
 input bool     InpUseStructureSL        = true;     // Stop beyond recent swing if wider than ATR stop
 input int      InpSwingLookback         = 10;       // Swing lookback for structural stop (bars)
 input double   InpMaxSlAtrMult          = 3.0;      // Skip trade if stop wider than x * ATR
-input double   InpTpRR                  = 1.5;      // Take-profit risk:reward (0 = no TP)
+input ENUM_OGP_TP_MODE InpTpMode       = OGP_TP_RR; // Take-profit mode
+input double   InpTpRR                  = 1.5;      // RR mode: take-profit risk:reward (0 = no TP)
+input double   InpTpBandMult            = 1.0;      // Band mode: target = VWAP +/- k * std dev
+input double   InpMinTpRR               = 1.0;      // Band mode: skip trade if target gives less than this RR
 input double   InpMaxBarRangeAtr        = 4.0;      // Block if last bar range > x * ATR (spike)
 input double   InpMaxSpreadToAtr        = 0.25;     // Block if spread > x * ATR
 input double   InpGoldMinAtr            = 0.80;     // Gold: min M3 ATR (price units, USD)
@@ -186,7 +206,7 @@ input int      InpMinModifySeconds      = 30;       // Min seconds between stop 
 
 input group "=== 7. Trading hours ==="
 input bool     InpUseSessionFilter      = true;     // Restrict entries to sessions below
-input bool     InpTradeAllDay           = false;    // Ignore sessions, trade all day (still rollover/weekend/news)
+input bool     InpTradeAllDay           = true;     // Trade all day (still rollover/weekend/news/Oracle gates)
 input bool     InpS1Enabled             = true;     // Session 1 enabled
 input string   InpS1Name                = "NewYork";
 input ENUM_OGP_ZONE InpS1Zone           = OGP_ZONE_NEWYORK;
@@ -1529,7 +1549,9 @@ private:
    bool              m_cacheValid;
    double            m_cumPV;
    double            m_cumV;
+   double            m_cumPV2;      // sum(vol * typical^2) for the standard deviation bands
    int               m_closedCount;
+   double            m_sdBar1;
    double            m_vwapBar1;
    double            m_vwapBar2;
 
@@ -1572,7 +1594,7 @@ private:
 
 public:
                      CSessionVwap(void) : m_symbol(""), m_volumeKnown(false), m_useReal(false), m_anchorBar(0), m_lastClosed(0),
-                     m_cacheValid(false), m_cumPV(0), m_cumV(0), m_closedCount(0), m_vwapBar1(0), m_vwapBar2(0) {}
+                     m_cacheValid(false), m_cumPV(0), m_cumV(0), m_cumPV2(0), m_closedCount(0), m_sdBar1(0), m_vwapBar1(0), m_vwapBar2(0) {}
 
    void              Init(const string sym) { m_symbol = sym; m_volumeKnown = false; Invalidate(); }
    void              Invalidate(void) { m_cacheValid = false; m_anchorBar = 0; m_lastClosed = 0; }
@@ -1583,6 +1605,21 @@ public:
    bool              Bar2Valid(void) const { return m_cacheValid && m_closedCount >= 2; }
    double            Bar1(void) const { return m_vwapBar1; }
    double            Bar2(void) const { return m_vwapBar2; }
+   //--- volume-weighted standard deviation: sqrt(sum(v*tp^2)/sum(v) - vwap^2) (TradingView band basis)
+   double            SdBar1(void) const { return m_sdBar1; }
+   bool              LiveSd(const MqlRates &bar0, double &sd) const
+     {
+      if(!m_cacheValid || bar0.time < m_anchorBar)
+         return false;
+      double v = BarVolume(bar0), tp = Typical(bar0);
+      double vv = m_cumV + v;
+      if(vv <= 0.0)
+         return false;
+      double mean = (m_cumPV + tp * v) / vv;
+      double var = (m_cumPV2 + tp * tp * v) / vv - mean * mean;
+      sd = (var > 0.0) ? MathSqrt(var) : 0.0;
+      return true;
+     }
 
    bool              UpdateClosed(const datetime anchor, const datetime lastClosed)
      {
@@ -1600,6 +1637,8 @@ public:
       m_lastClosed = lastClosed;
       m_cumPV = 0.0;
       m_cumV = 0.0;
+      m_cumPV2 = 0.0;
+      m_sdBar1 = 0.0;
       m_closedCount = 0;
       m_vwapBar1 = 0.0;
       m_vwapBar2 = 0.0;
@@ -1623,7 +1662,9 @@ public:
          if(rr[i].time < anchorBar || rr[i].time > lastClosed)
             continue;
          double v = BarVolume(rr[i]);
-         m_cumPV += Typical(rr[i]) * v;
+         double tp = Typical(rr[i]);
+         m_cumPV += tp * v;
+         m_cumPV2 += tp * tp * v;
          m_cumV  += v;
          m_closedCount++;
          if(m_cumV > 0.0)
@@ -1638,6 +1679,11 @@ public:
                       m_closedCount, Ts(anchorBar), m_useReal ? "REAL" : "TICK"), 300);
          m_cacheValid = false;
          return false;
+        }
+      if(m_cumV > 0.0)
+        {
+         double var = m_cumPV2 / m_cumV - m_vwapBar1 * m_vwapBar1;
+         m_sdBar1 = (var > 0.0) ? MathSqrt(var) : 0.0;
         }
       m_cacheValid = true;
       return true;
@@ -1682,6 +1728,7 @@ struct OgpSession
 OgpSession g_sess[OGP_MAX_SESSIONS];
 bool       g_sessWasIn[OGP_MAX_SESSIONS];
 bool       g_sessLogInit = false;
+int        g_vwapResetMin = 18 * 60;
 int        g_rollStartMin = 0, g_rollEndMin = 0, g_friNoEntryMin = 0, g_friCloseMin = 0;
 
 bool LoadSessionSlot(const int i, const bool en, const string name, const ENUM_OGP_ZONE zone, const string s, const string e)
@@ -1708,7 +1755,7 @@ bool SessionsInit()
    bool ok = LoadSessionSlot(0, InpS1Enabled, InpS1Name, InpS1Zone, InpS1Start, InpS1End) &&
              LoadSessionSlot(1, InpS2Enabled, InpS2Name, InpS2Zone, InpS2Start, InpS2End) &&
              LoadSessionSlot(2, InpS3Enabled, InpS3Name, InpS3Zone, InpS3Start, InpS3End);
-   ok = ok && ParseHHMM(InpRolloverStartNY, g_rollStartMin) && ParseHHMM(InpRolloverEndNY, g_rollEndMin) &&
+   ok = ok && ParseHHMM(InpVwapDailyResetNY, g_vwapResetMin) && ParseHHMM(InpRolloverStartNY, g_rollStartMin) && ParseHHMM(InpRolloverEndNY, g_rollEndMin) &&
         ParseHHMM(InpFridayNoEntryNY, g_friNoEntryMin) && ParseHHMM(InpFridayCloseNY, g_friCloseMin);
    if(!ok)
       OgpLog("INIT ERROR: invalid session / rollover / Friday time input");
@@ -1757,11 +1804,11 @@ datetime MostRecentStart(const ENUM_OGP_ZONE zone, const int startMin, const int
    return 0;
   }
 
-// VWAP anchor: latest start of an enabled session (Mon-Fri) or metals daily open 18:00 NY (Sun-Thu)
+// VWAP anchor: daily reset (TradingView "Session" anchor) and/or enabled session starts
 datetime VwapAnchor(const datetime server)
   {
    datetime best = 0;
-   for(int i = 0; i < OGP_MAX_SESSIONS; i++)
+   for(int i = 0; i < OGP_MAX_SESSIONS && InpVwapAnchor != OGP_VWAP_DAILY; i++)
      {
       if(!g_sess[i].enabled)
          continue;
@@ -1769,9 +1816,11 @@ datetime VwapAnchor(const datetime server)
       if(t > best)
          best = t;
      }
-   if(InpVwapDailyReset || best == 0)
+   if(InpVwapAnchor != OGP_VWAP_SESSIONS || best == 0)
      {
-      datetime t = MostRecentStart(OGP_ZONE_NEWYORK, 18 * 60, 0x1F, server);           // Sun..Thu
+      // trading day opens in the NY evening Sun..Thu (e.g. 18:00); a reset before noon runs Mon..Fri
+      int mask = (g_vwapResetMin >= 12 * 60) ? 0x1F : 0x3E;
+      datetime t = MostRecentStart(OGP_ZONE_NEWYORK, g_vwapResetMin, mask, server);
       if(t > best)
          best = t;
      }
@@ -2433,8 +2482,8 @@ class COgpSymbol
 private:
    int               m_hEma;
    int               m_hAtr;
-   int               m_hT15;
-   int               m_hT60;
+   int               m_hTr1;
+   int               m_hTr2;
    long              m_lastTickMsc;
    datetime          m_lastTickTime;
    int               m_prevSign;
@@ -2557,7 +2606,7 @@ public:
    string            lastDecision;
    string            trendText;
 
-                     COgpSymbol(void) : m_hEma(INVALID_HANDLE), m_hAtr(INVALID_HANDLE), m_hT15(INVALID_HANDLE), m_hT60(INVALID_HANDLE),
+                     COgpSymbol(void) : m_hEma(INVALID_HANDLE), m_hAtr(INVALID_HANDLE), m_hTr1(INVALID_HANDLE), m_hTr2(INVALID_HANDLE),
                      m_lastTickMsc(0), m_lastTickTime(0), m_prevSign(0), m_signAnchor(0), m_firstRun(true), m_need(0), sym(""),
                      isGold(true), minAtr(0), maxAtr(0), maxSpread(0), slip(0), slBuffer(0), vwapLive(0), vwapLiveOk(false),
                      newBar(false), dataOk(false), curBar(0), lastEntryDir(0), rearmed(true), lastEntryBar(0), pbActive(false),
@@ -2585,9 +2634,9 @@ public:
 
       m_hEma = iMA(s, OGP_SIG_TF, InpEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
       m_hAtr = iATR(s, OGP_SIG_TF, InpAtrPeriod);
-      m_hT15 = iMA(s, PERIOD_M15, InpTrendEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
-      m_hT60 = iMA(s, PERIOD_H1, InpTrendEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
-      if(m_hEma == INVALID_HANDLE || m_hAtr == INVALID_HANDLE || m_hT15 == INVALID_HANDLE || m_hT60 == INVALID_HANDLE)
+      m_hTr1 = iMA(s, InpTrendTF, InpTrendEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
+      m_hTr2 = iMA(s, InpTrendTF2, InpTrendEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
+      if(m_hEma == INVALID_HANDLE || m_hAtr == INVALID_HANDLE || m_hTr1 == INVALID_HANDLE || m_hTr2 == INVALID_HANDLE)
         {
          OgpLog(StringFormat("INIT ERROR %s: indicator handle creation failed (err %d)", s, GetLastError()));
          return false;
@@ -2609,14 +2658,14 @@ public:
          IndicatorRelease(m_hEma);
       if(m_hAtr != INVALID_HANDLE)
          IndicatorRelease(m_hAtr);
-      if(m_hT15 != INVALID_HANDLE)
-         IndicatorRelease(m_hT15);
-      if(m_hT60 != INVALID_HANDLE)
-         IndicatorRelease(m_hT60);
+      if(m_hTr1 != INVALID_HANDLE)
+         IndicatorRelease(m_hTr1);
+      if(m_hTr2 != INVALID_HANDLE)
+         IndicatorRelease(m_hTr2);
       m_hEma = INVALID_HANDLE;
       m_hAtr = INVALID_HANDLE;
-      m_hT15 = INVALID_HANDLE;
-      m_hT60 = INVALID_HANDLE;
+      m_hTr1 = INVALID_HANDLE;
+      m_hTr2 = INVALID_HANDLE;
      }
 
    void              ResetBaseline(const string why)
@@ -2884,14 +2933,14 @@ public:
         }
       //--- higher-timeframe trend
       string t15 = "-", t60 = "-";
-      if(InpUseTrendM15 && !TrendOk(m_hT15, PERIOD_M15, dir, t15))
+      if(InpUseTrend && !TrendOk(m_hTr1, InpTrendTF, dir, t15))
         {
-         why = "M15 trend filter: trend " + t15;
+         why = StringFormat("%s trend filter: trend %s, signal %s", EnumToString(InpTrendTF), t15, dir > 0 ? "BUY" : "SELL");
          return OGP_EVAL_REJECT;
         }
-      if(InpUseTrendH1 && !TrendOk(m_hT60, PERIOD_H1, dir, t60))
+      if(InpUseTrend2 && !TrendOk(m_hTr2, InpTrendTF2, dir, t60))
         {
-         why = "H1 trend filter: trend " + t60;
+         why = StringFormat("%s trend filter: trend %s, signal %s", EnumToString(InpTrendTF2), t60, dir > 0 ? "BUY" : "SELL");
          return OGP_EVAL_REJECT;
         }
       //--- structure break / momentum
@@ -2928,8 +2977,25 @@ public:
         }
       it.slDist = dist;
       it.tpDist = (InpTpRR > 0.0) ? MaxD(dist * InpTpRR, minDist) : 0.0;
-      it.detail = StringFormat("%s, TP %s (RR %.2f), ATR %s, VWAP %s, EMA %s", slInfo,
-                               it.tpDist > 0.0 ? Px(sym, it.tpDist) : "none", InpTpRR, Px(sym, a), Px(sym, vref),
+      string tpInfo = StringFormat("RR %.2f", InpTpRR);
+      if(InpTpMode == OGP_TP_VWAP_BAND)
+        {
+         double sd = vwap.SdBar1();
+         if(InpEntryMode == OGP_ENTRY_LIVE)
+            vwap.LiveSd(r[0], sd);
+         double target = vref + dir * InpTpBandMult * sd;
+         double tdist = (dir > 0) ? target - it.entry : it.entry - target;
+         double rr = (dist > 0.0) ? tdist / dist : 0.0;
+         if(sd <= 0.0 || rr < InpMinTpRR)
+           {
+            why = StringFormat("VWAP band target %s gives RR %.2f < min %.2f (no room to target)", Px(sym, target), rr, InpMinTpRR);
+            return OGP_EVAL_REJECT;
+           }
+         it.tpDist = MaxD(tdist, minDist);
+         tpInfo = StringFormat("VWAP+%.1fsd band, RR %.2f", InpTpBandMult, rr);
+        }
+      it.detail = StringFormat("%s, TP %s (%s), ATR %s, VWAP %s, EMA %s", slInfo,
+                               it.tpDist > 0.0 ? Px(sym, it.tpDist) : "none", tpInfo, Px(sym, a), Px(sym, vref),
                                Px(sym, (InpEntryMode == OGP_ENTRY_LIVE) ? ema[0] : ema[1]));
       return OGP_EVAL_OK;
      }
@@ -2937,9 +3003,9 @@ public:
    string            TrendSummary(void)
      {
       string a = "-", b = "-";
-      TrendOk(m_hT15, PERIOD_M15, 1, a);
-      TrendOk(m_hT60, PERIOD_H1, 1, b);
-      trendText = "M15 " + a + " / H1 " + b;
+      TrendOk(m_hTr1, InpTrendTF, 1, a);
+      TrendOk(m_hTr2, InpTrendTF2, 1, b);
+      trendText = StringSubstr(EnumToString(InpTrendTF), 7) + " " + a + " / " + StringSubstr(EnumToString(InpTrendTF2), 7) + " " + b;
       return trendText;
      }
   };
@@ -3375,12 +3441,46 @@ void HandleCandidate(COgpSymbol *s, const int dir, const string src, const datet
    //--- 5. position rules
    OgpRiskSummary rs;
    BuildRiskSummary(rs);
+   bool closedOpp = false;
    for(int i = 0; i < ArraySize(rs.eaSyms); i++)
-      if(rs.eaSyms[i] == s.sym)
+     {
+      if(rs.eaSyms[i] != s.sym)
+         continue;
+      if(rs.eaDirs[i] == dir)
         {
-         Reject(s, side, src, "max 1 EA position per symbol");
+         Reject(s, side, src, "an EA position in this direction is already open");
          return;
         }
+      if(!InpCloseOnOpposite)
+        {
+         Reject(s, side, src, "opposite EA position open (InpCloseOnOpposite=false)");
+         return;
+        }
+     }
+   //--- opposite signal: close the opposite EA positions first (respecting the minimum hold time)
+   for(int i = PositionsTotal() - 1; i >= 0 && InpCloseOnOpposite; i--)
+     {
+      ulong t = PositionGetTicket(i);
+      if(t == 0 || PositionGetString(POSITION_SYMBOL) != s.sym || (ulong)PositionGetInteger(POSITION_MAGIC) != InpMagic)
+         continue;
+      long held = (long)(TimeCurrent() - (datetime)PositionGetInteger(POSITION_TIME));
+      if(held < InpMinHoldSeconds)
+        {
+         Reject(s, side, src, StringFormat("opposite position #%I64u held only %I64d s (< min hold %d s)", t, held, InpMinHoldSeconds));
+         return;
+        }
+      if(!ClosePositionTicket(t, "opposite " + side + " signal"))
+        {
+         Reject(s, side, src, "could not close the opposite position");
+         return;
+        }
+      closedOpp = true;
+     }
+   if(closedOpp)
+     {
+      BuildRiskSummary(rs);
+      g_rules.statsDirty = true;
+     }
    if(InpBlockIfUnprotected && rs.unprotected > 0)
      {
       Reject(s, side, src, StringFormat("%d account position(s) without stop-loss", rs.unprotected));
@@ -3603,7 +3703,7 @@ void DrawDashboard(const datetime now)
       return;
    DashClear();
    color hdr = clrGold, ok = clrLimeGreen, bad = clrTomato, warn = clrOrange, txt = clrSilver;
-   DashAdd("ORACLE GUARDIAN PRO v1.10  (no profit guarantee)", hdr);
+   DashAdd("ORACLE GUARDIAN PRO v1.20  (no profit guarantee)", hdr);
    DashAdd(StringFormat("Server %s | UTC %s | NY %s", TimeToString(now, TIME_MINUTES),
                         TimeToString(ServerToUtc(now), TIME_MINUTES), TimeToString(NyLocal(now), TIME_MINUTES)), txt);
    DashAdd(g_entryBlock == "" ? "ENTRIES: ALLOWED [" + g_sessName + "]" : "ENTRIES: BLOCKED - " + g_entryBlock,
@@ -3623,8 +3723,10 @@ void DrawDashboard(const datetime now)
    DashAdd(StringFormat("Single trade limit %s | internal max %s", Usd(g_rules.singleTradeLimit), Usd(InpMaxSingleTradeLossUSD)), txt);
    if(g_rules.stats.ok)
      {
-      DashAdd(StringFormat("Today realized %s / target %s | trades %d/%d | lock %s", Usd(g_rules.stats.todayNet), Usd(InpDailyTargetUSD),
-                           g_rules.stats.eaEntriesToday, InpMaxTradesPerDay, g_rules.dailyLock ? "ON" : "off"),
+      DashAdd(StringFormat("Today realized %s / target %s | day loss %s / max %s | signals %d/%d | %s", Usd(g_rules.stats.todayNet),
+                           Usd(InpDailyTargetUSD), Usd(MaxD(0.0, g_acc.dayStartEquity - g_acc.equity)), Usd(InpDailyLossLockUSD),
+                           g_rules.stats.eaEntriesToday, InpMaxTradesPerDay,
+                           g_rules.dailyLock ? "LOSS LOCK" : (g_rules.stats.todayNet >= InpDailyTargetUSD && InpStopAtDailyTarget ? "TARGET HIT - done today" : "open")),
               g_rules.dailyLock ? bad : txt);
       DashAdd(StringFormat("Cycle net %s | valid days %d/%d (>= %s) | best day %.0f%%", Usd(g_rules.stats.cycleNet),
                            g_rules.stats.validDays, InpMinValidDays, Usd(g_rules.validDayThreshold), g_rules.BestDayRatio()),
@@ -3702,6 +3804,8 @@ bool ValidateInputs()
       e = "AT_SIGNAL mode needs 0 < InpTp1RR < InpTpRR";
    else if(InpRetestMaxBars < 1 || InpEmaExitMinR < 0.0)
       e = "InpRetestMaxBars >= 1 and InpEmaExitMinR >= 0 required";
+   else if(InpTpMode == OGP_TP_VWAP_BAND && (InpTpBandMult <= 0.0 || InpMinTpRR <= 0.0))
+      e = "band TP needs InpTpBandMult > 0 and InpMinTpRR > 0";
    else if(InpMaxTradesPerDay < 1 || InpEmaPeriod < 1 || InpAtrPeriod < 1 || InpSwingLookback < 2 || InpBreakoutLookback < 2)
       e = "periods / lookbacks / max trades out of range";
    if(e != "")
@@ -3747,7 +3851,7 @@ void FreeSymbols()
 int OnInit()
   {
    OgpLog("==================================================================");
-   OgpLog("Oracle Guardian Pro v1.10 - NO PROFIT GUARANTEE - verify every rule on Upcomers");
+   OgpLog("Oracle Guardian Pro v1.20 - NO PROFIT GUARANTEE - verify every rule on Upcomers");
    if(!ValidateInputs() || !SessionsInit())
       return INIT_PARAMETERS_INCORRECT;
    JournalOpen();
@@ -3789,8 +3893,11 @@ int OnInit()
                                       EnumToString(InpLotMode), InpFixedLotGold, InpFixedLotSilver, EnumToString(InpSecondEntry), InpMaxTotalRiskPct));
    if(InpSecondEntry != OGP_2ND_OFF && AccountInfoInteger(ACCOUNT_MARGIN_MODE) != ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
       Journal("SYSTEM", "", "WARNING: netting account - second position disabled");
-   Journal("SYSTEM", "", StringFormat("mode %s | trend M15 %s H1 %s | breakout %s | chase %s | pullback %s | EMA exit %s | BE %s | trail %s | news %s",
-                                      EnumToString(InpEntryMode), InpUseTrendM15 ? "ON" : "off", InpUseTrendH1 ? "ON" : "off",
+   Journal("SYSTEM", "", StringFormat("VWAP reset %s (daily %s NY) | TP mode %s | trade all day %s | daily max loss %s | target %s | close on opposite %s",
+                                      EnumToString(InpVwapAnchor), InpVwapDailyResetNY, EnumToString(InpTpMode), InpTradeAllDay ? "yes" : "no",
+                                      Usd(InpDailyLossLockUSD), Usd(InpDailyTargetUSD), InpCloseOnOpposite ? "yes" : "no"));
+   Journal("SYSTEM", "", StringFormat("mode %s | trend %s %s, %s %s | breakout %s | chase %s | pullback %s | EMA exit %s | BE %s | trail %s | news %s",
+                                      EnumToString(InpEntryMode), EnumToString(InpTrendTF), InpUseTrend ? "ON" : "off", EnumToString(InpTrendTF2), InpUseTrend2 ? "ON" : "off",
                                       InpUseBreakoutFilter ? "ON" : "off", InpUseChaseFilter ? "ON" : "off",
                                       InpUsePullbackMode ? "ON" : "off", EnumToString(InpEmaExitMode),
                                       InpUseBreakEven ? "ON" : "off", InpUseTrailing ? "ON" : "off", InpUseNewsFilter ? "ON" : "off"));

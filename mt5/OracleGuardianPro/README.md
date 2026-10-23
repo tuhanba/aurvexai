@@ -429,3 +429,41 @@ Bu tablo şunları gösteriyor:
    - en az 100 işlem,
    - maksimum equity düşüşü < %4.
    Tek başına parlayan bir sonuç büyük ihtimalle aşırı optimizasyondur.
+
+## 13. v1.20 — TradingView uyumu, gün boyu işlem, trend filtresi
+
+**Neden az işlem açılıyordu?** v1.00/v1.10'da EA sadece New York 09:30–11:30
+arasında giriş yapıyordu (günde 2 saat). Günde en fazla 4 sinyal sınırı
+vardı. Ayrıca **VWAP 09:30'da da sıfırlanıyordu**. Sizin TradingView
+ayarınızda ise VWAP günde bir kez sıfırlanıyor ("Çapa Dönemi: Seans"). Bu
+yüzden EA'nın VWAP'ı sizin grafiğinizdeki VWAP'tan farklıydı ve kesişimler
+başka yerlerde oluşuyordu.
+
+**Değişiklikler (yeni varsayılanlar):**
+
+| Ayar | Önce | Şimdi |
+|---|---|---|
+| VWAP sıfırlama `InpVwapAnchor` | seans başı + 18:00 NY | **günde bir kez** (TradingView "Seans"), saat `InpVwapDailyResetNY` = 18:00 NY |
+| İşlem saatleri `InpTradeAllDay` | sadece NY 09:30–11:30 | **gün boyu** (rollover, Cuma kapanışı, haber ve Oracle korumaları açık) |
+| Günlük maksimum zarar `InpDailyLossLockUSD` | 250 $ | **200 $** |
+| Günlük sinyal sınırı | 4 | **10** |
+| HTF trend filtresi `InpUseTrend` | kapalı | **açık: H1 EMA50** (zaman dilimi seçilebilir; ikinci TF isteğe bağlı) |
+| Ters sinyal `InpCloseOnOpposite` | reddediliyordu | açık pozisyonu kapatır (en az 150 s tutulmuşsa), ardından yeni giriş değerlendirilir |
+| TP modu `InpTpMode` | sadece RR | RR **veya VWAP ± k·σ bandı** (TradingView band #1). Band hedefi en az 1R vermiyorsa işlem atlanır |
+
+**Günlük hedef ve günlük zarar sınırı nasıl çalışıyor:**
+- Gerçekleşmiş net kâr 200 $'a ulaşınca o **UTC günü** boyunca yeni giriş
+  yapılmaz. UTC günü, Oracle'ın kendi günüyle aynıdır (00:00 UTC = New York
+  19:00/20:00).
+- Equity, gün başına göre 200 $ düşerse o gün için yeni giriş yapılmaz.
+- Lot hesabı zaten **açık pozisyonların SL'ye kadar olan riskini** de bu 200
+  $'ın içinde sayar. Örneğin iki 0,10 lot pozisyonun toplam riski 200 $'ı
+  geçecekse ikinci pozisyonun lotu küçültülür. Böylece stoplar slippage'sız
+  dolarsa gün içi zarar 200 $'ı geçmez. Slippage bu sınırı biraz aşabilir.
+
+**TradingView ile kontrol:** TradingView'da XAUUSD M3 grafiğinde VWAP
+çizgisinin hangi saatte sıfırdan başladığına bakın (genelde 17:00 veya 18:00
+New York). Farklıysa `InpVwapDailyResetNY` değerini ona göre değiştirin.
+Ayrıca TradingView'ın sembolü (OANDA, FX vb.) ile Upcomers'ın fiyat akışı ve
+hacmi farklı olabilir. Tick volume farklı olduğu için VWAP değerleri birkaç
+cent farklı çıkabilir.

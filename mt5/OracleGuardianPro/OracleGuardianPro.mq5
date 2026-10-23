@@ -8,7 +8,7 @@
 //|  risk 4) trade quality 5) daily target.                          |
 //+------------------------------------------------------------------+
 #property copyright   "Personal EA - use at your own risk"
-#property version     "1.10"
+#property version     "1.20"
 #property description "Oracle Guardian Pro: Session VWAP (OHLC/4) x EMA9 on M3 for XAUUSD/XAGUSD"
 #property description "with Upcomers Oracle rule guard, equity-based dynamic sizing and mandatory stop-loss."
 #property description "No profit is guaranteed. Test on demo first."
@@ -132,12 +132,46 @@ void HandleCandidate(COgpSymbol *s, const int dir, const string src, const datet
    //--- 5. position rules
    OgpRiskSummary rs;
    BuildRiskSummary(rs);
+   bool closedOpp = false;
    for(int i = 0; i < ArraySize(rs.eaSyms); i++)
-      if(rs.eaSyms[i] == s.sym)
+     {
+      if(rs.eaSyms[i] != s.sym)
+         continue;
+      if(rs.eaDirs[i] == dir)
         {
-         Reject(s, side, src, "max 1 EA position per symbol");
+         Reject(s, side, src, "an EA position in this direction is already open");
          return;
         }
+      if(!InpCloseOnOpposite)
+        {
+         Reject(s, side, src, "opposite EA position open (InpCloseOnOpposite=false)");
+         return;
+        }
+     }
+   //--- opposite signal: close the opposite EA positions first (respecting the minimum hold time)
+   for(int i = PositionsTotal() - 1; i >= 0 && InpCloseOnOpposite; i--)
+     {
+      ulong t = PositionGetTicket(i);
+      if(t == 0 || PositionGetString(POSITION_SYMBOL) != s.sym || (ulong)PositionGetInteger(POSITION_MAGIC) != InpMagic)
+         continue;
+      long held = (long)(TimeCurrent() - (datetime)PositionGetInteger(POSITION_TIME));
+      if(held < InpMinHoldSeconds)
+        {
+         Reject(s, side, src, StringFormat("opposite position #%I64u held only %I64d s (< min hold %d s)", t, held, InpMinHoldSeconds));
+         return;
+        }
+      if(!ClosePositionTicket(t, "opposite " + side + " signal"))
+        {
+         Reject(s, side, src, "could not close the opposite position");
+         return;
+        }
+      closedOpp = true;
+     }
+   if(closedOpp)
+     {
+      BuildRiskSummary(rs);
+      g_rules.statsDirty = true;
+     }
    if(InpBlockIfUnprotected && rs.unprotected > 0)
      {
       Reject(s, side, src, StringFormat("%d account position(s) without stop-loss", rs.unprotected));
@@ -360,7 +394,7 @@ void DrawDashboard(const datetime now)
       return;
    DashClear();
    color hdr = clrGold, ok = clrLimeGreen, bad = clrTomato, warn = clrOrange, txt = clrSilver;
-   DashAdd("ORACLE GUARDIAN PRO v1.10  (no profit guarantee)", hdr);
+   DashAdd("ORACLE GUARDIAN PRO v1.20  (no profit guarantee)", hdr);
    DashAdd(StringFormat("Server %s | UTC %s | NY %s", TimeToString(now, TIME_MINUTES),
                         TimeToString(ServerToUtc(now), TIME_MINUTES), TimeToString(NyLocal(now), TIME_MINUTES)), txt);
    DashAdd(g_entryBlock == "" ? "ENTRIES: ALLOWED [" + g_sessName + "]" : "ENTRIES: BLOCKED - " + g_entryBlock,
@@ -380,8 +414,10 @@ void DrawDashboard(const datetime now)
    DashAdd(StringFormat("Single trade limit %s | internal max %s", Usd(g_rules.singleTradeLimit), Usd(InpMaxSingleTradeLossUSD)), txt);
    if(g_rules.stats.ok)
      {
-      DashAdd(StringFormat("Today realized %s / target %s | trades %d/%d | lock %s", Usd(g_rules.stats.todayNet), Usd(InpDailyTargetUSD),
-                           g_rules.stats.eaEntriesToday, InpMaxTradesPerDay, g_rules.dailyLock ? "ON" : "off"),
+      DashAdd(StringFormat("Today realized %s / target %s | day loss %s / max %s | signals %d/%d | %s", Usd(g_rules.stats.todayNet),
+                           Usd(InpDailyTargetUSD), Usd(MaxD(0.0, g_acc.dayStartEquity - g_acc.equity)), Usd(InpDailyLossLockUSD),
+                           g_rules.stats.eaEntriesToday, InpMaxTradesPerDay,
+                           g_rules.dailyLock ? "LOSS LOCK" : (g_rules.stats.todayNet >= InpDailyTargetUSD && InpStopAtDailyTarget ? "TARGET HIT - done today" : "open")),
               g_rules.dailyLock ? bad : txt);
       DashAdd(StringFormat("Cycle net %s | valid days %d/%d (>= %s) | best day %.0f%%", Usd(g_rules.stats.cycleNet),
                            g_rules.stats.validDays, InpMinValidDays, Usd(g_rules.validDayThreshold), g_rules.BestDayRatio()),
@@ -459,6 +495,8 @@ bool ValidateInputs()
       e = "AT_SIGNAL mode needs 0 < InpTp1RR < InpTpRR";
    else if(InpRetestMaxBars < 1 || InpEmaExitMinR < 0.0)
       e = "InpRetestMaxBars >= 1 and InpEmaExitMinR >= 0 required";
+   else if(InpTpMode == OGP_TP_VWAP_BAND && (InpTpBandMult <= 0.0 || InpMinTpRR <= 0.0))
+      e = "band TP needs InpTpBandMult > 0 and InpMinTpRR > 0";
    else if(InpMaxTradesPerDay < 1 || InpEmaPeriod < 1 || InpAtrPeriod < 1 || InpSwingLookback < 2 || InpBreakoutLookback < 2)
       e = "periods / lookbacks / max trades out of range";
    if(e != "")
@@ -504,7 +542,7 @@ void FreeSymbols()
 int OnInit()
   {
    OgpLog("==================================================================");
-   OgpLog("Oracle Guardian Pro v1.10 - NO PROFIT GUARANTEE - verify every rule on Upcomers");
+   OgpLog("Oracle Guardian Pro v1.20 - NO PROFIT GUARANTEE - verify every rule on Upcomers");
    if(!ValidateInputs() || !SessionsInit())
       return INIT_PARAMETERS_INCORRECT;
    JournalOpen();
@@ -546,8 +584,11 @@ int OnInit()
                                       EnumToString(InpLotMode), InpFixedLotGold, InpFixedLotSilver, EnumToString(InpSecondEntry), InpMaxTotalRiskPct));
    if(InpSecondEntry != OGP_2ND_OFF && AccountInfoInteger(ACCOUNT_MARGIN_MODE) != ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
       Journal("SYSTEM", "", "WARNING: netting account - second position disabled");
-   Journal("SYSTEM", "", StringFormat("mode %s | trend M15 %s H1 %s | breakout %s | chase %s | pullback %s | EMA exit %s | BE %s | trail %s | news %s",
-                                      EnumToString(InpEntryMode), InpUseTrendM15 ? "ON" : "off", InpUseTrendH1 ? "ON" : "off",
+   Journal("SYSTEM", "", StringFormat("VWAP reset %s (daily %s NY) | TP mode %s | trade all day %s | daily max loss %s | target %s | close on opposite %s",
+                                      EnumToString(InpVwapAnchor), InpVwapDailyResetNY, EnumToString(InpTpMode), InpTradeAllDay ? "yes" : "no",
+                                      Usd(InpDailyLossLockUSD), Usd(InpDailyTargetUSD), InpCloseOnOpposite ? "yes" : "no"));
+   Journal("SYSTEM", "", StringFormat("mode %s | trend %s %s, %s %s | breakout %s | chase %s | pullback %s | EMA exit %s | BE %s | trail %s | news %s",
+                                      EnumToString(InpEntryMode), EnumToString(InpTrendTF), InpUseTrend ? "ON" : "off", EnumToString(InpTrendTF2), InpUseTrend2 ? "ON" : "off",
                                       InpUseBreakoutFilter ? "ON" : "off", InpUseChaseFilter ? "ON" : "off",
                                       InpUsePullbackMode ? "ON" : "off", EnumToString(InpEmaExitMode),
                                       InpUseBreakEven ? "ON" : "off", InpUseTrailing ? "ON" : "off", InpUseNewsFilter ? "ON" : "off"));

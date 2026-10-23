@@ -61,6 +61,19 @@ enum ENUM_OGP_EMA_EXIT
    OGP_EMAX_AFTER_MFE = 2  // Only once the trade has run >= InpEmaExitMinR in favour
   };
 
+enum ENUM_OGP_VWAP_ANCHOR
+  {
+   OGP_VWAP_DAILY    = 0, // Once per trading day (TradingView "Session" anchor)
+   OGP_VWAP_SESSIONS = 1, // At every enabled session start
+   OGP_VWAP_BOTH     = 2  // Daily open + every session start
+  };
+
+enum ENUM_OGP_TP_MODE
+  {
+   OGP_TP_RR        = 0, // Fixed risk:reward (InpTpRR)
+   OGP_TP_VWAP_BAND = 1  // VWAP +/- k standard deviations (TradingView band), skip if < min RR
+  };
+
 enum ENUM_OGP_NEWS_FAIL
   {
    OGP_NEWS_FAIL_ALLOW = 0, // Calendar unavailable -> allow entries (dashboard warning)
@@ -91,10 +104,10 @@ input double   InpRiskPct               = 0.25;     // Risk mode: risk per SIGNA
 input double   InpMaxTotalRiskPct       = 1.00;     // Max combined planned risk of open EA positions, % of initial balance
 input double   InpCorrelatedRiskFactor  = 0.50;     // Risk multiplier when other metal is open SAME direction
 input bool     InpBlockOppositeMetals   = false;    // Block gold/silver in OPPOSITE directions at the same time
-input double   InpDailyLossLockUSD      = 250.0;    // Internal daily loss lock (equity vs day start)
+input double   InpDailyLossLockUSD      = 200.0;    // Daily max loss (equity vs UTC day start, incl. open risk)
 input double   InpDailyTargetUSD        = 200.0;    // Daily net profit target
 input bool     InpStopAtDailyTarget     = true;     // Stop new entries once today's realized net >= target
-input int      InpMaxTradesPerDay       = 4;        // Max new EA trades per UTC day
+input int      InpMaxTradesPerDay       = 10;       // Max new EA signals per UTC day
 input double   InpMaxSingleTradeLossUSD = 250.0;    // Internal max planned loss per trade (incl. costs)
 input double   InpPositionEmergencyUSD  = 350.0;    // Close a position if its floating loss reaches this
 input double   InpFloorSafetyUSD        = 300.0;    // Block entries when equity is this close to a firm floor
@@ -106,8 +119,10 @@ input group "=== 3. Strategy core: Session VWAP (OHLC/4) x EMA (M3) ==="
 input ENUM_OGP_ENTRY_MODE InpEntryMode  = OGP_ENTRY_CONFIRMED; // Entry mode
 input int      InpEmaPeriod             = 9;        // EMA period (Close, M3)
 input ENUM_OGP_VWAP_VOL InpVwapVolume   = OGP_VOL_AUTO; // VWAP volume source
-input bool     InpVwapDailyReset        = true;     // Also reset VWAP at metals daily open (18:00 New York)
+input ENUM_OGP_VWAP_ANCHOR InpVwapAnchor = OGP_VWAP_DAILY; // VWAP reset (match your TradingView anchor)
+input string   InpVwapDailyResetNY      = "18:00";  // Daily VWAP reset time, New York (check where TradingView VWAP restarts)
 input bool     InpRequireNewSignal      = true;     // Same-direction re-entry only after an opposite cross
+input bool     InpCloseOnOpposite       = true;     // Opposite signal closes open EA positions (after min hold), then may enter
 input int      InpMinBarsAfterReset     = 2;        // Ignore crosses in the first N closed bars after a VWAP reset
 
 input group "=== 3b. Two positions per signal ==="
@@ -119,8 +134,10 @@ input double   InpTp1RR                 = 1.0;      // AT_SIGNAL mode: target of
 input bool     InpBeAfterTp1            = true;     // AT_SIGNAL mode: move #2 to break-even once price reaches TP1
 
 input group "=== 4. Filters (each independent; untested -> OFF unless safety) ==="
-input bool     InpUseTrendM15           = false;    // M15 EMA trend filter
-input bool     InpUseTrendH1            = false;    // H1 EMA trend filter
+input bool     InpUseTrend              = true;     // Higher-timeframe trend filter (trade only with the trend)
+input ENUM_TIMEFRAMES InpTrendTF        = PERIOD_H1; // Trend timeframe
+input bool     InpUseTrend2             = false;    // Second trend timeframe must agree too
+input ENUM_TIMEFRAMES InpTrendTF2       = PERIOD_M15; // Second trend timeframe
 input int      InpTrendEmaPeriod        = 50;       // Trend EMA period
 input int      InpTrendSlopeBars        = 3;        // Trend EMA slope lookback (bars)
 input bool     InpUseBreakoutFilter     = false;    // Require structure break or strong momentum
@@ -140,7 +157,10 @@ input double   InpSlAtrMult             = 1.5;      // ATR stop multiple
 input bool     InpUseStructureSL        = true;     // Stop beyond recent swing if wider than ATR stop
 input int      InpSwingLookback         = 10;       // Swing lookback for structural stop (bars)
 input double   InpMaxSlAtrMult          = 3.0;      // Skip trade if stop wider than x * ATR
-input double   InpTpRR                  = 1.5;      // Take-profit risk:reward (0 = no TP)
+input ENUM_OGP_TP_MODE InpTpMode       = OGP_TP_RR; // Take-profit mode
+input double   InpTpRR                  = 1.5;      // RR mode: take-profit risk:reward (0 = no TP)
+input double   InpTpBandMult            = 1.0;      // Band mode: target = VWAP +/- k * std dev
+input double   InpMinTpRR               = 1.0;      // Band mode: skip trade if target gives less than this RR
 input double   InpMaxBarRangeAtr        = 4.0;      // Block if last bar range > x * ATR (spike)
 input double   InpMaxSpreadToAtr        = 0.25;     // Block if spread > x * ATR
 input double   InpGoldMinAtr            = 0.80;     // Gold: min M3 ATR (price units, USD)
@@ -166,7 +186,7 @@ input int      InpMinModifySeconds      = 30;       // Min seconds between stop 
 
 input group "=== 7. Trading hours ==="
 input bool     InpUseSessionFilter      = true;     // Restrict entries to sessions below
-input bool     InpTradeAllDay           = false;    // Ignore sessions, trade all day (still rollover/weekend/news)
+input bool     InpTradeAllDay           = true;     // Trade all day (still rollover/weekend/news/Oracle gates)
 input bool     InpS1Enabled             = true;     // Session 1 enabled
 input string   InpS1Name                = "NewYork";
 input ENUM_OGP_ZONE InpS1Zone           = OGP_ZONE_NEWYORK;

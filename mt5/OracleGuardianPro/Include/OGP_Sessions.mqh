@@ -19,6 +19,7 @@ struct OgpSession
 OgpSession g_sess[OGP_MAX_SESSIONS];
 bool       g_sessWasIn[OGP_MAX_SESSIONS];
 bool       g_sessLogInit = false;
+int        g_vwapResetMin = 18 * 60;
 int        g_rollStartMin = 0, g_rollEndMin = 0, g_friNoEntryMin = 0, g_friCloseMin = 0;
 
 bool LoadSessionSlot(const int i, const bool en, const string name, const ENUM_OGP_ZONE zone, const string s, const string e)
@@ -45,7 +46,7 @@ bool SessionsInit()
    bool ok = LoadSessionSlot(0, InpS1Enabled, InpS1Name, InpS1Zone, InpS1Start, InpS1End) &&
              LoadSessionSlot(1, InpS2Enabled, InpS2Name, InpS2Zone, InpS2Start, InpS2End) &&
              LoadSessionSlot(2, InpS3Enabled, InpS3Name, InpS3Zone, InpS3Start, InpS3End);
-   ok = ok && ParseHHMM(InpRolloverStartNY, g_rollStartMin) && ParseHHMM(InpRolloverEndNY, g_rollEndMin) &&
+   ok = ok && ParseHHMM(InpVwapDailyResetNY, g_vwapResetMin) && ParseHHMM(InpRolloverStartNY, g_rollStartMin) && ParseHHMM(InpRolloverEndNY, g_rollEndMin) &&
         ParseHHMM(InpFridayNoEntryNY, g_friNoEntryMin) && ParseHHMM(InpFridayCloseNY, g_friCloseMin);
    if(!ok)
       OgpLog("INIT ERROR: invalid session / rollover / Friday time input");
@@ -94,11 +95,11 @@ datetime MostRecentStart(const ENUM_OGP_ZONE zone, const int startMin, const int
    return 0;
   }
 
-// VWAP anchor: latest start of an enabled session (Mon-Fri) or metals daily open 18:00 NY (Sun-Thu)
+// VWAP anchor: daily reset (TradingView "Session" anchor) and/or enabled session starts
 datetime VwapAnchor(const datetime server)
   {
    datetime best = 0;
-   for(int i = 0; i < OGP_MAX_SESSIONS; i++)
+   for(int i = 0; i < OGP_MAX_SESSIONS && InpVwapAnchor != OGP_VWAP_DAILY; i++)
      {
       if(!g_sess[i].enabled)
          continue;
@@ -106,9 +107,11 @@ datetime VwapAnchor(const datetime server)
       if(t > best)
          best = t;
      }
-   if(InpVwapDailyReset || best == 0)
+   if(InpVwapAnchor != OGP_VWAP_SESSIONS || best == 0)
      {
-      datetime t = MostRecentStart(OGP_ZONE_NEWYORK, 18 * 60, 0x1F, server);           // Sun..Thu
+      // trading day opens in the NY evening Sun..Thu (e.g. 18:00); a reset before noon runs Mon..Fri
+      int mask = (g_vwapResetMin >= 12 * 60) ? 0x1F : 0x3E;
+      datetime t = MostRecentStart(OGP_ZONE_NEWYORK, g_vwapResetMin, mask, server);
       if(t > best)
          best = t;
      }

@@ -33,8 +33,8 @@ class COgpSymbol
 private:
    int               m_hEma;
    int               m_hAtr;
-   int               m_hT15;
-   int               m_hT60;
+   int               m_hTr1;
+   int               m_hTr2;
    long              m_lastTickMsc;
    datetime          m_lastTickTime;
    int               m_prevSign;
@@ -157,7 +157,7 @@ public:
    string            lastDecision;
    string            trendText;
 
-                     COgpSymbol(void) : m_hEma(INVALID_HANDLE), m_hAtr(INVALID_HANDLE), m_hT15(INVALID_HANDLE), m_hT60(INVALID_HANDLE),
+                     COgpSymbol(void) : m_hEma(INVALID_HANDLE), m_hAtr(INVALID_HANDLE), m_hTr1(INVALID_HANDLE), m_hTr2(INVALID_HANDLE),
                      m_lastTickMsc(0), m_lastTickTime(0), m_prevSign(0), m_signAnchor(0), m_firstRun(true), m_need(0), sym(""),
                      isGold(true), minAtr(0), maxAtr(0), maxSpread(0), slip(0), slBuffer(0), vwapLive(0), vwapLiveOk(false),
                      newBar(false), dataOk(false), curBar(0), lastEntryDir(0), rearmed(true), lastEntryBar(0), pbActive(false),
@@ -185,9 +185,9 @@ public:
 
       m_hEma = iMA(s, OGP_SIG_TF, InpEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
       m_hAtr = iATR(s, OGP_SIG_TF, InpAtrPeriod);
-      m_hT15 = iMA(s, PERIOD_M15, InpTrendEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
-      m_hT60 = iMA(s, PERIOD_H1, InpTrendEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
-      if(m_hEma == INVALID_HANDLE || m_hAtr == INVALID_HANDLE || m_hT15 == INVALID_HANDLE || m_hT60 == INVALID_HANDLE)
+      m_hTr1 = iMA(s, InpTrendTF, InpTrendEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
+      m_hTr2 = iMA(s, InpTrendTF2, InpTrendEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
+      if(m_hEma == INVALID_HANDLE || m_hAtr == INVALID_HANDLE || m_hTr1 == INVALID_HANDLE || m_hTr2 == INVALID_HANDLE)
         {
          OgpLog(StringFormat("INIT ERROR %s: indicator handle creation failed (err %d)", s, GetLastError()));
          return false;
@@ -209,14 +209,14 @@ public:
          IndicatorRelease(m_hEma);
       if(m_hAtr != INVALID_HANDLE)
          IndicatorRelease(m_hAtr);
-      if(m_hT15 != INVALID_HANDLE)
-         IndicatorRelease(m_hT15);
-      if(m_hT60 != INVALID_HANDLE)
-         IndicatorRelease(m_hT60);
+      if(m_hTr1 != INVALID_HANDLE)
+         IndicatorRelease(m_hTr1);
+      if(m_hTr2 != INVALID_HANDLE)
+         IndicatorRelease(m_hTr2);
       m_hEma = INVALID_HANDLE;
       m_hAtr = INVALID_HANDLE;
-      m_hT15 = INVALID_HANDLE;
-      m_hT60 = INVALID_HANDLE;
+      m_hTr1 = INVALID_HANDLE;
+      m_hTr2 = INVALID_HANDLE;
      }
 
    void              ResetBaseline(const string why)
@@ -484,14 +484,14 @@ public:
         }
       //--- higher-timeframe trend
       string t15 = "-", t60 = "-";
-      if(InpUseTrendM15 && !TrendOk(m_hT15, PERIOD_M15, dir, t15))
+      if(InpUseTrend && !TrendOk(m_hTr1, InpTrendTF, dir, t15))
         {
-         why = "M15 trend filter: trend " + t15;
+         why = StringFormat("%s trend filter: trend %s, signal %s", EnumToString(InpTrendTF), t15, dir > 0 ? "BUY" : "SELL");
          return OGP_EVAL_REJECT;
         }
-      if(InpUseTrendH1 && !TrendOk(m_hT60, PERIOD_H1, dir, t60))
+      if(InpUseTrend2 && !TrendOk(m_hTr2, InpTrendTF2, dir, t60))
         {
-         why = "H1 trend filter: trend " + t60;
+         why = StringFormat("%s trend filter: trend %s, signal %s", EnumToString(InpTrendTF2), t60, dir > 0 ? "BUY" : "SELL");
          return OGP_EVAL_REJECT;
         }
       //--- structure break / momentum
@@ -528,8 +528,25 @@ public:
         }
       it.slDist = dist;
       it.tpDist = (InpTpRR > 0.0) ? MaxD(dist * InpTpRR, minDist) : 0.0;
-      it.detail = StringFormat("%s, TP %s (RR %.2f), ATR %s, VWAP %s, EMA %s", slInfo,
-                               it.tpDist > 0.0 ? Px(sym, it.tpDist) : "none", InpTpRR, Px(sym, a), Px(sym, vref),
+      string tpInfo = StringFormat("RR %.2f", InpTpRR);
+      if(InpTpMode == OGP_TP_VWAP_BAND)
+        {
+         double sd = vwap.SdBar1();
+         if(InpEntryMode == OGP_ENTRY_LIVE)
+            vwap.LiveSd(r[0], sd);
+         double target = vref + dir * InpTpBandMult * sd;
+         double tdist = (dir > 0) ? target - it.entry : it.entry - target;
+         double rr = (dist > 0.0) ? tdist / dist : 0.0;
+         if(sd <= 0.0 || rr < InpMinTpRR)
+           {
+            why = StringFormat("VWAP band target %s gives RR %.2f < min %.2f (no room to target)", Px(sym, target), rr, InpMinTpRR);
+            return OGP_EVAL_REJECT;
+           }
+         it.tpDist = MaxD(tdist, minDist);
+         tpInfo = StringFormat("VWAP+%.1fsd band, RR %.2f", InpTpBandMult, rr);
+        }
+      it.detail = StringFormat("%s, TP %s (%s), ATR %s, VWAP %s, EMA %s", slInfo,
+                               it.tpDist > 0.0 ? Px(sym, it.tpDist) : "none", tpInfo, Px(sym, a), Px(sym, vref),
                                Px(sym, (InpEntryMode == OGP_ENTRY_LIVE) ? ema[0] : ema[1]));
       return OGP_EVAL_OK;
      }
@@ -537,9 +554,9 @@ public:
    string            TrendSummary(void)
      {
       string a = "-", b = "-";
-      TrendOk(m_hT15, PERIOD_M15, 1, a);
-      TrendOk(m_hT60, PERIOD_H1, 1, b);
-      trendText = "M15 " + a + " / H1 " + b;
+      TrendOk(m_hTr1, InpTrendTF, 1, a);
+      TrendOk(m_hTr2, InpTrendTF2, 1, b);
+      trendText = StringSubstr(EnumToString(InpTrendTF), 7) + " " + a + " / " + StringSubstr(EnumToString(InpTrendTF2), 7) + " " + b;
       return trendText;
      }
   };
