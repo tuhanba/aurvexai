@@ -8,7 +8,7 @@
 //|  risk 4) trade quality 5) daily target.                          |
 //+------------------------------------------------------------------+
 #property copyright   "Personal EA - use at your own risk"
-#property version     "1.40"
+#property version     "1.41"
 #property description "Oracle Guardian Pro: Session VWAP (OHLC/4) x EMA9 on M3 for XAUUSD/XAGUSD"
 #property description "with Upcomers Oracle rule guard, equity-based dynamic sizing and mandatory stop-loss."
 #property description "No profit is guaranteed. Test on demo first."
@@ -171,6 +171,12 @@ void HandleCandidate(COgpSymbol *s, const int dir, const string src, const datet
                                          Px(s.sym, s.tick.bid), Px(s.sym, s.tick.ask), Px(s.sym, s.atr[1])));
    string why = "";
 
+   //--- 0. cooldown after a loss in the same direction (avoids re-entering the same failing level)
+   if(InpLossCooldownBars > 0 && dir == s.lossDir && s.tick.time < s.lossCoolUntil)
+     {
+      Reject(s, side, src, StringFormat("loss cooldown: last %s lost, no %s until %s", side, side, Ts(s.lossCoolUntil)));
+      return;
+     }
    //--- 1. duplicate protection
    if(s.lastEntryBar == s.curBar)
      {
@@ -514,7 +520,7 @@ void DrawDashboard(const datetime now)
       return;
    DashClear();
    color hdr = clrGold, ok = clrLimeGreen, bad = clrTomato, warn = clrOrange, txt = clrSilver;
-   DashAdd("ORACLE GUARDIAN PRO v1.40  (no profit guarantee)", hdr);
+   DashAdd("ORACLE GUARDIAN PRO v1.41  (no profit guarantee)", hdr);
    DashAdd(StringFormat("Server %s | UTC %s | NY %s", TimeToString(now, TIME_MINUTES),
                         TimeToString(ServerToUtc(now), TIME_MINUTES), TimeToString(NyLocal(now), TIME_MINUTES)), txt);
    DashAdd(g_entryBlock == "" ? "ENTRIES: ALLOWED [" + g_sessName + "]" : "ENTRIES: BLOCKED - " + g_entryBlock,
@@ -676,7 +682,7 @@ void FreeSymbols()
 int OnInit()
   {
    OgpLog("==================================================================");
-   OgpLog("Oracle Guardian Pro v1.40 - NO PROFIT GUARANTEE - verify every rule on Upcomers");
+   OgpLog("Oracle Guardian Pro v1.41 - NO PROFIT GUARANTEE - verify every rule on Upcomers");
    if(!ValidateInputs() || !SessionsInit())
       return INIT_PARAMETERS_INCORRECT;
    JournalOpen();
@@ -762,6 +768,21 @@ void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest 
       return;
    string sym = HistoryDealGetString(trans.deal, DEAL_SYMBOL);
    long entry = HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
+   //--- losing close -> cooldown for the position's direction on this symbol
+   double net = HistoryDealGetDouble(trans.deal, DEAL_PROFIT) + HistoryDealGetDouble(trans.deal, DEAL_COMMISSION) +
+                HistoryDealGetDouble(trans.deal, DEAL_SWAP);
+   if(entry != DEAL_ENTRY_IN && net < 0.0 && InpLossCooldownBars > 0)
+     {
+      int posDir = (HistoryDealGetInteger(trans.deal, DEAL_TYPE) == DEAL_TYPE_SELL) ? 1 : -1;  // selling closes a BUY
+      for(int i = 0; i < ArraySize(g_syms); i++)
+         if(g_syms[i].sym == sym)
+           {
+            g_syms[i].lossDir = posDir;
+            g_syms[i].lossCoolUntil = (datetime)HistoryDealGetInteger(trans.deal, DEAL_TIME) + InpLossCooldownBars * OGP_M3_SEC;
+            Journal("RISK", sym, StringFormat("losing %s close -> no new %s for %d bars (until %s)", posDir > 0 ? "BUY" : "SELL",
+                                              posDir > 0 ? "BUY" : "SELL", InpLossCooldownBars, Ts(g_syms[i].lossCoolUntil)));
+           }
+     }
    string e = (entry == DEAL_ENTRY_IN) ? "OPENED" : (entry == DEAL_ENTRY_OUT ? "CLOSED" : (entry == DEAL_ENTRY_INOUT ? "REVERSED" : "CLOSED_BY"));
    Journal("DEAL", sym, StringFormat("%s #%I64u %.2f lots @ %s | pos #%I64d | profit %s comm %s swap %s | reason %s",
                                      e, trans.deal, HistoryDealGetDouble(trans.deal, DEAL_VOLUME),

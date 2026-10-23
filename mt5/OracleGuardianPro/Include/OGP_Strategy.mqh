@@ -186,6 +186,9 @@ public:
    int               contSide;
    int               contSideBars;
    int               contLegCount;
+   //--- loss cooldown (same direction)
+   datetime          lossCoolUntil;
+   int               lossDir;
    //--- second position (retest) state
    bool              s2Active;
    int               s2Dir;
@@ -204,7 +207,7 @@ public:
                      m_lastTickMsc(0), m_lastTickTime(0), m_prevSign(0), m_signAnchor(0), m_firstRun(true), m_need(0), sym(""),
                      isGold(true), minAtr(0), maxAtr(0), maxSpread(0), slip(0), slBuffer(0), vwapLive(0), vwapLiveOk(false),
                      newBar(false), dataOk(false), curBar(0), lastEntryDir(0), rearmed(true), lastEntryBar(0), pbActive(false),
-                     pbDir(0), pbBarsLeft(0), contSide(0), contSideBars(0), contLegCount(0), s2Active(false), s2Dir(0), s2Sl(0), s2Tp(0), s2Ticket1(0), s2Entry1(0), s2Bar1(0),
+                     pbDir(0), pbBarsLeft(0), contSide(0), contSideBars(0), contLegCount(0), lossCoolUntil(0), lossDir(0), s2Active(false), s2Dir(0), s2Sl(0), s2Tp(0), s2Ticket1(0), s2Entry1(0), s2Bar1(0),
                      s2BarsLeft(0), lastSignal("-"), lastDecision("-"), trendText("-") {}
 
    bool              Init(const string s, const bool gold)

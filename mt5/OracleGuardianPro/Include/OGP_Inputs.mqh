@@ -166,6 +166,7 @@ input double   InpContZoneAtr           = 0.30;     // Pullback must reach EMA +
 input int      InpContMinBarsSide       = 5;        // EMA must have been on the same side of VWAP for N closed bars
 input int      InpContCooldownBars      = 10;       // Bars since the last entry on the symbol
 input int      InpContMaxPerLeg         = 2;        // Max continuation entries per EMA/VWAP leg
+input int      InpLossCooldownBars      = 10;       // After a LOSING close: no new entry in the SAME direction on that symbol for N bars (0 = off)
 input bool     InpSecondRunner          = true;     // Position #2 is a runner: far target + break-even + ATR trail
 input double   InpRunnerRR              = 3.0;      // Runner target (R of position #1)
 input double   InpRunnerTrailAtr        = 1.5;      // Runner ATR trailing distance (after +1R)

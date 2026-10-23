@@ -583,3 +583,19 @@ stopu ve TP RR açık/kapalı ya da farklı değerlerle karşılaştırılır.
 Önce **3 aylık normal bir test** yapın ve Bülten'deki `SIGNAL SUMMARY`
 bloğunu gönderin. Sinyallerin hangi sebeple reddedildiği görülmeden "daha
 fazla giriş" için hangi filtrenin gevşetileceğine karar verilemez.
+
+## 16. v1.41 — Dördüncü rapor (v1.40, 1–22 Ekim, sabit 0,10 lot)
+
+14 işlem (v1.30'da aynı dönemde 5), +170 $, profit factor 1,52.
+- **Daha fazla giriş:** devam girişleri ve B sınıfı (×0,6 → 0,06 lot) sinyaller.
+- **Runner işe yaradı:** 5 Ekim'de #2 runner'ın stopu iz sürerek 4138'e taşındı;
+  pozisyon +139 $ ile kapandı.
+- **Dinamik risk işe yaradı:** 8 Ekim'deki kayıp serisinde lot 0,06'dan 0,03'e
+  ve 0,02'ye indi.
+- **Zayıf nokta:** 8 Ekim'de aynı seviyede (SL ≈ 4129–4130) 2 saat içinde art arda
+  **3 short açıldı ve hepsi stop oldu**. Piyasa yataydı ve EA aynı kırılmayan
+  seviyeye tekrar tekrar girdi.
+
+**Düzeltme (`InpLossCooldownBars` = 10):** Bir pozisyon zararla kapanınca o
+sembolde **aynı yönde** 10 mum (30 dakika) yeni giriş yapılmaz. Ters yöndeki
+girişler serbest kalır.
