@@ -83,7 +83,7 @@ void BuildRiskSummary(OgpRiskSummary &rs)
 // fixedLots > 0: fixed-lot mode (lots never increased, only reduced to fit the caps)
 // riskShare: share of the per-signal risk given to this position (risk mode)
 bool ComputeLots(const string sym, const int dir, const double entry, const double sl, const double slip,
-                 const double fixedLots, const double riskShare,
+                 const double fixedLots, const double riskShare, const double lotCap,
                  const OgpRiskSummary &rs, CAccountMonitor &acc, COracleRules &rules,
                  double &lots, double &plannedLoss, string &capInfo, string &why)
   {
@@ -165,6 +165,15 @@ bool ComputeLots(const string sym, const int dir, const double entry, const doub
       step = vmin;
    double raw = allowed / lossPerLot;
    double v = NormalizeDouble(MathFloor(raw / step + 1e-9) * step, VolumeDigits(step));
+   if(!fixedMode && lotCap > 0.0)
+     {
+      double cap = NormalizeDouble(MathFloor(lotCap / step + 1e-9) * step, VolumeDigits(step));
+      if(v > cap)
+        {
+         v = cap;
+         capInfo += StringFormat(" | capped at max lot %.2f", cap);
+        }
+     }
    if(fixedMode)
      {
       double fx = NormalizeDouble(MathFloor(fixedLots / step + 1e-9) * step, VolumeDigits(step));

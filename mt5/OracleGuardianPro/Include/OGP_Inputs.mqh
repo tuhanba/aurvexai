@@ -74,6 +74,18 @@ enum ENUM_OGP_TP_MODE
    OGP_TP_VWAP_BAND = 1  // VWAP +/- k standard deviations (TradingView band), skip if < min RR
   };
 
+enum ENUM_OGP_SHIELD_MODEL
+  {
+   OGP_SHIELD_TRAILING = 0, // Trailing: floor = peak equity - 5% of initial (conservative, LIVE default)
+   OGP_SHIELD_STATIC   = 1  // Static: floor = initial - 5% (ONLY for strategy research / if Upcomers confirms)
+  };
+
+enum ENUM_OGP_SL_STRUCT
+  {
+   OGP_SLS_SWING       = 0, // Beyond the recent swing high/low
+   OGP_SLS_ORDER_BLOCK = 1  // Beyond the last opposite candle before the move (order block); swing fallback
+  };
+
 enum ENUM_OGP_NEWS_FAIL
   {
    OGP_NEWS_FAIL_ALLOW = 0, // Calendar unavailable -> allow entries (dashboard warning)
@@ -91,16 +103,18 @@ input double   InpValidDayPct           = 0.5;      // Valid trading day realize
 input double   InpPayoutPct             = 1.0;      // Payout net profit threshold %
 input double   InpBestDayPct            = 20.0;     // Best Day Rule %
 input int      InpMinValidDays          = 5;        // Minimum valid trading days
+input ENUM_OGP_SHIELD_MODEL InpShieldModel = OGP_SHIELD_TRAILING; // Shield model (keep TRAILING on the real account)
 input double   InpManualShieldFloor     = 0.0;      // Shield floor read from Upcomers dashboard (0 = none)
+input bool     InpTrustManualFloor      = false;    // Use the manual floor even if LOWER than the EA estimate (only if read from Upcomers today)
 input double   InpManualPeakEquity      = 0.0;      // Highest equity read from Upcomers (0 = none)
 input double   InpManualDayStartEquity  = 0.0;      // Today's start equity from Upcomers (0 = none)
 input datetime InpManualDayStartDate    = D'1970.01.01'; // UTC date the manual day-start value belongs to
 
 input group "=== 2. Internal risk (robot limits, far inside firm rules) ==="
-input ENUM_OGP_LOT_MODE InpLotMode     = OGP_LOT_FIXED; // Lot mode
+input ENUM_OGP_LOT_MODE InpLotMode     = OGP_LOT_RISK; // Lot mode (RISK: equal $ per R; fixed lots act as MAX)
 input double   InpFixedLotGold          = 0.10;     // Fixed lots per position - gold
 input double   InpFixedLotSilver        = 0.10;     // Fixed lots per position - silver (silver 0.10 lot ~ 10x gold risk per $!)
-input double   InpRiskPct               = 0.25;     // Risk mode: risk per SIGNAL, % of CURRENT equity (split over positions)
+input double   InpRiskPct               = 0.50;     // Risk mode: risk per SIGNAL, % of CURRENT equity (split over positions)
 input double   InpMaxTotalRiskPct       = 1.00;     // Max combined planned risk of open EA positions, % of initial balance
 input double   InpCorrelatedRiskFactor  = 0.50;     // Risk multiplier when other metal is open SAME direction
 input bool     InpBlockOppositeMetals   = false;    // Block gold/silver in OPPOSITE directions at the same time
@@ -145,6 +159,9 @@ input int      InpBreakoutLookback      = 20;       // Swing lookback for breako
 input double   InpMomentumBodyAtr       = 1.0;      // Momentum bar body >= x * ATR counts as confirmation
 input bool     InpBreakoutRetest        = false;    // Require retest of the broken level
 input int      InpBreakRetestMaxBars    = 6;        // Max bars between break and retest (breakout filter)
+input bool     InpUseFvgFilter          = false;    // Require an unfilled Fair Value Gap in the signal direction
+input int      InpFvgLookback           = 10;       // FVG search window (M3 bars)
+input double   InpFvgMinAtr             = 0.20;     // Minimum FVG size, ATR
 input bool     InpUseChaseFilter        = true;     // Skip if price is too far from VWAP (no chasing)
 input double   InpMaxChaseAtr           = 1.0;      // Max distance entry->VWAP in ATR
 input bool     InpUsePullbackMode       = false;    // After a skipped (chased) cross, wait for pullback + confirmation
@@ -154,7 +171,8 @@ input int      InpPullbackMaxBars       = 20;       // Pullback setup expires af
 input group "=== 5. ATR / volatility / stops ==="
 input int      InpAtrPeriod             = 14;       // ATR period (M3)
 input double   InpSlAtrMult             = 1.5;      // ATR stop multiple
-input bool     InpUseStructureSL        = true;     // Stop beyond recent swing if wider than ATR stop
+input bool     InpUseStructureSL        = true;     // Stop beyond structure if wider than ATR stop
+input ENUM_OGP_SL_STRUCT InpSlStructure = OGP_SLS_SWING; // Structure used for the stop
 input int      InpSwingLookback         = 10;       // Swing lookback for structural stop (bars)
 input double   InpMaxSlAtrMult          = 3.0;      // Skip trade if stop wider than x * ATR
 input ENUM_OGP_TP_MODE InpTpMode       = OGP_TP_RR; // Take-profit mode

@@ -8,7 +8,7 @@
 //|  risk 4) trade quality 5) daily target.                          |
 //+------------------------------------------------------------------+
 #property copyright   "Personal EA - use at your own risk"
-#property version     "1.21"
+#property version     "1.30"
 #property description "Oracle Guardian Pro: Session VWAP (OHLC/4) x EMA9 on M3 for XAUUSD/XAGUSD"
 #property description "with Upcomers Oracle rule guard, equity-based dynamic sizing and mandatory stop-loss."
 #property description "No profit is guaranteed. Test on demo first."
@@ -246,7 +246,7 @@ void HandleCandidate(COgpSymbol *s, const int dir, const string src, const datet
    double tp1Dist = twoNow ? MaxD(it.slDist * InpTp1RR, MinStopDistance(s.sym) + spread) : it.tpDist;
    double lots1 = 0.0, planned1 = 0.0, lots2 = 0.0, planned2 = 0.0;
    string capInfo = "", capInfo2 = "";
-   if(!ComputeLots(s.sym, dir, it.entry, slPrice, s.slip, fixedLots, share, rs, g_acc, g_rules, lots1, planned1, capInfo, why))
+   if(!ComputeLots(s.sym, dir, it.entry, slPrice, s.slip, fixedLots, share, LotCapFor(s), rs, g_acc, g_rules, lots1, planned1, capInfo, why))
      {
       Reject(s, side, src, why + " | " + capInfo);
       return;
@@ -255,7 +255,7 @@ void HandleCandidate(COgpSymbol *s, const int dir, const string src, const datet
      {
       rs.eaRiskFromEntry += planned1;       // position #1 is part of the budget for #2
       rs.allRiskFromNow  += planned1;
-      if(!ComputeLots(s.sym, dir, it.entry, slPrice, s.slip, fixedLots, share, rs, g_acc, g_rules, lots2, planned2, capInfo2, why))
+      if(!ComputeLots(s.sym, dir, it.entry, slPrice, s.slip, fixedLots, share, LotCapFor(s), rs, g_acc, g_rules, lots2, planned2, capInfo2, why))
         {
          Journal("RISK", s.sym, "position #2 not possible (" + why + ") - opening #1 only");
          twoNow = false;
@@ -306,7 +306,13 @@ void HandleCandidate(COgpSymbol *s, const int dir, const string src, const datet
          s.lastDecision += StringFormat(" + #2 %.2f lots", lots2);
      }
    else
-      s.ArmSecond(dir, pSl, pTp, tk1);
+      s.ArmSecond(dir, pSl, pTp, tk1, pOpen);
+  }
+
+//--- risk mode: the "fixed" lot inputs act as a maximum lot per position
+double LotCapFor(COgpSymbol *s)
+  {
+   return s.isGold ? InpFixedLotGold : InpFixedLotSilver;
   }
 
 double FixedLotsFor(COgpSymbol *s)
@@ -353,7 +359,7 @@ void HandleSecond(COgpSymbol *s, const datetime now)
    double entry = (dir > 0) ? s.tick.ask : s.tick.bid;
    double lots = 0.0, planned = 0.0, margin = 0.0;
    string capInfo = "";
-   if(!ComputeLots(s.sym, dir, entry, s.s2Sl, s.slip, FixedLotsFor(s), 0.5, rs, g_acc, g_rules, lots, planned, capInfo, why))
+   if(!ComputeLots(s.sym, dir, entry, s.s2Sl, s.slip, FixedLotsFor(s), 0.5, LotCapFor(s), rs, g_acc, g_rules, lots, planned, capInfo, why))
      {
       s.CancelSecond(why + " | " + capInfo);
       return;
@@ -461,7 +467,7 @@ void DrawDashboard(const datetime now)
       return;
    DashClear();
    color hdr = clrGold, ok = clrLimeGreen, bad = clrTomato, warn = clrOrange, txt = clrSilver;
-   DashAdd("ORACLE GUARDIAN PRO v1.21  (no profit guarantee)", hdr);
+   DashAdd("ORACLE GUARDIAN PRO v1.30  (no profit guarantee)", hdr);
    DashAdd(StringFormat("Server %s | UTC %s | NY %s", TimeToString(now, TIME_MINUTES),
                         TimeToString(ServerToUtc(now), TIME_MINUTES), TimeToString(NyLocal(now), TIME_MINUTES)), txt);
    DashAdd(g_entryBlock == "" ? "ENTRIES: ALLOWED [" + g_sessName + "]" : "ENTRIES: BLOCKED - " + g_entryBlock,
@@ -472,7 +478,8 @@ void DrawDashboard(const datetime now)
    DashAdd(StringFormat("Margin %s  Free %s  Level %s%%  Lev 1:%I64d", Usd(g_acc.margin), Usd(g_acc.freeMargin),
                         g_acc.margin > 0 ? DoubleToString(g_acc.marginLevel, 0) : "-", g_acc.leverage), txt);
    DashAdd("--- ORACLE RULES (EA references; Upcomers server values not readable) ---", hdr);
-   DashAdd(StringFormat("Shield floor %s [%s]  dist %s", Usd(g_rules.shieldFloor),
+   DashAdd(StringFormat("Shield floor %s [%s%s]  dist %s", Usd(g_rules.shieldFloor),
+                        InpShieldModel == OGP_SHIELD_STATIC ? "STATIC model, " : "",
                         InpManualShieldFloor > 0 ? "MANUAL+" + SourceText(g_acc.peakSrc) : SourceText(g_acc.peakSrc),
                         Usd(g_acc.equity - g_rules.shieldFloor)), g_rules.shieldReliable ? txt : bad);
    DashAdd(StringFormat("Peak equity %s", Usd(g_acc.peakEquity)), txt);
@@ -564,6 +571,8 @@ bool ValidateInputs()
       e = "InpRetestMaxBars >= 1 and InpEmaExitMinR >= 0 required";
    else if(InpTpMode == OGP_TP_VWAP_BAND && (InpTpBandMult <= 0.0 || InpMinTpRR <= 0.0))
       e = "band TP needs InpTpBandMult > 0 and InpMinTpRR > 0";
+   else if(InpFvgLookback < 1 || InpFvgMinAtr < 0.0)
+      e = "InpFvgLookback >= 1 and InpFvgMinAtr >= 0 required";
    else if(InpMaxTradesPerDay < 1 || InpEmaPeriod < 1 || InpAtrPeriod < 1 || InpSwingLookback < 2 || InpBreakoutLookback < 2)
       e = "periods / lookbacks / max trades out of range";
    if(e != "")
@@ -609,7 +618,7 @@ void FreeSymbols()
 int OnInit()
   {
    OgpLog("==================================================================");
-   OgpLog("Oracle Guardian Pro v1.21 - NO PROFIT GUARANTEE - verify every rule on Upcomers");
+   OgpLog("Oracle Guardian Pro v1.30 - NO PROFIT GUARANTEE - verify every rule on Upcomers");
    if(!ValidateInputs() || !SessionsInit())
       return INIT_PARAMETERS_INCORRECT;
    JournalOpen();
@@ -651,6 +660,11 @@ int OnInit()
                                       EnumToString(InpLotMode), InpFixedLotGold, InpFixedLotSilver, EnumToString(InpSecondEntry), InpMaxTotalRiskPct));
    if(InpSecondEntry != OGP_2ND_OFF && AccountInfoInteger(ACCOUNT_MARGIN_MODE) != ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
       Journal("SYSTEM", "", "WARNING: netting account - second position disabled");
+   Journal("SYSTEM", "", StringFormat("shield model %s%s | FVG filter %s | SL structure %s",
+                                      EnumToString(InpShieldModel), InpTrustManualFloor ? " (manual floor TRUSTED)" : "",
+                                      InpUseFvgFilter ? "ON" : "off", EnumToString(InpSlStructure)));
+   if(InpShieldModel == OGP_SHIELD_STATIC && !OgpIsTester())
+      Journal("SYSTEM", "", "WARNING: STATIC shield model on a live account - only use it if Upcomers confirmed the floor does not trail");
    Journal("SYSTEM", "", StringFormat("VWAP reset %s (daily %s NY) | TP mode %s | trade all day %s | daily max loss %s | target %s | close on opposite %s",
                                       EnumToString(InpVwapAnchor), InpVwapDailyResetNY, EnumToString(InpTpMode), InpTradeAllDay ? "yes" : "no",
                                       Usd(InpDailyLossLockUSD), Usd(InpDailyTargetUSD), InpCloseOnOpposite ? "yes" : "no"));

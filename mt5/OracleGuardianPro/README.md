@@ -467,3 +467,68 @@ New York). Farklıysa `InpVwapDailyResetNY` değerini ona göre değiştirin.
 Ayrıca TradingView'ın sembolü (OANDA, FX vb.) ile Upcomers'ın fiyat akışı ve
 hacmi farklı olabilir. Tick volume farklı olduğu için VWAP değerleri birkaç
 cent farklı çıkabilir.
+
+## 14. v1.30 — İkinci backtest (v1.20) analizi ve değişiklikler
+
+### Rapor: 01.01–22.10.2026, altın + gümüş, %96 gerçek tick
+
+| | İşlem | Net $ | Toplam R | Not |
+|---|---|---|---|---|
+| Hepsi | 85 | −553 | **+1,5R** | kazanma oranı %52 |
+| TP ile çıkış | 24 | +2.080 | +30,5R | |
+| SL ile çıkış | 32 | −2.984 | −32,8R | |
+| EMA çıkışı (AFTER_MFE) | 29 | +351 | +3,9R | %69 kazanç; v1.00'daki −33R'lik EMA çıkışı sorunu çözüldü |
+| Altın | 77 | −401 | +0,3R | |
+| Gümüş | 8 | −153 | +1,3R | SL başına ortalama **−157 $** (altında −87 $) |
+| Pozisyon #2 (retest) | 24 | +17 | −0,6R | yaklaşık başabaş |
+
+**1. R pozitif ama dolar negatif.** Sabit lotta zarar edilen dolar, stopun
+genişliğine bağlıdır. Kaybeden işlemlerde stoplar daha genişti, bu yüzden 1R
+başına daha fazla dolar kaybedildi (SL'de 1R ≈ 91 $, TP'de 1R ≈ 68 $). Ayrıca
+kayıplardan sonra güvenlik tavanları lotları küçülttü, kazançlar küçük lotla
+geldi. **Çözüm:** risk modu. Her işlemde 1R aynı dolar tutarı olur; böylece
++R doğrudan +$ olarak yansır.
+
+**2. Mayıs–Ekim arasında hiç işlem yok.** 29 Nisan'dan sonra EA tamamen
+durdu. Equity zirvesi yaklaşık 25.290, son değer 24.447. Tutucu (trailing)
+Shield tabanı ≈ 24.040 olduğu için tabana mesafe ≈ 400 $ kaldı. Bu mesafe 300
+$'lık güvenlik payı ve açık riskle birlikte yeni bir işleme yetmiyor. EA işlem
+yapmadığı için equity de toparlanamıyor, yani EA kalıcı olarak kilitleniyor.
+- **Canlı hesapta bu doğru davranış:** Shield gerçekten zirveyi takip
+  ediyorsa hesap ihlale ~400 $ uzaktadır.
+- Ancak backtest'in 6 ayını boşa harcıyor ve stratejinin gücünü ölçmeyi
+  engelliyor.
+- **Çözüm:** `InpShieldModel = STATIC` yalnızca araştırma (tester) için.
+  Canlıda TRAILING kalmalı.
+- Upcomers panelindeki gerçek taban EA'nın tahmininden **düşükse**,
+  `InpManualShieldFloor` + `InpTrustManualFloor = true` ile gerçek değeri
+  kullanabilirsiniz. Bunu sadece paneli aynı gün kontrol ettiyseniz yapın.
+
+**3. Gümüş pahalı.** Kontrat 5.000 oz olduğu için sabit 0,06 lotta stop başına
+157 $ kayıp oluyor. Risk modunda lot otomatik küçülür.
+
+**4. Saat dağılımı** (sunucu saati): 00–05 +8,3R, 06–14 −10,3R, 15–17 +3,8R.
+Örneklem küçük (85 işlem). **Bu dağılıma bakıp seans filtresi kurmak şu an
+aşırı optimizasyon olur**; daha uzun testlerde de aynı tablo çıkarsa
+değerlendiririz.
+
+### v1.30 değişiklikleri
+
+| Değişiklik | Neden |
+|---|---|
+| **Lot modu varsayılanı RISK, sinyal başına %0,5** (~125 $; iki pozisyona bölünür). `InpFixedLotGold/Silver` = 0,10 artık **maksimum lot** | 1R'nin dolar karşılığı sabit kalsın, +R → +$ |
+| `InpShieldModel` (TRAILING / STATIC) ve `InpTrustManualFloor` | Backtest'te kilitlenmeyi önlemek / panel değerini kullanabilmek |
+| **#2 sadece #1'den daha iyi fiyattan açılır** | Raporda #2, #1'den daha kötü fiyattan açılmıştı (ör. 4670 → 4671,82); bu gerçek bir retest değil |
+| **FVG filtresi** (opsiyonel, kapalı): sinyal yönünde, son N mumda oluşmuş, doldurulmamış bir Fair Value Gap aranır | İsteğiniz; etkisi teste bağlı |
+| **Order block stopu** (opsiyonel): SL, hareketten önceki son ters renkli mumun ötesine konur; yoksa swing kullanılır | İsteğiniz; daha dar ve mantıklı stop olabilir |
+
+FVG, order block ve diğer "smart money" kavramlarının işe yaradığına dair
+genel kabul görmüş bir kanıt yok. Bu yüzden ikisi de **varsayılan olarak
+kapalı** ve sadece optimizasyonda açık/kapalı karşılaştırılıyor.
+
+### Önerilen sonraki test
+
+`OGP_optimize_exits.set` dosyası güncellendi. Ayarlar: sadece altın, STATIC
+Shield, risk modu %0,5. Optimizasyonda şunlar karşılaştırılır: #2 modu, EMA
+çıkış modu, SL çarpanı, swing/OB stop, TP modu ve RR, trend filtresi, FVG
+filtresi. Forward 1/3.

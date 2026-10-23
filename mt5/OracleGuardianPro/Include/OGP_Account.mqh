@@ -384,10 +384,12 @@ public:
       double base = init - shieldAmount;
       shieldReliable = (acc.peakSrc != OGP_SRC_UNKNOWN && !acc.PeakPending()) || InpManualShieldFloor > 0.0;
       shieldFloor = base;
-      if(acc.peakSrc != OGP_SRC_UNKNOWN)
+      if(acc.peakSrc != OGP_SRC_UNKNOWN && InpShieldModel == OGP_SHIELD_TRAILING)
          shieldFloor = MaxD(shieldFloor, acc.peakEquity - shieldAmount);
+      if(InpShieldModel == OGP_SHIELD_STATIC)
+         shieldReliable = true;          // static floor needs no peak reference
       if(InpManualShieldFloor > 0.0)
-         shieldFloor = MaxD(shieldFloor, InpManualShieldFloor);
+         shieldFloor = InpTrustManualFloor ? InpManualShieldFloor : MaxD(shieldFloor, InpManualShieldFloor);
 
       //--- Daily drawdown (equity reference at 00:00 UTC)
       dailyReliable = (acc.daySrc != OGP_SRC_UNKNOWN);

@@ -8,7 +8,7 @@
 //|  risk 4) trade quality 5) daily target.                          |
 //+------------------------------------------------------------------+
 #property copyright   "Personal EA - use at your own risk"
-#property version     "1.21"
+#property version     "1.30"
 #property description "Oracle Guardian Pro: Session VWAP (OHLC/4) x EMA9 on M3 for XAUUSD/XAGUSD"
 #property description "with Upcomers Oracle rule guard, equity-based dynamic sizing and mandatory stop-loss."
 #property description "No profit is guaranteed. Test on demo first."
@@ -94,6 +94,18 @@ enum ENUM_OGP_TP_MODE
    OGP_TP_VWAP_BAND = 1  // VWAP +/- k standard deviations (TradingView band), skip if < min RR
   };
 
+enum ENUM_OGP_SHIELD_MODEL
+  {
+   OGP_SHIELD_TRAILING = 0, // Trailing: floor = peak equity - 5% of initial (conservative, LIVE default)
+   OGP_SHIELD_STATIC   = 1  // Static: floor = initial - 5% (ONLY for strategy research / if Upcomers confirms)
+  };
+
+enum ENUM_OGP_SL_STRUCT
+  {
+   OGP_SLS_SWING       = 0, // Beyond the recent swing high/low
+   OGP_SLS_ORDER_BLOCK = 1  // Beyond the last opposite candle before the move (order block); swing fallback
+  };
+
 enum ENUM_OGP_NEWS_FAIL
   {
    OGP_NEWS_FAIL_ALLOW = 0, // Calendar unavailable -> allow entries (dashboard warning)
@@ -111,16 +123,18 @@ input double   InpValidDayPct           = 0.5;      // Valid trading day realize
 input double   InpPayoutPct             = 1.0;      // Payout net profit threshold %
 input double   InpBestDayPct            = 20.0;     // Best Day Rule %
 input int      InpMinValidDays          = 5;        // Minimum valid trading days
+input ENUM_OGP_SHIELD_MODEL InpShieldModel = OGP_SHIELD_TRAILING; // Shield model (keep TRAILING on the real account)
 input double   InpManualShieldFloor     = 0.0;      // Shield floor read from Upcomers dashboard (0 = none)
+input bool     InpTrustManualFloor      = false;    // Use the manual floor even if LOWER than the EA estimate (only if read from Upcomers today)
 input double   InpManualPeakEquity      = 0.0;      // Highest equity read from Upcomers (0 = none)
 input double   InpManualDayStartEquity  = 0.0;      // Today's start equity from Upcomers (0 = none)
 input datetime InpManualDayStartDate    = D'1970.01.01'; // UTC date the manual day-start value belongs to
 
 input group "=== 2. Internal risk (robot limits, far inside firm rules) ==="
-input ENUM_OGP_LOT_MODE InpLotMode     = OGP_LOT_FIXED; // Lot mode
+input ENUM_OGP_LOT_MODE InpLotMode     = OGP_LOT_RISK; // Lot mode (RISK: equal $ per R; fixed lots act as MAX)
 input double   InpFixedLotGold          = 0.10;     // Fixed lots per position - gold
 input double   InpFixedLotSilver        = 0.10;     // Fixed lots per position - silver (silver 0.10 lot ~ 10x gold risk per $!)
-input double   InpRiskPct               = 0.25;     // Risk mode: risk per SIGNAL, % of CURRENT equity (split over positions)
+input double   InpRiskPct               = 0.50;     // Risk mode: risk per SIGNAL, % of CURRENT equity (split over positions)
 input double   InpMaxTotalRiskPct       = 1.00;     // Max combined planned risk of open EA positions, % of initial balance
 input double   InpCorrelatedRiskFactor  = 0.50;     // Risk multiplier when other metal is open SAME direction
 input bool     InpBlockOppositeMetals   = false;    // Block gold/silver in OPPOSITE directions at the same time
@@ -165,6 +179,9 @@ input int      InpBreakoutLookback      = 20;       // Swing lookback for breako
 input double   InpMomentumBodyAtr       = 1.0;      // Momentum bar body >= x * ATR counts as confirmation
 input bool     InpBreakoutRetest        = false;    // Require retest of the broken level
 input int      InpBreakRetestMaxBars    = 6;        // Max bars between break and retest (breakout filter)
+input bool     InpUseFvgFilter          = false;    // Require an unfilled Fair Value Gap in the signal direction
+input int      InpFvgLookback           = 10;       // FVG search window (M3 bars)
+input double   InpFvgMinAtr             = 0.20;     // Minimum FVG size, ATR
 input bool     InpUseChaseFilter        = true;     // Skip if price is too far from VWAP (no chasing)
 input double   InpMaxChaseAtr           = 1.0;      // Max distance entry->VWAP in ATR
 input bool     InpUsePullbackMode       = false;    // After a skipped (chased) cross, wait for pullback + confirmation
@@ -174,7 +191,8 @@ input int      InpPullbackMaxBars       = 20;       // Pullback setup expires af
 input group "=== 5. ATR / volatility / stops ==="
 input int      InpAtrPeriod             = 14;       // ATR period (M3)
 input double   InpSlAtrMult             = 1.5;      // ATR stop multiple
-input bool     InpUseStructureSL        = true;     // Stop beyond recent swing if wider than ATR stop
+input bool     InpUseStructureSL        = true;     // Stop beyond structure if wider than ATR stop
+input ENUM_OGP_SL_STRUCT InpSlStructure = OGP_SLS_SWING; // Structure used for the stop
 input int      InpSwingLookback         = 10;       // Swing lookback for structural stop (bars)
 input double   InpMaxSlAtrMult          = 3.0;      // Skip trade if stop wider than x * ATR
 input ENUM_OGP_TP_MODE InpTpMode       = OGP_TP_RR; // Take-profit mode
@@ -1362,10 +1380,12 @@ public:
       double base = init - shieldAmount;
       shieldReliable = (acc.peakSrc != OGP_SRC_UNKNOWN && !acc.PeakPending()) || InpManualShieldFloor > 0.0;
       shieldFloor = base;
-      if(acc.peakSrc != OGP_SRC_UNKNOWN)
+      if(acc.peakSrc != OGP_SRC_UNKNOWN && InpShieldModel == OGP_SHIELD_TRAILING)
          shieldFloor = MaxD(shieldFloor, acc.peakEquity - shieldAmount);
+      if(InpShieldModel == OGP_SHIELD_STATIC)
+         shieldReliable = true;          // static floor needs no peak reference
       if(InpManualShieldFloor > 0.0)
-         shieldFloor = MaxD(shieldFloor, InpManualShieldFloor);
+         shieldFloor = InpTrustManualFloor ? InpManualShieldFloor : MaxD(shieldFloor, InpManualShieldFloor);
 
       //--- Daily drawdown (equity reference at 00:00 UTC)
       dailyReliable = (acc.daySrc != OGP_SRC_UNKNOWN);
@@ -2104,7 +2124,7 @@ void BuildRiskSummary(OgpRiskSummary &rs)
 // fixedLots > 0: fixed-lot mode (lots never increased, only reduced to fit the caps)
 // riskShare: share of the per-signal risk given to this position (risk mode)
 bool ComputeLots(const string sym, const int dir, const double entry, const double sl, const double slip,
-                 const double fixedLots, const double riskShare,
+                 const double fixedLots, const double riskShare, const double lotCap,
                  const OgpRiskSummary &rs, CAccountMonitor &acc, COracleRules &rules,
                  double &lots, double &plannedLoss, string &capInfo, string &why)
   {
@@ -2186,6 +2206,15 @@ bool ComputeLots(const string sym, const int dir, const double entry, const doub
       step = vmin;
    double raw = allowed / lossPerLot;
    double v = NormalizeDouble(MathFloor(raw / step + 1e-9) * step, VolumeDigits(step));
+   if(!fixedMode && lotCap > 0.0)
+     {
+      double cap = NormalizeDouble(MathFloor(lotCap / step + 1e-9) * step, VolumeDigits(step));
+      if(v > cap)
+        {
+         v = cap;
+         capInfo += StringFormat(" | capped at max lot %.2f", cap);
+        }
+     }
    if(fixedMode)
      {
       double fx = NormalizeDouble(MathFloor(fixedLots / step + 1e-9) * step, VolumeDigits(step));
@@ -2570,6 +2599,41 @@ private:
       return false;
      }
 
+   //--- unfilled FVG in the signal direction within the lookback
+   //--- bullish FVG at bar k: low[k] > high[k+2]; still open if no later bar traded through its bottom
+   bool              FvgOk(const int dir, const double a, string &why)
+     {
+      for(int k = 1; k <= InpFvgLookback && k + 2 < ArraySize(r); k++)
+        {
+         double gapLo = (dir > 0) ? r[k + 2].high : r[k].high;
+         double gapHi = (dir > 0) ? r[k].low : r[k + 2].low;
+         if(gapHi - gapLo < InpFvgMinAtr * a)
+            continue;
+         bool filled = false;
+         for(int j = 1; j < k && !filled; j++)
+            filled = (dir > 0) ? (r[j].low <= gapLo) : (r[j].high >= gapHi);
+         if(!filled)
+            return true;
+        }
+      why = StringFormat("FVG filter: no unfilled %s FVG >= %.2f ATR in last %d bars", dir > 0 ? "bullish" : "bearish", InpFvgMinAtr, InpFvgLookback);
+      return false;
+     }
+
+   //--- order block: last opposite-colour candle before the move (buy: last bearish candle -> its low)
+   bool              OrderBlockLevel(const int dir, double &level)
+     {
+      for(int k = 1; k <= InpSwingLookback && k < ArraySize(r); k++)
+        {
+         bool opposite = (dir > 0) ? (r[k].close < r[k].open) : (r[k].close > r[k].open);
+         if(opposite)
+           {
+            level = (dir > 0) ? r[k].low : r[k].high;
+            return true;
+           }
+        }
+      return false;
+     }
+
 public:
    string            sym;
    bool              isGold;
@@ -2601,6 +2665,7 @@ public:
    double            s2Sl;          // shared absolute stop-loss of the signal
    double            s2Tp;          // shared absolute target of the signal
    ulong             s2Ticket1;     // ticket of position #1
+   double            s2Entry1;      // entry price of position #1 (#2 must be better)
    datetime          s2Bar1;        // bar of entry #1
    int               s2BarsLeft;
    //--- display
@@ -2612,7 +2677,7 @@ public:
                      m_lastTickMsc(0), m_lastTickTime(0), m_prevSign(0), m_signAnchor(0), m_firstRun(true), m_need(0), sym(""),
                      isGold(true), minAtr(0), maxAtr(0), maxSpread(0), slip(0), slBuffer(0), vwapLive(0), vwapLiveOk(false),
                      newBar(false), dataOk(false), curBar(0), lastEntryDir(0), rearmed(true), lastEntryBar(0), pbActive(false),
-                     pbDir(0), pbBarsLeft(0), s2Active(false), s2Dir(0), s2Sl(0), s2Tp(0), s2Ticket1(0), s2Bar1(0),
+                     pbDir(0), pbBarsLeft(0), s2Active(false), s2Dir(0), s2Sl(0), s2Tp(0), s2Ticket1(0), s2Entry1(0), s2Bar1(0),
                      s2BarsLeft(0), lastSignal("-"), lastDecision("-"), trendText("-") {}
 
    bool              Init(const string s, const bool gold)
@@ -2630,6 +2695,8 @@ public:
       ArraySetAsSeries(atr, true);
       int a = InpBreakoutLookback + InpBreakRetestMaxBars + 4;
       int b = InpSwingLookback + 3;
+      if(InpFvgLookback + 4 > b)
+         b = InpFvgLookback + 4;
       m_need = (a > b) ? a : b;
       if(m_need < 30)
          m_need = 30;
@@ -2797,8 +2864,9 @@ public:
      }
 
    //--- second position: armed after entry #1 in ON_RETEST mode
-   void              ArmSecond(const int dir, const double sl, const double tp, const ulong ticket1)
+   void              ArmSecond(const int dir, const double sl, const double tp, const ulong ticket1, const double entry1)
      {
+      s2Entry1 = entry1;
       s2Active = true;
       s2Dir = dir;
       s2Sl = sl;
@@ -2845,6 +2913,9 @@ public:
          CancelSecond("EMA crossed back through VWAP (setup invalid)");
          return false;
         }
+      //--- position #2 only at a BETTER price than #1 (a real retest, not chasing)
+      if((s2Dir > 0 && tick.ask >= s2Entry1) || (s2Dir < 0 && tick.bid <= s2Entry1))
+         return false;
       double zoneTop = MaxD(e1, v1) + InpRetestZoneAtr * a;   // buy: pull back down into here
       double zoneBot = MinD(e1, v1) - InpRetestZoneAtr * a;   // sell: pull back up into here
       if(InpRetestNeedsClose)
@@ -2948,6 +3019,9 @@ public:
       //--- structure break / momentum
       if(InpUseBreakoutFilter && !BreakoutOk(dir, why))
          return OGP_EVAL_REJECT;
+      //--- fair value gap confluence (optional)
+      if(InpUseFvgFilter && !FvgOk(dir, a, why))
+         return OGP_EVAL_REJECT;
       //--- anti-chase
       double vref = (InpEntryMode == OGP_ENTRY_LIVE && vwapLiveOk) ? vwapLive : vwap.Bar1();
       double ext = (dir > 0) ? it.entry - vref : vref - it.entry;
@@ -2962,11 +3036,21 @@ public:
       if(InpUseStructureSL)
         {
          double swing = (dir > 0) ? LowestLow(1, InpSwingLookback) - slBuffer : HighestHigh(1, InpSwingLookback) + slBuffer;
+         string sname = "swing";
+         if(InpSlStructure == OGP_SLS_ORDER_BLOCK)
+           {
+            double ob = 0.0;
+            if(OrderBlockLevel(dir, ob))
+              {
+               swing = (dir > 0) ? ob - slBuffer : ob + slBuffer;
+               sname = "order block";
+              }
+           }
          double sdist = (dir > 0) ? it.entry - swing : swing - it.entry;
          if(sdist > dist)
            {
             dist = sdist;
-            slInfo = StringFormat("structure stop %s (swing %s)", Px(sym, sdist), Px(sym, swing));
+            slInfo = StringFormat("structure stop %s (%s %s)", Px(sym, sdist), sname, Px(sym, swing));
            }
         }
       double minDist = MinStopDistance(sym) + spread;
@@ -3557,7 +3641,7 @@ void HandleCandidate(COgpSymbol *s, const int dir, const string src, const datet
    double tp1Dist = twoNow ? MaxD(it.slDist * InpTp1RR, MinStopDistance(s.sym) + spread) : it.tpDist;
    double lots1 = 0.0, planned1 = 0.0, lots2 = 0.0, planned2 = 0.0;
    string capInfo = "", capInfo2 = "";
-   if(!ComputeLots(s.sym, dir, it.entry, slPrice, s.slip, fixedLots, share, rs, g_acc, g_rules, lots1, planned1, capInfo, why))
+   if(!ComputeLots(s.sym, dir, it.entry, slPrice, s.slip, fixedLots, share, LotCapFor(s), rs, g_acc, g_rules, lots1, planned1, capInfo, why))
      {
       Reject(s, side, src, why + " | " + capInfo);
       return;
@@ -3566,7 +3650,7 @@ void HandleCandidate(COgpSymbol *s, const int dir, const string src, const datet
      {
       rs.eaRiskFromEntry += planned1;       // position #1 is part of the budget for #2
       rs.allRiskFromNow  += planned1;
-      if(!ComputeLots(s.sym, dir, it.entry, slPrice, s.slip, fixedLots, share, rs, g_acc, g_rules, lots2, planned2, capInfo2, why))
+      if(!ComputeLots(s.sym, dir, it.entry, slPrice, s.slip, fixedLots, share, LotCapFor(s), rs, g_acc, g_rules, lots2, planned2, capInfo2, why))
         {
          Journal("RISK", s.sym, "position #2 not possible (" + why + ") - opening #1 only");
          twoNow = false;
@@ -3617,7 +3701,13 @@ void HandleCandidate(COgpSymbol *s, const int dir, const string src, const datet
          s.lastDecision += StringFormat(" + #2 %.2f lots", lots2);
      }
    else
-      s.ArmSecond(dir, pSl, pTp, tk1);
+      s.ArmSecond(dir, pSl, pTp, tk1, pOpen);
+  }
+
+//--- risk mode: the "fixed" lot inputs act as a maximum lot per position
+double LotCapFor(COgpSymbol *s)
+  {
+   return s.isGold ? InpFixedLotGold : InpFixedLotSilver;
   }
 
 double FixedLotsFor(COgpSymbol *s)
@@ -3664,7 +3754,7 @@ void HandleSecond(COgpSymbol *s, const datetime now)
    double entry = (dir > 0) ? s.tick.ask : s.tick.bid;
    double lots = 0.0, planned = 0.0, margin = 0.0;
    string capInfo = "";
-   if(!ComputeLots(s.sym, dir, entry, s.s2Sl, s.slip, FixedLotsFor(s), 0.5, rs, g_acc, g_rules, lots, planned, capInfo, why))
+   if(!ComputeLots(s.sym, dir, entry, s.s2Sl, s.slip, FixedLotsFor(s), 0.5, LotCapFor(s), rs, g_acc, g_rules, lots, planned, capInfo, why))
      {
       s.CancelSecond(why + " | " + capInfo);
       return;
@@ -3772,7 +3862,7 @@ void DrawDashboard(const datetime now)
       return;
    DashClear();
    color hdr = clrGold, ok = clrLimeGreen, bad = clrTomato, warn = clrOrange, txt = clrSilver;
-   DashAdd("ORACLE GUARDIAN PRO v1.21  (no profit guarantee)", hdr);
+   DashAdd("ORACLE GUARDIAN PRO v1.30  (no profit guarantee)", hdr);
    DashAdd(StringFormat("Server %s | UTC %s | NY %s", TimeToString(now, TIME_MINUTES),
                         TimeToString(ServerToUtc(now), TIME_MINUTES), TimeToString(NyLocal(now), TIME_MINUTES)), txt);
    DashAdd(g_entryBlock == "" ? "ENTRIES: ALLOWED [" + g_sessName + "]" : "ENTRIES: BLOCKED - " + g_entryBlock,
@@ -3783,7 +3873,8 @@ void DrawDashboard(const datetime now)
    DashAdd(StringFormat("Margin %s  Free %s  Level %s%%  Lev 1:%I64d", Usd(g_acc.margin), Usd(g_acc.freeMargin),
                         g_acc.margin > 0 ? DoubleToString(g_acc.marginLevel, 0) : "-", g_acc.leverage), txt);
    DashAdd("--- ORACLE RULES (EA references; Upcomers server values not readable) ---", hdr);
-   DashAdd(StringFormat("Shield floor %s [%s]  dist %s", Usd(g_rules.shieldFloor),
+   DashAdd(StringFormat("Shield floor %s [%s%s]  dist %s", Usd(g_rules.shieldFloor),
+                        InpShieldModel == OGP_SHIELD_STATIC ? "STATIC model, " : "",
                         InpManualShieldFloor > 0 ? "MANUAL+" + SourceText(g_acc.peakSrc) : SourceText(g_acc.peakSrc),
                         Usd(g_acc.equity - g_rules.shieldFloor)), g_rules.shieldReliable ? txt : bad);
    DashAdd(StringFormat("Peak equity %s", Usd(g_acc.peakEquity)), txt);
@@ -3875,6 +3966,8 @@ bool ValidateInputs()
       e = "InpRetestMaxBars >= 1 and InpEmaExitMinR >= 0 required";
    else if(InpTpMode == OGP_TP_VWAP_BAND && (InpTpBandMult <= 0.0 || InpMinTpRR <= 0.0))
       e = "band TP needs InpTpBandMult > 0 and InpMinTpRR > 0";
+   else if(InpFvgLookback < 1 || InpFvgMinAtr < 0.0)
+      e = "InpFvgLookback >= 1 and InpFvgMinAtr >= 0 required";
    else if(InpMaxTradesPerDay < 1 || InpEmaPeriod < 1 || InpAtrPeriod < 1 || InpSwingLookback < 2 || InpBreakoutLookback < 2)
       e = "periods / lookbacks / max trades out of range";
    if(e != "")
@@ -3920,7 +4013,7 @@ void FreeSymbols()
 int OnInit()
   {
    OgpLog("==================================================================");
-   OgpLog("Oracle Guardian Pro v1.21 - NO PROFIT GUARANTEE - verify every rule on Upcomers");
+   OgpLog("Oracle Guardian Pro v1.30 - NO PROFIT GUARANTEE - verify every rule on Upcomers");
    if(!ValidateInputs() || !SessionsInit())
       return INIT_PARAMETERS_INCORRECT;
    JournalOpen();
@@ -3962,6 +4055,11 @@ int OnInit()
                                       EnumToString(InpLotMode), InpFixedLotGold, InpFixedLotSilver, EnumToString(InpSecondEntry), InpMaxTotalRiskPct));
    if(InpSecondEntry != OGP_2ND_OFF && AccountInfoInteger(ACCOUNT_MARGIN_MODE) != ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
       Journal("SYSTEM", "", "WARNING: netting account - second position disabled");
+   Journal("SYSTEM", "", StringFormat("shield model %s%s | FVG filter %s | SL structure %s",
+                                      EnumToString(InpShieldModel), InpTrustManualFloor ? " (manual floor TRUSTED)" : "",
+                                      InpUseFvgFilter ? "ON" : "off", EnumToString(InpSlStructure)));
+   if(InpShieldModel == OGP_SHIELD_STATIC && !OgpIsTester())
+      Journal("SYSTEM", "", "WARNING: STATIC shield model on a live account - only use it if Upcomers confirmed the floor does not trail");
    Journal("SYSTEM", "", StringFormat("VWAP reset %s (daily %s NY) | TP mode %s | trade all day %s | daily max loss %s | target %s | close on opposite %s",
                                       EnumToString(InpVwapAnchor), InpVwapDailyResetNY, EnumToString(InpTpMode), InpTradeAllDay ? "yes" : "no",
                                       Usd(InpDailyLossLockUSD), Usd(InpDailyTargetUSD), InpCloseOnOpposite ? "yes" : "no"));

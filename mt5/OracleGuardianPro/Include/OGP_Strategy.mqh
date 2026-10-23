@@ -119,6 +119,41 @@ private:
       return false;
      }
 
+   //--- unfilled FVG in the signal direction within the lookback
+   //--- bullish FVG at bar k: low[k] > high[k+2]; still open if no later bar traded through its bottom
+   bool              FvgOk(const int dir, const double a, string &why)
+     {
+      for(int k = 1; k <= InpFvgLookback && k + 2 < ArraySize(r); k++)
+        {
+         double gapLo = (dir > 0) ? r[k + 2].high : r[k].high;
+         double gapHi = (dir > 0) ? r[k].low : r[k + 2].low;
+         if(gapHi - gapLo < InpFvgMinAtr * a)
+            continue;
+         bool filled = false;
+         for(int j = 1; j < k && !filled; j++)
+            filled = (dir > 0) ? (r[j].low <= gapLo) : (r[j].high >= gapHi);
+         if(!filled)
+            return true;
+        }
+      why = StringFormat("FVG filter: no unfilled %s FVG >= %.2f ATR in last %d bars", dir > 0 ? "bullish" : "bearish", InpFvgMinAtr, InpFvgLookback);
+      return false;
+     }
+
+   //--- order block: last opposite-colour candle before the move (buy: last bearish candle -> its low)
+   bool              OrderBlockLevel(const int dir, double &level)
+     {
+      for(int k = 1; k <= InpSwingLookback && k < ArraySize(r); k++)
+        {
+         bool opposite = (dir > 0) ? (r[k].close < r[k].open) : (r[k].close > r[k].open);
+         if(opposite)
+           {
+            level = (dir > 0) ? r[k].low : r[k].high;
+            return true;
+           }
+        }
+      return false;
+     }
+
 public:
    string            sym;
    bool              isGold;
@@ -150,6 +185,7 @@ public:
    double            s2Sl;          // shared absolute stop-loss of the signal
    double            s2Tp;          // shared absolute target of the signal
    ulong             s2Ticket1;     // ticket of position #1
+   double            s2Entry1;      // entry price of position #1 (#2 must be better)
    datetime          s2Bar1;        // bar of entry #1
    int               s2BarsLeft;
    //--- display
@@ -161,7 +197,7 @@ public:
                      m_lastTickMsc(0), m_lastTickTime(0), m_prevSign(0), m_signAnchor(0), m_firstRun(true), m_need(0), sym(""),
                      isGold(true), minAtr(0), maxAtr(0), maxSpread(0), slip(0), slBuffer(0), vwapLive(0), vwapLiveOk(false),
                      newBar(false), dataOk(false), curBar(0), lastEntryDir(0), rearmed(true), lastEntryBar(0), pbActive(false),
-                     pbDir(0), pbBarsLeft(0), s2Active(false), s2Dir(0), s2Sl(0), s2Tp(0), s2Ticket1(0), s2Bar1(0),
+                     pbDir(0), pbBarsLeft(0), s2Active(false), s2Dir(0), s2Sl(0), s2Tp(0), s2Ticket1(0), s2Entry1(0), s2Bar1(0),
                      s2BarsLeft(0), lastSignal("-"), lastDecision("-"), trendText("-") {}
 
    bool              Init(const string s, const bool gold)
@@ -179,6 +215,8 @@ public:
       ArraySetAsSeries(atr, true);
       int a = InpBreakoutLookback + InpBreakRetestMaxBars + 4;
       int b = InpSwingLookback + 3;
+      if(InpFvgLookback + 4 > b)
+         b = InpFvgLookback + 4;
       m_need = (a > b) ? a : b;
       if(m_need < 30)
          m_need = 30;
@@ -346,8 +384,9 @@ public:
      }
 
    //--- second position: armed after entry #1 in ON_RETEST mode
-   void              ArmSecond(const int dir, const double sl, const double tp, const ulong ticket1)
+   void              ArmSecond(const int dir, const double sl, const double tp, const ulong ticket1, const double entry1)
      {
+      s2Entry1 = entry1;
       s2Active = true;
       s2Dir = dir;
       s2Sl = sl;
@@ -394,6 +433,9 @@ public:
          CancelSecond("EMA crossed back through VWAP (setup invalid)");
          return false;
         }
+      //--- position #2 only at a BETTER price than #1 (a real retest, not chasing)
+      if((s2Dir > 0 && tick.ask >= s2Entry1) || (s2Dir < 0 && tick.bid <= s2Entry1))
+         return false;
       double zoneTop = MaxD(e1, v1) + InpRetestZoneAtr * a;   // buy: pull back down into here
       double zoneBot = MinD(e1, v1) - InpRetestZoneAtr * a;   // sell: pull back up into here
       if(InpRetestNeedsClose)
@@ -497,6 +539,9 @@ public:
       //--- structure break / momentum
       if(InpUseBreakoutFilter && !BreakoutOk(dir, why))
          return OGP_EVAL_REJECT;
+      //--- fair value gap confluence (optional)
+      if(InpUseFvgFilter && !FvgOk(dir, a, why))
+         return OGP_EVAL_REJECT;
       //--- anti-chase
       double vref = (InpEntryMode == OGP_ENTRY_LIVE && vwapLiveOk) ? vwapLive : vwap.Bar1();
       double ext = (dir > 0) ? it.entry - vref : vref - it.entry;
@@ -511,11 +556,21 @@ public:
       if(InpUseStructureSL)
         {
          double swing = (dir > 0) ? LowestLow(1, InpSwingLookback) - slBuffer : HighestHigh(1, InpSwingLookback) + slBuffer;
+         string sname = "swing";
+         if(InpSlStructure == OGP_SLS_ORDER_BLOCK)
+           {
+            double ob = 0.0;
+            if(OrderBlockLevel(dir, ob))
+              {
+               swing = (dir > 0) ? ob - slBuffer : ob + slBuffer;
+               sname = "order block";
+              }
+           }
          double sdist = (dir > 0) ? it.entry - swing : swing - it.entry;
          if(sdist > dist)
            {
             dist = sdist;
-            slInfo = StringFormat("structure stop %s (swing %s)", Px(sym, sdist), Px(sym, swing));
+            slInfo = StringFormat("structure stop %s (%s %s)", Px(sym, sdist), sname, Px(sym, swing));
            }
         }
       double minDist = MinStopDistance(sym) + spread;
