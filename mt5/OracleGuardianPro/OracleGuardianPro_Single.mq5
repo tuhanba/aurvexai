@@ -959,6 +959,7 @@ private:
    datetime          m_gapStart;
    bool              m_disconnected;
    double            m_lastEquity;
+   datetime          m_initTime;
 
    //--- state persistence (key=value text file in MQL5/Files)
    bool              LoadState(datetime &stCycle, double &stInit)
@@ -1111,12 +1112,13 @@ public:
    datetime          lastSeen;
 
                      CAccountMonitor(void) : m_file(""), m_lastSave(0), m_lastResolveTry(0), m_needCycleRebuild(false),
-                     m_gapPending(false), m_gapStart(0), m_disconnected(false), m_lastEquity(0), login(0), currency(""),
+                     m_gapPending(false), m_gapStart(0), m_disconnected(false), m_lastEquity(0), m_initTime(0), login(0), currency(""),
                      leverage(0), balance(0), equity(0), floating(0), margin(0), freeMargin(0), marginLevel(0),
                      connected(true), peakEquity(0), peakSrc(OGP_SRC_UNKNOWN), peakTime(0), peakNote(""), dayKey(0),
                      dayStartEquity(0), daySrc(OGP_SRC_UNKNOWN), dayNote(""), lastSeen(0) {}
 
-   datetime          EffectiveCycleStart(const datetime now) const { return (InpCycleStart < now) ? InpCycleStart : now; }
+   //--- cycle start in the future (e.g. tester period before it): count from EA start instead
+   datetime          EffectiveCycleStart(const datetime now) const { return (InpCycleStart <= now) ? InpCycleStart : ((m_initTime > 0) ? m_initTime : now); }
 
    void              ReadSnapshot(void)
      {
@@ -1137,6 +1139,7 @@ public:
       ReadSnapshot();
       m_file = StringFormat("OGP_state_%I64d%s.txt", login, OgpIsTester() ? "_tester" : "");
       datetime now = ServerNow();
+      m_initTime = now;
       datetime stCycle = 0;
       double stInit = 0.0;
       bool loaded = LoadState(stCycle, stInit);
@@ -1160,7 +1163,7 @@ public:
          m_needCycleRebuild = true;
         }
       if(InpCycleStart > now)
-         Journal("ORACLE", "", "WARNING: InpCycleStart is in the future - cycle statistics start now");
+         Journal("ORACLE", "", "WARNING: InpCycleStart is in the future - cycle statistics count from EA start " + Ts(now));
       ResolvePeak(now);
       if(!loaded || dayKey != UtcDayKey(now) || daySrc == OGP_SRC_UNKNOWN)
         {
