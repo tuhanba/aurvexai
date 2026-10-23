@@ -22,6 +22,7 @@ private:
    datetime          m_lastMod[];
    datetime          m_lastClose[];
    datetime          m_deferBar[];  // bar on which an EMA exit was deferred by min hold
+   double            m_mfe[];       // best favourable price distance reached (price units)
 
    int               Slot(const ulong ticket)
      {
@@ -34,6 +35,8 @@ private:
       ArrayResize(m_lastMod, n + 1);
       ArrayResize(m_lastClose, n + 1);
       ArrayResize(m_deferBar, n + 1);
+      ArrayResize(m_mfe, n + 1);
+      m_mfe[n] = 0.0;
       m_tk[n] = ticket;
       m_initDist[n] = 0.0;
       m_lastMod[n] = 0;
@@ -127,8 +130,18 @@ public:
          if(!s.dataOk)
             continue;
 
+         //--- maximum favourable excursion (for AFTER_MFE exit mode)
+         double curPx = (dir > 0) ? s.tick.bid : s.tick.ask;
+         double fav = (dir > 0) ? curPx - open : open - curPx;
+         if(fav > m_mfe[k])
+            m_mfe[k] = fav;
+         double initD = InitialDistance(k, t, open, sl);
+         bool isSecond = (StringFind(PositionGetString(POSITION_COMMENT), "#2") >= 0);
+
          //--- EMA candle-close exit
-         if(InpUseEmaExit)
+         bool emaArmed = (InpEmaExitMode == OGP_EMAX_ALWAYS) ||
+                         (InpEmaExitMode == OGP_EMAX_AFTER_MFE && initD > 0.0 && m_mfe[k] >= InpEmaExitMinR * initD);
+         if(InpEmaExitMode != OGP_EMAX_OFF && emaArmed)
            {
             if(s.newBar)
               {
@@ -165,16 +178,20 @@ public:
          double minD = MinStopDistance(s.sym);
          double newSl = sl;
          string why = "";
-         if(InpUseBreakEven)
+         //--- break-even: generic, or for #2 once TP1 has been reached (AT_SIGNAL mode)
+         bool beTp1 = (InpSecondEntry == OGP_2ND_AT_SIGNAL && InpBeAfterTp1 && isSecond);
+         if(InpUseBreakEven || beTp1)
            {
-            double init = InitialDistance(k, t, open, sl);
+            double trigR = beTp1 ? InpTp1RR : InpBreakEvenRR;
+            if(beTp1 && InpUseBreakEven)
+               trigR = MinD(InpTp1RR, InpBreakEvenRR);
             double gain = (dir > 0) ? cur - open : open - cur;
             double be = open + dir * spread;
             bool notYet = (dir > 0) ? (sl < be) : (sl > be);
-            if(init > 0.0 && notYet && gain >= InpBreakEvenRR * init && MathAbs(cur - be) > minD)
+            if(initD > 0.0 && notYet && m_mfe[k] >= trigR * initD && gain > 0.0 && MathAbs(cur - be) > minD)
               {
                newSl = be;
-               why = StringFormat("break-even (gain %s >= %.2fR)", Px(s.sym, gain), InpBreakEvenRR);
+               why = StringFormat("break-even (ran %s >= %.2fR)", Px(s.sym, m_mfe[k]), trigR);
               }
            }
          if(InpUseTrailing && a > 0.0)

@@ -344,3 +344,88 @@ engellenmeli); Cuma kapanışını gözlemleyin.
 - Fiyat birimiyle verilen ATR, spread ve slippage eşikleri tahmindir. 2 veya 3
   basamaklı altın fiyatlamasından etkilenmezler, ama piyasa koşullarına göre
   ayarlanmaları gerekir.
+
+## 12. v1.10 — İlk backtest analizi ve değişiklikler
+
+### Rapor (01.01–22.10.2026, XAUUSD + XAGUSD, %96 gerçek tick, v1.00 varsayılanları)
+
+| Çıkış türü | İşlem | Net | Ortalama R | Ortanca süre |
+|---|---|---|---|---|
+| TP | 21 | +1.382 USD | +1,51R | 17 dk |
+| SL | 5 | −275 USD | −1,02R | 5 dk |
+| **EMA çıkışı** | **167** | **−1.695 USD** | **−0,20R** | **9 dk** |
+| Toplam | 193 | −588 USD | toplam −6,4R | |
+
+Bu tablo şunları gösteriyor:
+- Kaybın tamamı EMA çıkışından geliyor. İşlemlerin %87'si, ortalama 9
+  dakika sonra ve çoğu −0,6R ile −0,1R arasında EMA çıkışıyla kapanmış.
+- TP'ye ulaşan işlemler +1,5R kazandırmış. SL'ye çok az işlem ulaşmış (5).
+- Gümüş (44 işlem, −5,5R) altından (149 işlem, −0,9R) daha kötü.
+- Lotlar küçük kalmış: ortalama 0,05. Sebebi, %0,25 risk ile ortalama 11 USD'lik
+  altın stopunun bir araya gelmesi.
+- Sunucu saatiyle 17:00 dilimi (New York 10:00) en kötü saat: −4,4R.
+- Bu rapor bir SL/TP kombinasyonunun daha iyi olacağını **kanıtlamaz**. EMA
+  çıkışıyla erken kapanan işlemlerin, çıkış olmasaydı SL'ye mi TP'ye mi
+  gideceği rapordan bilinemez. Bunu sadece yeni testler gösterir.
+
+### Değişiklikler
+
+1. **Sabit lot modu** (`InpLotMode = FIXED`, varsayılan): her pozisyon için
+   0,10 lot (altın ve gümüş ayrı ayarlanır). **Lot hiçbir zaman artırılmaz.**
+   Bir güvenlik tavanı (firma kuralları, günlük kilit, birleşik risk) 0,10
+   lotu kaldırmıyorsa EA lotu küçültür ve bunu loga yazar. Eski davranış için
+   `InpLotMode = RISK` seçin; bu modda risk sinyal başına hesaplanır ve iki
+   pozisyona bölünür.
+2. **Sinyal başına iki pozisyon** (`InpSecondEntry`):
+   - `ON_RETEST` (varsayılan): #1 sinyalde açılır. #2, en fazla 10 mum içinde
+     fiyat EMA/VWAP bölgesine geri gelip (±0,25 ATR) bir M3 mumu sinyal
+     yönünde kapanırsa açılır. **İki pozisyonun SL'si ve hedefi aynıdır**;
+     hedefe gelince ikisi birlikte kapanır. #1 kapanırsa, EMA VWAP'ın ters
+     tarafına geçerse veya süre dolarsa #2 iptal edilir.
+   - `AT_SIGNAL`: iki pozisyon da sinyalde açılır. #1 1R'de, #2 son hedefte
+     kapanır. #1 hedefe ulaşınca #2'nin stopu girişe (break-even) çekilir.
+   - `OFF`: eski tek pozisyon davranışı.
+   - Günlük işlem sayısı **sinyal** olarak sayılır; #2 ayrı bir işlem
+     sayılmaz.
+3. **EMA çıkışı modu** (`InpEmaExitMode`):
+   - `AFTER_MFE` (yeni varsayılan): EMA çıkışı ancak işlem bir noktada
+     +0,5R kâra ulaştıktan sonra devreye girer. Daha önce stop ve hedef
+     belirleyicidir.
+   - `ALWAYS`: eski davranış.
+   - `OFF`: yalnızca SL/TP/BE/trailing ve güvenlik kapanışları.
+   - **Bu varsayılan bir hipotezdir.** Rapor, eski kuralın zararlı olduğunu
+     gösteriyor; yeni kuralın daha iyi olduğunu henüz göstermiyor.
+4. `InpMaxTotalRiskPct` 0,5'ten **1,0**'a çıktı. Bu yapılmasaydı 2 × 0,10 lot
+   altın pozisyonu açılamazdı.
+
+### Risk hesabı (0,10 lot altın, kontrat 100 oz)
+
+- 1 USD'lik fiyat hareketi pozisyon başına **10 USD** eder. Ortalama 11
+  USD'lik stopla bir pozisyonun riski ≈ **112 USD**; iki pozisyon ≈ **225 USD**
+  (hesabın %0,9'u). Bu, v1.00'daki ≈ 50 USD'nin yaklaşık 4,5 katı.
+- Günlük iç kilit 250 USD olduğu için, iki pozisyonu birden stop olan bir
+  sinyal o günün işlemlerini fiilen bitirir. Bu bilinçli bir koruma. 250
+  USD'yi yükseltirseniz firma günlük limitine (1.000 USD) daha hızlı
+  yaklaşırsınız.
+- **Gümüşte 0,10 lot çok daha riskli:** kontrat 5.000 oz, 1 USD hareket 500
+  USD eder. 0,38 USD'lik ortalama stopta pozisyon başına ≈ 190 USD risk
+  vardır. Tavanlar lotu otomatik küçültür, ama önerim gümüşü önce kapalı
+  tutmak (`InpSymbols = Gold only`) ya da gümüş lotunu 0,02 yapmak.
+
+### SL/TP optimizasyonu: nasıl yapılır
+
+`OGP_optimize_exits.set` dosyası hazır. Strategy Tester'da:
+1. *Girdiler* sekmesinde sağ tıklayın → **Yükle** → bu dosyayı seçin.
+2. Optimizasyon: **"Hızlı genetik algoritma"**. Modelleme: gerçek tick'ler.
+   **İleri (forward): 1/3**. Bu son seçenek önemli: optimizasyonun bulduğu
+   en iyi ayarların, görülmemiş son 1/3'lük veride de çalışıp çalışmadığını
+   gösterir.
+3. Taranan parametreler: EMA çıkış modu (3), SL ATR çarpanı (1,0–2,5), yapısal
+   SL (açık/kapalı), TP RR (1,0–3,0), ikinci pozisyon modu (3). Toplam yaklaşık
+   1.080 kombinasyon; genetik algoritma bunların bir kısmını dener.
+4. **Sadece en iyi sonucu seçmeyin.** Şu üç koşulu birlikte sağlayan ve
+   komşu ayarları da benzer sonuç veren bir bölgeyi seçin:
+   - forward dönemde profit factor > 1,2,
+   - en az 100 işlem,
+   - maksimum equity düşüşü < %4.
+   Tek başına parlayan bir sonuç büyük ihtimalle aşırı optimizasyondur.

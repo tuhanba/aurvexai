@@ -337,7 +337,9 @@ bool ComputeCycleStats(const datetime cycleStart, const datetime todayKeyUtc, co
          nets[k] = 0.0;
         }
       nets[k] += net;
-      if(HistoryDealGetInteger(d, DEAL_ENTRY) == DEAL_ENTRY_IN && (ulong)HistoryDealGetInteger(d, DEAL_MAGIC) == InpMagic)
+      //--- count SIGNALS: the second position of a signal ("#2") is not a new trade
+      if(HistoryDealGetInteger(d, DEAL_ENTRY) == DEAL_ENTRY_IN && (ulong)HistoryDealGetInteger(d, DEAL_MAGIC) == InpMagic &&
+         StringFind(HistoryDealGetString(d, DEAL_COMMENT), "#2") < 0)
         {
          st.eaEntriesCycle++;
          if(key == todayKeyUtc)

@@ -104,7 +104,7 @@ private:
          why = StringFormat("breakout filter: no close beyond %s swing %s and no momentum bar", dir > 0 ? "high" : "low", Px(sym, lvl));
          return false;
         }
-      for(int k = 2; k <= InpRetestMaxBars + 1; k++)
+      for(int k = 2; k <= InpBreakRetestMaxBars + 1; k++)
         {
          double lvl = (dir > 0) ? HighestHigh(k + 1, L) : LowestLow(k + 1, L);
          bool broke = (dir > 0) ? (r[k].close > lvl) : (r[k].close < lvl);
@@ -115,7 +115,7 @@ private:
          if(retest)
             return true;
         }
-      why = "breakout filter: no break + retest within " + IntegerToString(InpRetestMaxBars) + " bars";
+      why = "breakout filter: no break + retest within " + IntegerToString(InpBreakRetestMaxBars) + " bars";
       return false;
      }
 
@@ -144,6 +144,14 @@ public:
    bool              pbActive;
    int               pbDir;
    int               pbBarsLeft;
+   //--- second position (retest) state
+   bool              s2Active;
+   int               s2Dir;
+   double            s2Sl;          // shared absolute stop-loss of the signal
+   double            s2Tp;          // shared absolute target of the signal
+   ulong             s2Ticket1;     // ticket of position #1
+   datetime          s2Bar1;        // bar of entry #1
+   int               s2BarsLeft;
    //--- display
    string            lastSignal;
    string            lastDecision;
@@ -153,7 +161,8 @@ public:
                      m_lastTickMsc(0), m_lastTickTime(0), m_prevSign(0), m_signAnchor(0), m_firstRun(true), m_need(0), sym(""),
                      isGold(true), minAtr(0), maxAtr(0), maxSpread(0), slip(0), slBuffer(0), vwapLive(0), vwapLiveOk(false),
                      newBar(false), dataOk(false), curBar(0), lastEntryDir(0), rearmed(true), lastEntryBar(0), pbActive(false),
-                     pbDir(0), pbBarsLeft(0), lastSignal("-"), lastDecision("-"), trendText("-") {}
+                     pbDir(0), pbBarsLeft(0), s2Active(false), s2Dir(0), s2Sl(0), s2Tp(0), s2Ticket1(0), s2Bar1(0),
+                     s2BarsLeft(0), lastSignal("-"), lastDecision("-"), trendText("-") {}
 
    bool              Init(const string s, const bool gold)
      {
@@ -168,7 +177,7 @@ public:
       ArraySetAsSeries(r, true);
       ArraySetAsSeries(ema, true);
       ArraySetAsSeries(atr, true);
-      int a = InpBreakoutLookback + InpRetestMaxBars + 4;
+      int a = InpBreakoutLookback + InpBreakRetestMaxBars + 4;
       int b = InpSwingLookback + 3;
       m_need = (a > b) ? a : b;
       if(m_need < 30)
@@ -318,6 +327,8 @@ public:
      {
       if(lastEntryDir != 0 && dir != lastEntryDir)
          rearmed = true;
+      if(s2Active && dir != s2Dir)
+         CancelSecond("opposite cross");
       if(pbActive && dir != pbDir)
         {
          pbActive = false;
@@ -327,10 +338,75 @@ public:
 
    void              OnEntry(const int dir)
      {
+      s2Active = false;
       lastEntryDir = dir;
       rearmed = false;
       lastEntryBar = curBar;
       pbActive = false;
+     }
+
+   //--- second position: armed after entry #1 in ON_RETEST mode
+   void              ArmSecond(const int dir, const double sl, const double tp, const ulong ticket1)
+     {
+      s2Active = true;
+      s2Dir = dir;
+      s2Sl = sl;
+      s2Tp = tp;
+      s2Ticket1 = ticket1;
+      s2Bar1 = curBar;
+      s2BarsLeft = InpRetestMaxBars;
+      Journal("SIGNAL", sym, StringFormat("position #2 armed: waiting up to %d bars for a retest of EMA/VWAP (+-%.2f ATR), shared SL %s / target %s",
+                                          InpRetestMaxBars, InpRetestZoneAtr, Px(sym, sl), tp > 0.0 ? Px(sym, tp) : "none"));
+     }
+
+   void              CancelSecond(const string why)
+     {
+      if(!s2Active)
+         return;
+      s2Active = false;
+      Journal("SIGNAL", sym, "position #2 cancelled: " + why);
+     }
+
+   //--- returns true when the retest condition for position #2 is met now
+   bool              CheckSecond(void)
+     {
+      if(!s2Active || !dataOk)
+         return false;
+      if(!PositionSelectByTicket(s2Ticket1))
+        {
+         CancelSecond("position #1 already closed");
+         return false;
+        }
+      if(newBar && curBar != s2Bar1)
+        {
+         s2BarsLeft--;
+         if(s2BarsLeft < 0)
+           {
+            CancelSecond("no retest within " + IntegerToString(InpRetestMaxBars) + " bars");
+            return false;
+           }
+        }
+      if(curBar == s2Bar1 || !vwap.Bar1Valid())
+         return false;                       // never on the same bar as entry #1
+      double e1 = ema[1], v1 = vwap.Bar1(), a = atr[1];
+      if(SignOf(e1 - v1) != s2Dir)
+        {
+         CancelSecond("EMA crossed back through VWAP (setup invalid)");
+         return false;
+        }
+      double zoneTop = MaxD(e1, v1) + InpRetestZoneAtr * a;   // buy: pull back down into here
+      double zoneBot = MinD(e1, v1) - InpRetestZoneAtr * a;   // sell: pull back up into here
+      if(InpRetestNeedsClose)
+        {
+         if(!newBar)
+            return false;
+         if(s2Dir > 0)
+            return (r[1].low <= zoneTop && r[1].close > v1 && r[1].close > r[1].open);
+         return (r[1].high >= zoneBot && r[1].close < v1 && r[1].close < r[1].open);
+        }
+      if(s2Dir > 0)
+         return (tick.ask <= zoneTop && tick.bid > s2Sl);
+      return (tick.bid >= zoneBot && tick.ask < s2Sl);
      }
 
    //--- pullback re-entry check on each new bar. 0 = none

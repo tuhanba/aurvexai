@@ -41,6 +41,26 @@ enum ENUM_OGP_ZONE
    OGP_ZONE_SERVER  = 4  // Broker server time
   };
 
+enum ENUM_OGP_LOT_MODE
+  {
+   OGP_LOT_FIXED = 0, // Fixed lots per position (still reduced by safety caps)
+   OGP_LOT_RISK  = 1  // % of current equity per signal
+  };
+
+enum ENUM_OGP_SECOND
+  {
+   OGP_2ND_OFF       = 0, // One position per signal
+   OGP_2ND_ON_RETEST = 1, // 2nd position on retest of EMA/VWAP zone, shared SL + target
+   OGP_2ND_AT_SIGNAL = 2  // 2 positions at signal: #1 at TP1, #2 at final TP (BE after TP1)
+  };
+
+enum ENUM_OGP_EMA_EXIT
+  {
+   OGP_EMAX_OFF       = 0, // No EMA exit (only SL / TP / BE / trailing / safety)
+   OGP_EMAX_ALWAYS    = 1, // Close on any M3 close beyond EMA (after min hold)
+   OGP_EMAX_AFTER_MFE = 2  // Only once the trade has run >= InpEmaExitMinR in favour
+  };
+
 enum ENUM_OGP_NEWS_FAIL
   {
    OGP_NEWS_FAIL_ALLOW = 0, // Calendar unavailable -> allow entries (dashboard warning)
@@ -64,8 +84,11 @@ input double   InpManualDayStartEquity  = 0.0;      // Today's start equity from
 input datetime InpManualDayStartDate    = D'1970.01.01'; // UTC date the manual day-start value belongs to
 
 input group "=== 2. Internal risk (robot limits, far inside firm rules) ==="
-input double   InpRiskPct               = 0.25;     // Risk per trade, % of CURRENT equity
-input double   InpMaxTotalRiskPct       = 0.50;     // Max combined planned risk, % of initial balance
+input ENUM_OGP_LOT_MODE InpLotMode     = OGP_LOT_FIXED; // Lot mode
+input double   InpFixedLotGold          = 0.10;     // Fixed lots per position - gold
+input double   InpFixedLotSilver        = 0.10;     // Fixed lots per position - silver (silver 0.10 lot ~ 10x gold risk per $!)
+input double   InpRiskPct               = 0.25;     // Risk mode: risk per SIGNAL, % of CURRENT equity (split over positions)
+input double   InpMaxTotalRiskPct       = 1.00;     // Max combined planned risk of open EA positions, % of initial balance
 input double   InpCorrelatedRiskFactor  = 0.50;     // Risk multiplier when other metal is open SAME direction
 input bool     InpBlockOppositeMetals   = false;    // Block gold/silver in OPPOSITE directions at the same time
 input double   InpDailyLossLockUSD      = 250.0;    // Internal daily loss lock (equity vs day start)
@@ -87,6 +110,14 @@ input bool     InpVwapDailyReset        = true;     // Also reset VWAP at metals
 input bool     InpRequireNewSignal      = true;     // Same-direction re-entry only after an opposite cross
 input int      InpMinBarsAfterReset     = 2;        // Ignore crosses in the first N closed bars after a VWAP reset
 
+input group "=== 3b. Two positions per signal ==="
+input ENUM_OGP_SECOND InpSecondEntry    = OGP_2ND_ON_RETEST; // Second position mode
+input double   InpRetestZoneAtr         = 0.25;     // Retest zone beyond EMA/VWAP, ATR
+input bool     InpRetestNeedsClose      = true;     // Retest must be confirmed by an M3 close back on the signal side
+input int      InpRetestMaxBars         = 10;       // Retest must happen within N bars after entry #1
+input double   InpTp1RR                 = 1.0;      // AT_SIGNAL mode: target of position #1 (R)
+input bool     InpBeAfterTp1            = true;     // AT_SIGNAL mode: move #2 to break-even once price reaches TP1
+
 input group "=== 4. Filters (each independent; untested -> OFF unless safety) ==="
 input bool     InpUseTrendM15           = false;    // M15 EMA trend filter
 input bool     InpUseTrendH1            = false;    // H1 EMA trend filter
@@ -96,7 +127,7 @@ input bool     InpUseBreakoutFilter     = false;    // Require structure break o
 input int      InpBreakoutLookback      = 20;       // Swing lookback for breakout (M3 bars)
 input double   InpMomentumBodyAtr       = 1.0;      // Momentum bar body >= x * ATR counts as confirmation
 input bool     InpBreakoutRetest        = false;    // Require retest of the broken level
-input int      InpRetestMaxBars         = 6;        // Max bars between break and retest
+input int      InpBreakRetestMaxBars    = 6;        // Max bars between break and retest (breakout filter)
 input bool     InpUseChaseFilter        = true;     // Skip if price is too far from VWAP (no chasing)
 input double   InpMaxChaseAtr           = 1.0;      // Max distance entry->VWAP in ATR
 input bool     InpUsePullbackMode       = false;    // After a skipped (chased) cross, wait for pullback + confirmation
@@ -125,7 +156,8 @@ input double   InpSilverSlBuffer        = 0.010;    // Silver: extra buffer beyo
 
 input group "=== 6. Position management ==="
 input int      InpMinHoldSeconds        = 150;      // Min hold before discretionary exits (Oracle: <2 min = tick scalping)
-input bool     InpUseEmaExit            = true;     // Close on M3 close beyond EMA (after min hold)
+input ENUM_OGP_EMA_EXIT InpEmaExitMode = OGP_EMAX_AFTER_MFE; // EMA candle-close exit mode
+input double   InpEmaExitMinR           = 0.5;      // AFTER_MFE mode: trade must have run this many R in favour first
 input bool     InpUseBreakEven          = false;    // Move stop to break-even
 input double   InpBreakEvenRR           = 1.0;      // Break-even trigger in R
 input bool     InpUseTrailing           = false;    // ATR trailing stop

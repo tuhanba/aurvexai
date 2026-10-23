@@ -8,7 +8,7 @@
 //|  risk 4) trade quality 5) daily target.                          |
 //+------------------------------------------------------------------+
 #property copyright   "Personal EA - use at your own risk"
-#property version     "1.00"
+#property version     "1.10"
 #property description "Oracle Guardian Pro: Session VWAP (OHLC/4) x EMA9 on M3 for XAUUSD/XAGUSD"
 #property description "with Upcomers Oracle rule guard, equity-based dynamic sizing and mandatory stop-loss."
 #property description "No profit is guaranteed. Test on demo first."
@@ -148,35 +148,142 @@ void HandleCandidate(COgpSymbol *s, const int dir, const string src, const datet
       Reject(s, side, src, "netting account already has a position on this symbol");
       return;
      }
-   //--- 6. sizing
-   double lots = 0.0, planned = 0.0;
-   string capInfo = "";
+   //--- 6. sizing (one or two positions per signal)
+   bool hedging = (AccountInfoInteger(ACCOUNT_MARGIN_MODE) == ACCOUNT_MARGIN_MODE_RETAIL_HEDGING);
+   ENUM_OGP_SECOND mode2 = hedging ? InpSecondEntry : OGP_2ND_OFF;
+   bool twoNow = (mode2 == OGP_2ND_AT_SIGNAL);
+   double share = (mode2 == OGP_2ND_OFF) ? 1.0 : 0.5;
+   double fixedLots = FixedLotsFor(s);
+   double spread = s.tick.ask - s.tick.bid;
    it.entry = (dir > 0) ? s.tick.ask : s.tick.bid;
    double slPrice = it.entry - dir * it.slDist;
-   if(!ComputeLots(s.sym, dir, it.entry, slPrice, s.slip, rs, g_acc, g_rules, lots, planned, capInfo, why))
+   double tp1Dist = twoNow ? MaxD(it.slDist * InpTp1RR, MinStopDistance(s.sym) + spread) : it.tpDist;
+   double lots1 = 0.0, planned1 = 0.0, lots2 = 0.0, planned2 = 0.0;
+   string capInfo = "", capInfo2 = "";
+   if(!ComputeLots(s.sym, dir, it.entry, slPrice, s.slip, fixedLots, share, rs, g_acc, g_rules, lots1, planned1, capInfo, why))
      {
       Reject(s, side, src, why + " | " + capInfo);
       return;
      }
+   if(twoNow)
+     {
+      rs.eaRiskFromEntry += planned1;       // position #1 is part of the budget for #2
+      rs.allRiskFromNow  += planned1;
+      if(!ComputeLots(s.sym, dir, it.entry, slPrice, s.slip, fixedLots, share, rs, g_acc, g_rules, lots2, planned2, capInfo2, why))
+        {
+         Journal("RISK", s.sym, "position #2 not possible (" + why + ") - opening #1 only");
+         twoNow = false;
+         tp1Dist = it.tpDist;
+        }
+     }
    //--- 7. margin (keep 10% of free margin in reserve)
    double margin = 0.0;
-   if(!OrderCalcMargin(dir > 0 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, s.sym, lots, it.entry, margin) || margin > g_acc.freeMargin * 0.9)
+   if(!OrderCalcMargin(dir > 0 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, s.sym, lots1 + lots2, it.entry, margin) || margin > g_acc.freeMargin * 0.9)
      {
       Reject(s, side, src, StringFormat("insufficient margin: need %s, free %s", Usd(margin), Usd(g_acc.freeMargin)));
       return;
      }
    //--- 8. execute
-   Journal("RISK", s.sym, StringFormat("%s ACCEPTED [%s] %s | %s | margin %s", side, sess, it.detail, capInfo, Usd(margin)));
+   Journal("RISK", s.sym, StringFormat("%s ACCEPTED [%s] %s | #1 %s%s | margin %s", side, sess, it.detail, capInfo,
+                                       twoNow ? " | #2 " + capInfo2 : "", Usd(margin)));
    s.lastEntryBar = s.curBar;                // one attempt per bar whatever the outcome
-   if(OpenWithStop(s.sym, dir, lots, it.slDist, it.tpDist, InpOrderComment))
+   ulong tk1 = 0;
+   if(!OpenWithStop(s.sym, dir, lots1, it.slDist, tp1Dist, InpOrderComment + "#1", tk1))
      {
-      s.OnEntry(dir);
-      s.lastDecision = StringFormat("OPENED %s %.2f lots, risk %s", side, lots, Usd(planned));
-      g_rules.stats.eaEntriesToday++;        // count immediately; history refresh follows
-      g_rules.statsDirty = true;
+      s.lastDecision = "ORDER FAILED (see journal)";
+      return;
+     }
+   s.OnEntry(dir);
+   s.lastDecision = StringFormat("OPENED %s #1 %.2f lots, risk %s", side, lots1, Usd(planned1));
+   g_rules.stats.eaEntriesToday++;           // count immediately; history refresh follows
+   g_rules.statsDirty = true;
+
+   double pOpen = 0.0, pSl = 0.0, pTp = 0.0;
+   if(tk1 > 0 && PositionSelectByTicket(tk1))
+     {
+      pOpen = PositionGetDouble(POSITION_PRICE_OPEN);
+      pSl = PositionGetDouble(POSITION_SL);
+      pTp = PositionGetDouble(POSITION_TP);
+     }
+   if(mode2 == OGP_2ND_OFF)
+      return;
+   if(pSl <= 0.0)
+     {
+      Journal("RISK", s.sym, "position #2 skipped: position #1 not found / has no SL");
+      return;
+     }
+   if(twoNow)
+     {
+      double tpFinal = (it.tpDist > 0.0) ? pOpen + dir * it.tpDist : 0.0;
+      ulong tk2 = 0;
+      if(OpenWithStop(s.sym, dir, lots2, 0.0, 0.0, InpOrderComment + "#2", tk2, pSl, tpFinal))
+         s.lastDecision += StringFormat(" + #2 %.2f lots", lots2);
      }
    else
-      s.lastDecision = "ORDER FAILED (see journal)";
+      s.ArmSecond(dir, pSl, pTp, tk1);
+  }
+
+double FixedLotsFor(COgpSymbol *s)
+  {
+   if(InpLotMode != OGP_LOT_FIXED)
+      return 0.0;
+   return s.isGold ? InpFixedLotGold : InpFixedLotSilver;
+  }
+
+//--- position #2 after a retest of the EMA/VWAP zone (shared SL and target)
+void HandleSecond(COgpSymbol *s, const datetime now)
+  {
+   int dir = s.s2Dir;
+   string side = (dir > 0) ? "BUY" : "SELL";
+   string why = "", sess = "";
+   Journal("SIGNAL", s.sym, StringFormat("%s retest for position #2: bid=%s ask=%s EMA=%s VWAP=%s", side,
+                                         Px(s.sym, s.tick.bid), Px(s.sym, s.tick.ask), Px(s.sym, s.ema[1]), Px(s.sym, s.vwap.Bar1())));
+   bool ok = InpEnableNewEntries && TimeAllowsEntry(now, why, sess) && !g_news.Blocks(now, why) &&
+             g_rules.EntryAllowed(g_acc, why, false) && TradingPermitted(why) && SymbolAllowsDirection(s.sym, dir, why);
+   if(!InpEnableNewEntries)
+      why = "new entries disabled";
+   double spread = s.tick.ask - s.tick.bid;
+   if(ok && spread > s.maxSpread)
+     {
+      ok = false;
+      why = StringFormat("spread %s > max %s", Px(s.sym, spread), Px(s.sym, s.maxSpread));
+     }
+   if(!ok)
+     {
+      LogThrottled(s.sym + "s2rej", "REJECT", s.sym, side + " #2 (waiting): " + why, 60);
+      return;                                // stays armed until it expires
+     }
+   OgpRiskSummary rs;
+   BuildRiskSummary(rs);
+   int mine = 0;
+   for(int i = 0; i < ArraySize(rs.eaSyms); i++)
+      if(rs.eaSyms[i] == s.sym)
+         mine++;
+   if(mine >= 2 || (InpBlockIfUnprotected && rs.unprotected > 0))
+     {
+      s.CancelSecond(mine >= 2 ? "already 2 positions on symbol" : "unprotected position on account");
+      return;
+     }
+   double entry = (dir > 0) ? s.tick.ask : s.tick.bid;
+   double lots = 0.0, planned = 0.0, margin = 0.0;
+   string capInfo = "";
+   if(!ComputeLots(s.sym, dir, entry, s.s2Sl, s.slip, FixedLotsFor(s), 0.5, rs, g_acc, g_rules, lots, planned, capInfo, why))
+     {
+      s.CancelSecond(why + " | " + capInfo);
+      return;
+     }
+   if(!OrderCalcMargin(dir > 0 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, s.sym, lots, entry, margin) || margin > g_acc.freeMargin * 0.9)
+     {
+      s.CancelSecond("insufficient margin");
+      return;
+     }
+   Journal("RISK", s.sym, StringFormat("%s #2 ACCEPTED on retest | SL %s TP %s | %s", side, Px(s.sym, s.s2Sl),
+                                       s.s2Tp > 0.0 ? Px(s.sym, s.s2Tp) : "none", capInfo));
+   s.s2Active = false;                       // one attempt only
+   s.lastEntryBar = s.curBar;
+   ulong tk2 = 0;
+   if(OpenWithStop(s.sym, dir, lots, 0.0, 0.0, InpOrderComment + "#2", tk2, s.s2Sl, s.s2Tp))
+      s.lastDecision = StringFormat("OPENED %s #2 %.2f lots on retest, risk %s", side, lots, Usd(planned));
   }
 
 //==================================================================//
@@ -219,6 +326,8 @@ void ProcessAll()
       int pb = s.CheckPullback();
       if(pb != 0)
          HandleCandidate(s, pb, "pullback", now);
+      if(s.CheckSecond())
+         HandleSecond(s, now);
      }
 
    //--- global entry status for the dashboard
@@ -251,7 +360,7 @@ void DrawDashboard(const datetime now)
       return;
    DashClear();
    color hdr = clrGold, ok = clrLimeGreen, bad = clrTomato, warn = clrOrange, txt = clrSilver;
-   DashAdd("ORACLE GUARDIAN PRO v1.00  (no profit guarantee)", hdr);
+   DashAdd("ORACLE GUARDIAN PRO v1.10  (no profit guarantee)", hdr);
    DashAdd(StringFormat("Server %s | UTC %s | NY %s", TimeToString(now, TIME_MINUTES),
                         TimeToString(ServerToUtc(now), TIME_MINUTES), TimeToString(NyLocal(now), TIME_MINUTES)), txt);
    DashAdd(g_entryBlock == "" ? "ENTRIES: ALLOWED [" + g_sessName + "]" : "ENTRIES: BLOCKED - " + g_entryBlock,
@@ -288,7 +397,12 @@ void DrawDashboard(const datetime now)
                         rs.eaRiskFromEntry >= OGP_INF_RISK ? "INF" : Usd(rs.eaRiskFromEntry),
                         Usd(InpInitialBalance * InpMaxTotalRiskPct / 100.0), rs.eaPositions, rs.otherPositions, rs.unprotected),
            rs.unprotected > 0 ? bad : txt);
-   DashAdd(StringFormat("Risk/trade %.2f%% of equity = %s", InpRiskPct, Usd(g_acc.equity * InpRiskPct / 100.0)), txt);
+   if(InpLotMode == OGP_LOT_FIXED)
+      DashAdd(StringFormat("Lots FIXED gold %.2f / silver %.2f per position (reduced if caps bind) | #2: %s",
+                           InpFixedLotGold, InpFixedLotSilver, EnumToString(InpSecondEntry)), warn);
+   else
+      DashAdd(StringFormat("Risk/signal %.2f%% of equity = %s | #2: %s", InpRiskPct, Usd(g_acc.equity * InpRiskPct / 100.0),
+                           EnumToString(InpSecondEntry)), txt);
    if(g_rules.emergency)
       DashAdd("EMERGENCY: " + g_rules.emergencyReason, bad);
    DashAdd("--- MARKETS (M3) ---", hdr);
@@ -303,7 +417,8 @@ void DrawDashboard(const datetime now)
       DashAdd(StringFormat("%s spread %s | ATR %s | EMA %s | VWAP %s (%s) | %s", s.sym, Px(s.sym, s.tick.ask - s.tick.bid),
                            Px(s.sym, s.atr[1]), Px(s.sym, s.ema[0]), s.vwap.Bar1Valid() ? Px(s.sym, s.vwap.Bar1()) : "n/a",
                            s.vwap.VolumeType(), s.TrendSummary()), txt);
-      DashAdd(StringFormat("   last signal: %s | %s", s.lastSignal, s.lastDecision), txt);
+      DashAdd(StringFormat("   last signal: %s | %s%s", s.lastSignal, s.lastDecision,
+                           s.s2Active ? StringFormat(" | #2 armed (%d bars left)", s.s2BarsLeft) : ""), txt);
      }
    DashAdd(StringFormat("News: %s | next: %s", g_news.status, g_news.NextEvent(now)),
            (InpUseNewsFilter && !g_news.available) ? warn : txt);
@@ -336,6 +451,14 @@ bool ValidateInputs()
       e = "need 0 < InpSlAtrMult <= InpMaxSlAtrMult";
    else if(InpCorrelatedRiskFactor <= 0.0 || InpCorrelatedRiskFactor > 1.0)
       e = "InpCorrelatedRiskFactor must be in (0, 1]";
+   else if(InpLotMode == OGP_LOT_FIXED && (InpFixedLotGold <= 0.0 || InpFixedLotSilver <= 0.0))
+      e = "fixed lots must be > 0";
+   else if(InpMaxTotalRiskPct <= 0.0 || InpMaxTotalRiskPct > 3.0)
+      e = "InpMaxTotalRiskPct must be in (0, 3]";
+   else if(InpSecondEntry == OGP_2ND_AT_SIGNAL && (InpTp1RR <= 0.0 || (InpTpRR > 0.0 && InpTp1RR >= InpTpRR)))
+      e = "AT_SIGNAL mode needs 0 < InpTp1RR < InpTpRR";
+   else if(InpRetestMaxBars < 1 || InpEmaExitMinR < 0.0)
+      e = "InpRetestMaxBars >= 1 and InpEmaExitMinR >= 0 required";
    else if(InpMaxTradesPerDay < 1 || InpEmaPeriod < 1 || InpAtrPeriod < 1 || InpSwingLookback < 2 || InpBreakoutLookback < 2)
       e = "periods / lookbacks / max trades out of range";
    if(e != "")
@@ -381,7 +504,7 @@ void FreeSymbols()
 int OnInit()
   {
    OgpLog("==================================================================");
-   OgpLog("Oracle Guardian Pro v1.00 - NO PROFIT GUARANTEE - verify every rule on Upcomers");
+   OgpLog("Oracle Guardian Pro v1.10 - NO PROFIT GUARANTEE - verify every rule on Upcomers");
    if(!ValidateInputs() || !SessionsInit())
       return INIT_PARAMETERS_INCORRECT;
    JournalOpen();
@@ -419,10 +542,14 @@ int OnInit()
                                       Usd(g_rules.singleTradeLimit), Usd(g_rules.validDayThreshold), Usd(g_rules.payoutThreshold)));
    Journal("ORACLE", "", StringFormat("shield floor %s [%s], day start %s [%s]", Usd(g_rules.shieldFloor), SourceText(g_acc.peakSrc),
                                       Usd(g_acc.dayStartEquity), SourceText(g_acc.daySrc)));
+   Journal("SYSTEM", "", StringFormat("lots %s (gold %.2f / silver %.2f) | position #2: %s | max combined risk %.2f%%",
+                                      EnumToString(InpLotMode), InpFixedLotGold, InpFixedLotSilver, EnumToString(InpSecondEntry), InpMaxTotalRiskPct));
+   if(InpSecondEntry != OGP_2ND_OFF && AccountInfoInteger(ACCOUNT_MARGIN_MODE) != ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
+      Journal("SYSTEM", "", "WARNING: netting account - second position disabled");
    Journal("SYSTEM", "", StringFormat("mode %s | trend M15 %s H1 %s | breakout %s | chase %s | pullback %s | EMA exit %s | BE %s | trail %s | news %s",
                                       EnumToString(InpEntryMode), InpUseTrendM15 ? "ON" : "off", InpUseTrendH1 ? "ON" : "off",
                                       InpUseBreakoutFilter ? "ON" : "off", InpUseChaseFilter ? "ON" : "off",
-                                      InpUsePullbackMode ? "ON" : "off", InpUseEmaExit ? "ON" : "off",
+                                      InpUsePullbackMode ? "ON" : "off", EnumToString(InpEmaExitMode),
                                       InpUseBreakEven ? "ON" : "off", InpUseTrailing ? "ON" : "off", InpUseNewsFilter ? "ON" : "off"));
    g_dash.Create();
    if(!EventSetTimer(1))

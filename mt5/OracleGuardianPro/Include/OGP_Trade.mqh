@@ -80,13 +80,18 @@ void BuildRiskSummary(OgpRiskSummary &rs)
   }
 
 // Position sizing. Returns false (with reason) if the trade must be skipped.
+// fixedLots > 0: fixed-lot mode (lots never increased, only reduced to fit the caps)
+// riskShare: share of the per-signal risk given to this position (risk mode)
 bool ComputeLots(const string sym, const int dir, const double entry, const double sl, const double slip,
+                 const double fixedLots, const double riskShare,
                  const OgpRiskSummary &rs, CAccountMonitor &acc, COracleRules &rules,
                  double &lots, double &plannedLoss, string &capInfo, string &why)
   {
    double init = InpInitialBalance;
-   double riskMoney = acc.equity * InpRiskPct / 100.0;
-   capInfo = StringFormat("base %.2f%% of equity=%s", InpRiskPct, Usd(riskMoney));
+   bool fixedMode = (fixedLots > 0.0);
+   double riskMoney = fixedMode ? OGP_INF_RISK : acc.equity * InpRiskPct / 100.0 * riskShare;
+   capInfo = fixedMode ? StringFormat("fixed %.2f lots", fixedLots)
+                       : StringFormat("base %.2f%% x %.2f of equity=%s", InpRiskPct, riskShare, Usd(riskMoney));
 
    //--- correlation: other metal already open in the same direction
    for(int i = 0; i < ArraySize(rs.eaSyms); i++)
@@ -113,7 +118,7 @@ bool ComputeLots(const string sym, const int dir, const double entry, const doub
    double capShield = (acc.equity - rules.shieldFloor - InpFloorSafetyUSD) - rs.allRiskFromNow;
 
    double allowed = riskMoney;
-   string binding = "risk%";
+   string binding = fixedMode ? "none" : "risk%";
    if(capTotal < allowed)
      {
       allowed = capTotal;
@@ -160,6 +165,14 @@ bool ComputeLots(const string sym, const int dir, const double entry, const doub
       step = vmin;
    double raw = allowed / lossPerLot;
    double v = NormalizeDouble(MathFloor(raw / step + 1e-9) * step, VolumeDigits(step));
+   if(fixedMode)
+     {
+      double fx = NormalizeDouble(MathFloor(fixedLots / step + 1e-9) * step, VolumeDigits(step));
+      if(v >= fx)
+         v = fx;
+      else
+         capInfo += StringFormat(" | fixed %.2f REDUCED to %.2f by %s", fx, v, binding);
+     }
    if(v < vmin - 1e-10)
      {
       why = StringFormat("minimum lot %.2f would risk %s > allowed %s", vmin, Usd(vmin * lossPerLot), Usd(allowed));
@@ -236,7 +249,9 @@ double MinStopDistance(const string sym)
 // Send a market DEAL (open when req.position==0, close otherwise).
 // slDist/tpDist (price distance) are re-applied to the fresh price on each attempt.
 // Never retries TIMEOUT / CONNECTION (a retry could duplicate a filled order).
-bool SendDeal(MqlTradeRequest &req, const double slDist, const double tpDist, const string ctx, MqlTradeResult &res)
+// slAbs/tpAbs > 0 override the distances with fixed price levels (shared SL/target).
+bool SendDeal(MqlTradeRequest &req, const double slDist, const double tpDist, const string ctx, MqlTradeResult &res,
+              const double slAbs = 0.0, const double tpAbs = 0.0)
   {
    string sym = req.symbol;
    int fillIdx = 0;
@@ -255,6 +270,21 @@ bool SendDeal(MqlTradeRequest &req, const double slDist, const double tpDist, co
         {
          req.sl = (slDist > 0.0) ? NormalizePrice(sym, isBuy ? req.price - slDist : req.price + slDist) : 0.0;
          req.tp = (tpDist > 0.0) ? NormalizePrice(sym, isBuy ? req.price + tpDist : req.price - tpDist) : 0.0;
+         if(slAbs > 0.0)
+            req.sl = NormalizePrice(sym, slAbs);
+         if(tpAbs > 0.0)
+            req.tp = NormalizePrice(sym, tpAbs);
+         double minD = MinStopDistance(sym);
+         if(req.sl > 0.0 && (isBuy ? req.price - req.sl : req.sl - req.price) < minD)
+           {
+            Journal("ORDER", sym, ctx + " REFUSED: price already too close to the stop-loss " + Px(sym, req.sl));
+            return false;
+           }
+         if(req.tp > 0.0 && (isBuy ? req.tp - req.price : req.price - req.tp) < minD)
+           {
+            Journal("ORDER", sym, ctx + " REFUSED: price already at/through the target " + Px(sym, req.tp));
+            return false;
+           }
         }
       int fillCount = 0;
       req.type_filling = FillingCandidate(sym, fillIdx, fillCount);
@@ -348,9 +378,11 @@ bool ClosePositionTicket(const ulong ticket, const string reason)
 
 // Opens a position with a mandatory stop-loss. If the fill has no SL, the SL is
 // set immediately; if that fails the position is closed (never left unprotected).
-bool OpenWithStop(const string sym, const int dir, const double lots, const double slDist, const double tpDist, const string comment)
+bool OpenWithStop(const string sym, const int dir, const double lots, const double slDist, const double tpDist, const string comment,
+                  ulong &ticketOut, const double slAbs = 0.0, const double tpAbs = 0.0)
   {
-   if(slDist <= 0.0)
+   ticketOut = 0;
+   if(slDist <= 0.0 && slAbs <= 0.0)
      {
       Journal("ORDER", sym, "refused: no stop-loss distance");
       return false;
@@ -366,8 +398,9 @@ bool OpenWithStop(const string sym, const int dir, const double lots, const doub
    req.magic     = InpMagic;
    req.comment   = comment;
    req.type_time = ORDER_TIME_GTC;
-   if(!SendDeal(req, slDist, tpDist, StringFormat("OPEN %s %.2f lots", dir > 0 ? "BUY" : "SELL", lots), res))
+   if(!SendDeal(req, slDist, tpDist, StringFormat("OPEN %s %.2f lots [%s]", dir > 0 ? "BUY" : "SELL", lots, comment), res, slAbs, tpAbs))
       return false;
+   ticketOut = res.order;     // hedging: position ticket == opening order ticket
 
    //--- verify the stop on the resulting position
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -378,8 +411,8 @@ bool OpenWithStop(const string sym, const int dir, const double lots, const doub
       if(PositionGetDouble(POSITION_SL) > 0.0)
          continue;
       double open = PositionGetDouble(POSITION_PRICE_OPEN);
-      double sl = (dir > 0) ? open - slDist : open + slDist;
-      double tp = (tpDist > 0.0) ? ((dir > 0) ? open + tpDist : open - tpDist) : 0.0;
+      double sl = (slAbs > 0.0) ? slAbs : ((dir > 0) ? open - slDist : open + slDist);
+      double tp = (tpAbs > 0.0) ? tpAbs : ((tpDist > 0.0) ? ((dir > 0) ? open + tpDist : open - tpDist) : 0.0);
       Journal("ORDER", sym, StringFormat("position #%I64u has NO stop-loss after fill - setting it now", t));
       if(!ModifyStops(t, sl, tp, "attach missing SL"))
         {

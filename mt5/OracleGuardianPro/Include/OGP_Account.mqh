@@ -450,7 +450,7 @@ public:
         }
      }
 
-   bool              EntryAllowed(CAccountMonitor &acc, string &why)
+   bool              EntryAllowed(CAccountMonitor &acc, string &why, const bool countTrades = true)
      {
       if(!acc.connected)
         {
@@ -497,7 +497,7 @@ public:
          why = StringFormat("daily target reached (realized %s)", Usd(stats.todayNet));
          return false;
         }
-      if(stats.eaEntriesToday >= InpMaxTradesPerDay)
+      if(countTrades && stats.eaEntriesToday >= InpMaxTradesPerDay)
         {
          why = StringFormat("max new trades per day reached (%d)", InpMaxTradesPerDay);
          return false;
