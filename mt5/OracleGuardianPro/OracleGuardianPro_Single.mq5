@@ -8,7 +8,7 @@
 //|  risk 4) trade quality 5) daily target.                          |
 //+------------------------------------------------------------------+
 #property copyright   "Personal EA - use at your own risk"
-#property version     "1.30"
+#property version     "1.40"
 #property description "Oracle Guardian Pro: Session VWAP (OHLC/4) x EMA9 on M3 for XAUUSD/XAGUSD"
 #property description "with Upcomers Oracle rule guard, equity-based dynamic sizing and mandatory stop-loss."
 #property description "No profit is guaranteed. Test on demo first."
@@ -166,6 +166,29 @@ input bool     InpRetestNeedsClose      = true;     // Retest must be confirmed 
 input int      InpRetestMaxBars         = 10;       // Retest must happen within N bars after entry #1
 input double   InpTp1RR                 = 1.0;      // AT_SIGNAL mode: target of position #1 (R)
 input bool     InpBeAfterTp1            = true;     // AT_SIGNAL mode: move #2 to break-even once price reaches TP1
+
+input group "=== 3c. Dynamic risk (only REDUCES risk, never increases it) ==="
+input bool     InpUseQualityScore       = true;     // Grade each signal A/B/C and size by grade
+input int      InpGradeAMin             = 4;        // Score >= this -> grade A (full risk)
+input int      InpGradeBMin             = 2;        // Score >= this -> grade B
+input double   InpRiskGradeB            = 0.6;      // Risk multiplier grade B
+input double   InpRiskGradeC            = 0.0;      // Risk multiplier grade C (0 = skip C signals)
+input int      InpLossStreakN           = 2;        // After N losing trades in a row today...
+input double   InpLossStreakFactor      = 0.5;      // ...multiply risk by this
+input double   InpProtectAfterUSD       = 100.0;    // Once today's realized net >= this...
+input double   InpProtectFactor         = 0.5;      // ...multiply risk by this (protect the day)
+input double   InpTaperRangeUSD         = 600.0;    // Risk tapers linearly over this distance above the safety buffer of the nearest floor
+input double   InpTaperMinFactor        = 0.25;     // Minimum taper multiplier
+
+input group "=== 3d. Extra entries & runner ==="
+input bool     InpUseContinuation       = true;     // Trend-continuation entries: pullback to EMA within an existing EMA/VWAP leg
+input double   InpContZoneAtr           = 0.30;     // Pullback must reach EMA +/- this ATR
+input int      InpContMinBarsSide       = 5;        // EMA must have been on the same side of VWAP for N closed bars
+input int      InpContCooldownBars      = 10;       // Bars since the last entry on the symbol
+input int      InpContMaxPerLeg         = 2;        // Max continuation entries per EMA/VWAP leg
+input bool     InpSecondRunner          = true;     // Position #2 is a runner: far target + break-even + ATR trail
+input double   InpRunnerRR              = 3.0;      // Runner target (R of position #1)
+input double   InpRunnerTrailAtr        = 1.5;      // Runner ATR trailing distance (after +1R)
 
 input group "=== 4. Filters (each independent; untested -> OFF unless safety) ==="
 input bool     InpUseTrend              = true;     // Higher-timeframe trend filter (trade only with the trend)
@@ -913,6 +936,7 @@ struct OgpCycleStats
    int               tradingDays;
    int               eaEntriesToday;
    int               eaEntriesCycle;
+   int               todayLossStreak;  // consecutive losing EA closes today (latest first)
   };
 
 bool ComputeCycleStats(const datetime cycleStart, const datetime todayKeyUtc, const double validThreshold, OgpCycleStats &st)
@@ -926,6 +950,7 @@ bool ComputeCycleStats(const datetime cycleStart, const datetime todayKeyUtc, co
    st.tradingDays = 0;
    st.eaEntriesToday = 0;
    st.eaEntriesCycle = 0;
+   st.todayLossStreak = 0;
    st.computedAt = TimeCurrent();
 
    if(!HistorySelect(cycleStart, TimeCurrent() + 86400))
@@ -963,6 +988,15 @@ bool ComputeCycleStats(const datetime cycleStart, const datetime todayKeyUtc, co
          nets[k] = 0.0;
         }
       nets[k] += net;
+      if(key == todayKeyUtc && HistoryDealGetInteger(d, DEAL_ENTRY) != DEAL_ENTRY_IN &&
+         (ulong)HistoryDealGetInteger(d, DEAL_MAGIC) == InpMagic)
+        {
+         if(net < 0.0)
+            st.todayLossStreak++;
+         else
+            if(net > 0.0)
+               st.todayLossStreak = 0;
+        }
       //--- count SIGNALS: the second position of a signal ("#2") is not a new trade
       if(HistoryDealGetInteger(d, DEAL_ENTRY) == DEAL_ENTRY_IN && (ulong)HistoryDealGetInteger(d, DEAL_MAGIC) == InpMagic &&
          StringFind(HistoryDealGetString(d, DEAL_COMMENT), "#2") < 0)
@@ -2504,8 +2538,11 @@ struct OgpEntryIntent
    double            entry;
    double            slDist;
    double            tpDist;
-   string            source;   // "confirmed" / "live" / "pullback"
+   string            source;   // "confirmed" / "live" / "pullback" / "continuation"
    string            detail;
+   int               score;    // quality score
+   string            grade;    // A / B / C
+   double            riskMult; // grade risk multiplier
   };
 
 class COgpSymbol
@@ -2659,6 +2696,10 @@ public:
    bool              pbActive;
    int               pbDir;
    int               pbBarsLeft;
+   //--- continuation state
+   int               contSide;
+   int               contSideBars;
+   int               contLegCount;
    //--- second position (retest) state
    bool              s2Active;
    int               s2Dir;
@@ -2677,7 +2718,7 @@ public:
                      m_lastTickMsc(0), m_lastTickTime(0), m_prevSign(0), m_signAnchor(0), m_firstRun(true), m_need(0), sym(""),
                      isGold(true), minAtr(0), maxAtr(0), maxSpread(0), slip(0), slBuffer(0), vwapLive(0), vwapLiveOk(false),
                      newBar(false), dataOk(false), curBar(0), lastEntryDir(0), rearmed(true), lastEntryBar(0), pbActive(false),
-                     pbDir(0), pbBarsLeft(0), s2Active(false), s2Dir(0), s2Sl(0), s2Tp(0), s2Ticket1(0), s2Entry1(0), s2Bar1(0),
+                     pbDir(0), pbBarsLeft(0), contSide(0), contSideBars(0), contLegCount(0), s2Active(false), s2Dir(0), s2Sl(0), s2Tp(0), s2Ticket1(0), s2Entry1(0), s2Bar1(0),
                      s2BarsLeft(0), lastSignal("-"), lastDecision("-"), trendText("-") {}
 
    bool              Init(const string s, const bool gold)
@@ -2931,6 +2972,56 @@ public:
       return (tick.bid >= zoneBot && tick.ask < s2Sl);
      }
 
+   //--- trend continuation: an existing EMA/VWAP leg pulls back to the EMA and resumes. 0 = none
+   int               CheckContinuation(const datetime lastEntryBarAny)
+     {
+      if(!InpUseContinuation || !newBar || !vwap.Bar1Valid() || m_firstRun)
+         return 0;
+      double e1 = ema[1], v1 = vwap.Bar1(), a = atr[1];
+      int side = SignOf(e1 - v1);
+      if(side != contSide)
+        {
+         contSide = side;
+         contSideBars = 1;
+         contLegCount = 0;           // a cross starts a new leg
+         return 0;
+        }
+      contSideBars++;
+      if(side == 0 || contSideBars < InpContMinBarsSide || contLegCount >= InpContMaxPerLeg)
+         return 0;
+      if(lastEntryBarAny > 0 && (long)(curBar - lastEntryBarAny) < (long)InpContCooldownBars * OGP_M3_SEC)
+         return 0;
+      string t = "";
+      if(!TrendOk(m_hTr1, InpTrendTF, side, t))
+         return 0;                   // continuation only WITH the higher-timeframe trend
+      bool touch = (side > 0) ? (r[1].low <= e1 + InpContZoneAtr * a) : (r[1].high >= e1 - InpContZoneAtr * a);
+      bool resume = (side > 0) ? (r[1].close > e1 && r[1].close > v1 && r[1].close > r[1].open)
+                    : (r[1].close < e1 && r[1].close < v1 && r[1].close < r[1].open);
+      return (touch && resume) ? side : 0;
+     }
+
+   //--- quality score (0..6): HTF trend, 2nd HTF, VWAP slope, not extended, momentum bar, FVG
+   int               QualityScore(const int dir, const double ext, string &txt)
+     {
+      int sc = 0;
+      string t1 = "", t2 = "", fw = "";
+      double a = atr[1];
+      txt = "";
+      if(TrendOk(m_hTr1, InpTrendTF, dir, t1))
+        { sc++; txt += "trend "; }
+      if(TrendOk(m_hTr2, InpTrendTF2, dir, t2))
+        { sc++; txt += "trend2 "; }
+      if(vwap.Bar2Valid() && dir * (vwap.Bar1() - vwap.Bar2()) > 0.0)
+        { sc++; txt += "vwapSlope "; }
+      if(ext <= 0.5 * a)
+        { sc++; txt += "notExtended "; }
+      if(dir * (r[1].close - r[1].open) >= 0.5 * a)
+        { sc++; txt += "momentum "; }
+      if(FvgOk(dir, a, fw))
+        { sc++; txt += "fvg "; }
+      return sc;
+     }
+
    //--- pullback re-entry check on each new bar. 0 = none
    int               CheckPullback(void)
      {
@@ -2973,7 +3064,7 @@ public:
       it.source = source;
       it.entry = (dir > 0) ? tick.ask : tick.bid;
 
-      if(InpRequireNewSignal && source != "pullback" && lastEntryDir == dir && !rearmed)
+      if(InpRequireNewSignal && source != "pullback" && source != "continuation" && lastEntryDir == dir && !rearmed)
         {
          why = "no new independent signal since last " + (dir > 0 ? string("BUY") : string("SELL")) + " entry (needs opposite cross first)";
          return OGP_EVAL_REJECT;
@@ -3080,7 +3171,24 @@ public:
          it.tpDist = MaxD(tdist, minDist);
          tpInfo = StringFormat("VWAP+%.1fsd band, RR %.2f", InpTpBandMult, rr);
         }
-      it.detail = StringFormat("%s, TP %s (%s), ATR %s, VWAP %s, EMA %s", slInfo,
+      //--- signal quality grade -> risk multiplier
+      it.score = QualityScore(dir, ext, it.grade);
+      string reasons = it.grade;
+      it.grade = (it.score >= InpGradeAMin) ? "A" : ((it.score >= InpGradeBMin) ? "B" : "C");
+      it.riskMult = 1.0;
+      if(InpUseQualityScore)
+        {
+         if(it.grade == "B")
+            it.riskMult = InpRiskGradeB;
+         if(it.grade == "C")
+            it.riskMult = InpRiskGradeC;
+         if(it.riskMult <= 0.0)
+           {
+            why = StringFormat("quality grade C (score %d: %s) - skipped", it.score, reasons);
+            return OGP_EVAL_REJECT;
+           }
+        }
+      it.detail = StringFormat("grade %s (score %d: %s) %s, TP %s (%s), ATR %s, VWAP %s, EMA %s", it.grade, it.score, reasons, slInfo,
                                it.tpDist > 0.0 ? Px(sym, it.tpDist) : "none", tpInfo, Px(sym, a), Px(sym, vref),
                                Px(sym, (InpEntryMode == OGP_ENTRY_LIVE) ? ema[0] : ema[1]));
       return OGP_EVAL_OK;
@@ -3282,10 +3390,11 @@ public:
          double newSl = sl;
          string why = "";
          //--- break-even: generic, or for #2 once TP1 has been reached (AT_SIGNAL mode)
-         bool beTp1 = (InpSecondEntry == OGP_2ND_AT_SIGNAL && InpBeAfterTp1 && isSecond);
+         bool runner = (InpSecondRunner && isSecond);
+         bool beTp1 = (InpSecondEntry == OGP_2ND_AT_SIGNAL && InpBeAfterTp1 && isSecond) || runner;
          if(InpUseBreakEven || beTp1)
            {
-            double trigR = beTp1 ? InpTp1RR : InpBreakEvenRR;
+            double trigR = beTp1 ? (runner ? 1.0 : InpTp1RR) : InpBreakEvenRR;
             if(beTp1 && InpUseBreakEven)
                trigR = MinD(InpTp1RR, InpBreakEvenRR);
             double gain = (dir > 0) ? cur - open : open - cur;
@@ -3297,14 +3406,16 @@ public:
                why = StringFormat("break-even (ran %s >= %.2fR)", Px(s.sym, m_mfe[k]), trigR);
               }
            }
-         if(InpUseTrailing && a > 0.0)
+         bool runnerTrail = runner && initD > 0.0 && m_mfe[k] >= initD;
+         if((InpUseTrailing || runnerTrail) && a > 0.0)
            {
-            double cand = cur - dir * InpTrailAtrMult * a;
+            double mult = runnerTrail ? InpRunnerTrailAtr : InpTrailAtrMult;
+            double cand = cur - dir * mult * a;
             bool better = (dir > 0) ? (cand > newSl + 0.1 * a) : (cand < newSl - 0.1 * a);
             if(better && MathAbs(cur - cand) > minD)
               {
                newSl = cand;
-               why = StringFormat("ATR trail %.2f x %s", InpTrailAtrMult, Px(s.sym, a));
+               why = StringFormat("%sATR trail %.2f x %s", runnerTrail ? "runner " : "", mult, Px(s.sym, a));
               }
            }
          if(newSl != sl)
@@ -3519,6 +3630,40 @@ void Reject(COgpSymbol *s, const string side, const string src, const string why
 
 string g_lastBlockLogged = "#";
 
+//--- account-state risk multiplier (<= 1): loss streak, protect-the-day, taper near floors
+double DynamicRiskFactor(string &info)
+  {
+   double f = 1.0;
+   info = "";
+   if(g_rules.stats.ok && InpLossStreakN > 0 && g_rules.stats.todayLossStreak >= InpLossStreakN)
+     {
+      f *= InpLossStreakFactor;
+      info += StringFormat("lossStreak%d x%.2f ", g_rules.stats.todayLossStreak, InpLossStreakFactor);
+     }
+   if(g_rules.stats.ok && InpProtectAfterUSD > 0.0 && g_rules.stats.todayNet >= InpProtectAfterUSD)
+     {
+      f *= InpProtectFactor;
+      info += StringFormat("protectDay x%.2f ", InpProtectFactor);
+     }
+   if(InpTaperRangeUSD > 0.0)
+     {
+      double room = MinD(g_acc.equity - g_rules.shieldFloor, g_rules.dailyReliable ? g_acc.equity - g_rules.dailyFloor : 1e9) - InpFloorSafetyUSD;
+      double t = room / InpTaperRangeUSD;
+      if(t < 1.0)
+        {
+         t = MaxD(t, InpTaperMinFactor);
+         f *= t;
+         info += StringFormat("taper x%.2f ", t);
+        }
+     }
+   if(info == "")
+      info = "none";
+   return f;
+  }
+
+double g_lastDynFactor = 1.0;
+string g_lastDynInfo = "none";
+
 void HandleCandidate(COgpSymbol *s, const int dir, const string src, const datetime now)
   {
    string side = (dir > 0) ? "BUY" : "SELL";
@@ -3633,8 +3778,12 @@ void HandleCandidate(COgpSymbol *s, const int dir, const string src, const datet
    bool hedging = (AccountInfoInteger(ACCOUNT_MARGIN_MODE) == ACCOUNT_MARGIN_MODE_RETAIL_HEDGING);
    ENUM_OGP_SECOND mode2 = hedging ? InpSecondEntry : OGP_2ND_OFF;
    bool twoNow = (mode2 == OGP_2ND_AT_SIGNAL);
-   double share = (mode2 == OGP_2ND_OFF) ? 1.0 : 0.5;
-   double fixedLots = FixedLotsFor(s);
+   string dynInfo = "";
+   double dyn = DynamicRiskFactor(dynInfo) * it.riskMult;
+   g_lastDynFactor = dyn;
+   g_lastDynInfo = dynInfo;
+   double share = ((mode2 == OGP_2ND_OFF) ? 1.0 : 0.5) * dyn;
+   double fixedLots = FixedLotsFor(s) * dyn;
    double spread = s.tick.ask - s.tick.bid;
    it.entry = (dir > 0) ? s.tick.ask : s.tick.bid;
    double slPrice = it.entry - dir * it.slDist;
@@ -3665,8 +3814,8 @@ void HandleCandidate(COgpSymbol *s, const int dir, const string src, const datet
       return;
      }
    //--- 8. execute
-   Journal("RISK", s.sym, StringFormat("%s ACCEPTED [%s] %s | #1 %s%s | margin %s", side, sess, it.detail, capInfo,
-                                       twoNow ? " | #2 " + capInfo2 : "", Usd(margin)));
+   Journal("RISK", s.sym, StringFormat("%s %s ACCEPTED [%s] %s | dynamic risk x%.2f (grade x%.2f, %s) | #1 %s%s | margin %s", side, src, sess,
+                                       it.detail, dyn, it.riskMult, dynInfo, capInfo, twoNow ? " | #2 " + capInfo2 : "", Usd(margin)));
    s.lastEntryBar = s.curBar;                // one attempt per bar whatever the outcome
    ulong tk1 = 0;
    if(!OpenWithStop(s.sym, dir, lots1, it.slDist, tp1Dist, InpOrderComment + "#1", tk1))
@@ -3675,7 +3824,9 @@ void HandleCandidate(COgpSymbol *s, const int dir, const string src, const datet
       return;
      }
    s.OnEntry(dir);
-   s.lastDecision = StringFormat("OPENED %s #1 %.2f lots, risk %s", side, lots1, Usd(planned1));
+   if(src == "continuation")
+      s.contLegCount++;
+   s.lastDecision = StringFormat("OPENED %s %s #1 %.2f lots grade %s, risk %s", side, src, lots1, it.grade, Usd(planned1));
    g_rules.stats.eaEntriesToday++;           // count immediately; history refresh follows
    g_rules.statsDirty = true;
 
@@ -3696,12 +3847,14 @@ void HandleCandidate(COgpSymbol *s, const int dir, const string src, const datet
    if(twoNow)
      {
       double tpFinal = (it.tpDist > 0.0) ? pOpen + dir * it.tpDist : 0.0;
+      if(InpSecondRunner)
+         tpFinal = pOpen + dir * InpRunnerRR * MathAbs(pOpen - pSl);
       ulong tk2 = 0;
       if(OpenWithStop(s.sym, dir, lots2, 0.0, 0.0, InpOrderComment + "#2", tk2, pSl, tpFinal))
          s.lastDecision += StringFormat(" + #2 %.2f lots", lots2);
      }
    else
-      s.ArmSecond(dir, pSl, pTp, tk1, pOpen);
+      s.ArmSecond(dir, pSl, InpSecondRunner ? pOpen + dir * InpRunnerRR * MathAbs(pOpen - pSl) : pTp, tk1, pOpen);
   }
 
 //--- risk mode: the "fixed" lot inputs act as a maximum lot per position
@@ -3754,7 +3907,9 @@ void HandleSecond(COgpSymbol *s, const datetime now)
    double entry = (dir > 0) ? s.tick.ask : s.tick.bid;
    double lots = 0.0, planned = 0.0, margin = 0.0;
    string capInfo = "";
-   if(!ComputeLots(s.sym, dir, entry, s.s2Sl, s.slip, FixedLotsFor(s), 0.5, LotCapFor(s), rs, g_acc, g_rules, lots, planned, capInfo, why))
+   string dynInfo = "";
+   double dyn = DynamicRiskFactor(dynInfo);
+   if(!ComputeLots(s.sym, dir, entry, s.s2Sl, s.slip, FixedLotsFor(s) * dyn, 0.5 * dyn, LotCapFor(s), rs, g_acc, g_rules, lots, planned, capInfo, why))
      {
       s.CancelSecond(why + " | " + capInfo);
       return;
@@ -3813,6 +3968,9 @@ void ProcessAll()
       int pb = s.CheckPullback();
       if(pb != 0)
          HandleCandidate(s, pb, "pullback", now);
+      int cont = s.CheckContinuation(s.lastEntryBar);
+      if(cont != 0)
+         HandleCandidate(s, cont, "continuation", now);
       if(s.CheckSecond())
          HandleSecond(s, now);
      }
@@ -3862,7 +4020,7 @@ void DrawDashboard(const datetime now)
       return;
    DashClear();
    color hdr = clrGold, ok = clrLimeGreen, bad = clrTomato, warn = clrOrange, txt = clrSilver;
-   DashAdd("ORACLE GUARDIAN PRO v1.30  (no profit guarantee)", hdr);
+   DashAdd("ORACLE GUARDIAN PRO v1.40  (no profit guarantee)", hdr);
    DashAdd(StringFormat("Server %s | UTC %s | NY %s", TimeToString(now, TIME_MINUTES),
                         TimeToString(ServerToUtc(now), TIME_MINUTES), TimeToString(NyLocal(now), TIME_MINUTES)), txt);
    DashAdd(g_entryBlock == "" ? "ENTRIES: ALLOWED [" + g_sessName + "]" : "ENTRIES: BLOCKED - " + g_entryBlock,
@@ -3908,6 +4066,10 @@ void DrawDashboard(const datetime now)
    else
       DashAdd(StringFormat("Risk/signal %.2f%% of equity = %s | #2: %s", InpRiskPct, Usd(g_acc.equity * InpRiskPct / 100.0),
                            EnumToString(InpSecondEntry)), txt);
+   string dInfo = "";
+   double dNow = DynamicRiskFactor(dInfo);
+   DashAdd(StringFormat("Dynamic risk now x%.2f (%s) | last entry x%.2f | loss streak %d", dNow, dInfo, g_lastDynFactor,
+                        g_rules.stats.ok ? g_rules.stats.todayLossStreak : 0), dNow < 1.0 ? warn : txt);
    if(g_rules.emergency)
       DashAdd("EMERGENCY: " + g_rules.emergencyReason, bad);
    DashAdd("--- MARKETS (M3) ---", hdr);
@@ -3968,6 +4130,13 @@ bool ValidateInputs()
       e = "band TP needs InpTpBandMult > 0 and InpMinTpRR > 0";
    else if(InpFvgLookback < 1 || InpFvgMinAtr < 0.0)
       e = "InpFvgLookback >= 1 and InpFvgMinAtr >= 0 required";
+   else if(InpRiskGradeB <= 0.0 || InpRiskGradeB > 1.0 || InpRiskGradeC < 0.0 || InpRiskGradeC > 1.0 || InpGradeBMin > InpGradeAMin)
+      e = "grade multipliers must be in (0,1] / [0,1] and InpGradeBMin <= InpGradeAMin";
+   else if(InpLossStreakFactor <= 0.0 || InpLossStreakFactor > 1.0 || InpProtectFactor <= 0.0 || InpProtectFactor > 1.0 ||
+           InpTaperMinFactor <= 0.0 || InpTaperMinFactor > 1.0)
+      e = "dynamic risk factors must be in (0, 1] (they may only REDUCE risk)";
+   else if(InpRunnerRR <= 0.0 || InpRunnerTrailAtr <= 0.0 || InpContMinBarsSide < 2 || InpContMaxPerLeg < 1)
+      e = "runner / continuation inputs out of range";
    else if(InpMaxTradesPerDay < 1 || InpEmaPeriod < 1 || InpAtrPeriod < 1 || InpSwingLookback < 2 || InpBreakoutLookback < 2)
       e = "periods / lookbacks / max trades out of range";
    if(e != "")
@@ -4013,7 +4182,7 @@ void FreeSymbols()
 int OnInit()
   {
    OgpLog("==================================================================");
-   OgpLog("Oracle Guardian Pro v1.30 - NO PROFIT GUARANTEE - verify every rule on Upcomers");
+   OgpLog("Oracle Guardian Pro v1.40 - NO PROFIT GUARANTEE - verify every rule on Upcomers");
    if(!ValidateInputs() || !SessionsInit())
       return INIT_PARAMETERS_INCORRECT;
    JournalOpen();

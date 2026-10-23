@@ -24,8 +24,11 @@ struct OgpEntryIntent
    double            entry;
    double            slDist;
    double            tpDist;
-   string            source;   // "confirmed" / "live" / "pullback"
+   string            source;   // "confirmed" / "live" / "pullback" / "continuation"
    string            detail;
+   int               score;    // quality score
+   string            grade;    // A / B / C
+   double            riskMult; // grade risk multiplier
   };
 
 class COgpSymbol
@@ -179,6 +182,10 @@ public:
    bool              pbActive;
    int               pbDir;
    int               pbBarsLeft;
+   //--- continuation state
+   int               contSide;
+   int               contSideBars;
+   int               contLegCount;
    //--- second position (retest) state
    bool              s2Active;
    int               s2Dir;
@@ -197,7 +204,7 @@ public:
                      m_lastTickMsc(0), m_lastTickTime(0), m_prevSign(0), m_signAnchor(0), m_firstRun(true), m_need(0), sym(""),
                      isGold(true), minAtr(0), maxAtr(0), maxSpread(0), slip(0), slBuffer(0), vwapLive(0), vwapLiveOk(false),
                      newBar(false), dataOk(false), curBar(0), lastEntryDir(0), rearmed(true), lastEntryBar(0), pbActive(false),
-                     pbDir(0), pbBarsLeft(0), s2Active(false), s2Dir(0), s2Sl(0), s2Tp(0), s2Ticket1(0), s2Entry1(0), s2Bar1(0),
+                     pbDir(0), pbBarsLeft(0), contSide(0), contSideBars(0), contLegCount(0), s2Active(false), s2Dir(0), s2Sl(0), s2Tp(0), s2Ticket1(0), s2Entry1(0), s2Bar1(0),
                      s2BarsLeft(0), lastSignal("-"), lastDecision("-"), trendText("-") {}
 
    bool              Init(const string s, const bool gold)
@@ -451,6 +458,56 @@ public:
       return (tick.bid >= zoneBot && tick.ask < s2Sl);
      }
 
+   //--- trend continuation: an existing EMA/VWAP leg pulls back to the EMA and resumes. 0 = none
+   int               CheckContinuation(const datetime lastEntryBarAny)
+     {
+      if(!InpUseContinuation || !newBar || !vwap.Bar1Valid() || m_firstRun)
+         return 0;
+      double e1 = ema[1], v1 = vwap.Bar1(), a = atr[1];
+      int side = SignOf(e1 - v1);
+      if(side != contSide)
+        {
+         contSide = side;
+         contSideBars = 1;
+         contLegCount = 0;           // a cross starts a new leg
+         return 0;
+        }
+      contSideBars++;
+      if(side == 0 || contSideBars < InpContMinBarsSide || contLegCount >= InpContMaxPerLeg)
+         return 0;
+      if(lastEntryBarAny > 0 && (long)(curBar - lastEntryBarAny) < (long)InpContCooldownBars * OGP_M3_SEC)
+         return 0;
+      string t = "";
+      if(!TrendOk(m_hTr1, InpTrendTF, side, t))
+         return 0;                   // continuation only WITH the higher-timeframe trend
+      bool touch = (side > 0) ? (r[1].low <= e1 + InpContZoneAtr * a) : (r[1].high >= e1 - InpContZoneAtr * a);
+      bool resume = (side > 0) ? (r[1].close > e1 && r[1].close > v1 && r[1].close > r[1].open)
+                    : (r[1].close < e1 && r[1].close < v1 && r[1].close < r[1].open);
+      return (touch && resume) ? side : 0;
+     }
+
+   //--- quality score (0..6): HTF trend, 2nd HTF, VWAP slope, not extended, momentum bar, FVG
+   int               QualityScore(const int dir, const double ext, string &txt)
+     {
+      int sc = 0;
+      string t1 = "", t2 = "", fw = "";
+      double a = atr[1];
+      txt = "";
+      if(TrendOk(m_hTr1, InpTrendTF, dir, t1))
+        { sc++; txt += "trend "; }
+      if(TrendOk(m_hTr2, InpTrendTF2, dir, t2))
+        { sc++; txt += "trend2 "; }
+      if(vwap.Bar2Valid() && dir * (vwap.Bar1() - vwap.Bar2()) > 0.0)
+        { sc++; txt += "vwapSlope "; }
+      if(ext <= 0.5 * a)
+        { sc++; txt += "notExtended "; }
+      if(dir * (r[1].close - r[1].open) >= 0.5 * a)
+        { sc++; txt += "momentum "; }
+      if(FvgOk(dir, a, fw))
+        { sc++; txt += "fvg "; }
+      return sc;
+     }
+
    //--- pullback re-entry check on each new bar. 0 = none
    int               CheckPullback(void)
      {
@@ -493,7 +550,7 @@ public:
       it.source = source;
       it.entry = (dir > 0) ? tick.ask : tick.bid;
 
-      if(InpRequireNewSignal && source != "pullback" && lastEntryDir == dir && !rearmed)
+      if(InpRequireNewSignal && source != "pullback" && source != "continuation" && lastEntryDir == dir && !rearmed)
         {
          why = "no new independent signal since last " + (dir > 0 ? string("BUY") : string("SELL")) + " entry (needs opposite cross first)";
          return OGP_EVAL_REJECT;
@@ -600,7 +657,24 @@ public:
          it.tpDist = MaxD(tdist, minDist);
          tpInfo = StringFormat("VWAP+%.1fsd band, RR %.2f", InpTpBandMult, rr);
         }
-      it.detail = StringFormat("%s, TP %s (%s), ATR %s, VWAP %s, EMA %s", slInfo,
+      //--- signal quality grade -> risk multiplier
+      it.score = QualityScore(dir, ext, it.grade);
+      string reasons = it.grade;
+      it.grade = (it.score >= InpGradeAMin) ? "A" : ((it.score >= InpGradeBMin) ? "B" : "C");
+      it.riskMult = 1.0;
+      if(InpUseQualityScore)
+        {
+         if(it.grade == "B")
+            it.riskMult = InpRiskGradeB;
+         if(it.grade == "C")
+            it.riskMult = InpRiskGradeC;
+         if(it.riskMult <= 0.0)
+           {
+            why = StringFormat("quality grade C (score %d: %s) - skipped", it.score, reasons);
+            return OGP_EVAL_REJECT;
+           }
+        }
+      it.detail = StringFormat("grade %s (score %d: %s) %s, TP %s (%s), ATR %s, VWAP %s, EMA %s", it.grade, it.score, reasons, slInfo,
                                it.tpDist > 0.0 ? Px(sym, it.tpDist) : "none", tpInfo, Px(sym, a), Px(sym, vref),
                                Px(sym, (InpEntryMode == OGP_ENTRY_LIVE) ? ema[0] : ema[1]));
       return OGP_EVAL_OK;

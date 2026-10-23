@@ -532,3 +532,54 @@ kapalı** ve sadece optimizasyonda açık/kapalı karşılaştırılıyor.
 Shield, risk modu %0,5. Optimizasyonda şunlar karşılaştırılır: #2 modu, EMA
 çıkış modu, SL çarpanı, swing/OB stop, TP modu ve RR, trend filtresi, FVG
 filtresi. Forward 1/3.
+
+## 15. v1.40 — Dinamik risk, ek giriş tipi, runner
+
+### Üçüncü rapor (1–22 Ekim 2026, sadece altın, sabit 0,10 lot)
+5 işlem, +217 $, profit factor 3,4. Bütün işlemler short (H1 trendi aşağıydı).
+**5 işlem istatistik olarak hiçbir şey kanıtlamaz.** Ama "günde çok az
+giriş" sorununu doğruluyor: 15 işlem gününde 5 giriş.
+
+### Yenilikler
+
+**1. Dinamik risk (risk sadece azaltılır, hiçbir zaman artırılmaz)**
+
+Her sinyalin riski = taban risk × aşağıdaki çarpanlar:
+
+| Çarpan | Kural | Varsayılan |
+|---|---|---|
+| **Sinyal kalitesi** | 0–6 puan: H1 trend yönünde, ikinci TF trend yönünde, VWAP eğimi sinyal yönünde, fiyat uzamamış (≤0,5 ATR), momentum mumu (gövde ≥0,5 ATR), FVG var. **A** ≥4 puan: ×1,0. **B** 2–3 puan: ×0,6. **C** 0–1 puan: atlanır. | açık |
+| **Kayıp serisi** | Bugün art arda 2 kayıp → ×0,5 | açık |
+| **Günü koru** | Bugünkü gerçekleşmiş kâr ≥100 $ → ×0,5 (200 $ hedefe giderken kârı geri vermemek için) | açık |
+| **Taban yaklaşımı** | Equity bir firma tabanına yaklaştıkça risk 600 $'lık bir aralıkta kademeli olarak ×0,25'e iner. v1.20'deki gibi aniden kilitlenmez. | açık |
+
+Bütün çarpanlar 1'den küçük ya da 1'e eşit. Spec'teki "kayıptan sonra lot
+artırma yok" ve "equity yükselince agresifleşme yok" kuralları korunuyor.
+
+**2. Trend devam girişleri (`InpUseContinuation`) — daha fazla günlük giriş**
+
+Klasik kesişim günde birkaç kez olur. Yeni giriş tipi, **mevcut bir trend
+ayağında** fiyat EMA'ya geri çekilip yeniden trend yönünde kapandığında
+girer. Koşullar:
+- EMA en az 5 mumdur VWAP'ın aynı tarafında,
+- H1 trendi aynı yönde,
+- mum EMA ± 0,3 ATR bölgesine dokunmuş ve trend yönünde kapanmış,
+- son girişten bu yana en az 10 mum geçmiş,
+- aynı ayakta en fazla 2 kez.
+
+**3. Runner (`InpSecondRunner`) — kârı büyütmek için**
+
+Pozisyon #2'nin hedefi 3R. +1R'ye ulaşınca stop girişe çekilir, sonra 1,5 ATR
+mesafeyle iz sürer. #1 normal hedefinde (1,5R) kapanır, #2 trend devam
+ederse büyük hareketi yakalar.
+
+### Test önerisi
+
+`OGP_optimize_exits.set` güncellendi. Ayarlar: sadece altın, STATIC Shield,
+risk modu, Ocak–Ekim, forward 1/3. Optimizasyonda kalite skoru, C sinyalleri
+(atla / ×0,3), devam girişleri, runner, EMA çıkış modu, SL çarpanı, swing/OB
+stopu ve TP RR açık/kapalı ya da farklı değerlerle karşılaştırılır.
+
+Önce **3 aylık normal bir test** yapın ve Bülten'deki `SIGNAL SUMMARY`
+bloğunu gönderin. Sinyallerin hangi sebeple reddedildiği görülmeden "daha
+fazla giriş" için hangi filtrenin gevşetileceğine karar verilemez.

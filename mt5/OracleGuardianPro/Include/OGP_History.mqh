@@ -287,6 +287,7 @@ struct OgpCycleStats
    int               tradingDays;
    int               eaEntriesToday;
    int               eaEntriesCycle;
+   int               todayLossStreak;  // consecutive losing EA closes today (latest first)
   };
 
 bool ComputeCycleStats(const datetime cycleStart, const datetime todayKeyUtc, const double validThreshold, OgpCycleStats &st)
@@ -300,6 +301,7 @@ bool ComputeCycleStats(const datetime cycleStart, const datetime todayKeyUtc, co
    st.tradingDays = 0;
    st.eaEntriesToday = 0;
    st.eaEntriesCycle = 0;
+   st.todayLossStreak = 0;
    st.computedAt = TimeCurrent();
 
    if(!HistorySelect(cycleStart, TimeCurrent() + 86400))
@@ -337,6 +339,15 @@ bool ComputeCycleStats(const datetime cycleStart, const datetime todayKeyUtc, co
          nets[k] = 0.0;
         }
       nets[k] += net;
+      if(key == todayKeyUtc && HistoryDealGetInteger(d, DEAL_ENTRY) != DEAL_ENTRY_IN &&
+         (ulong)HistoryDealGetInteger(d, DEAL_MAGIC) == InpMagic)
+        {
+         if(net < 0.0)
+            st.todayLossStreak++;
+         else
+            if(net > 0.0)
+               st.todayLossStreak = 0;
+        }
       //--- count SIGNALS: the second position of a signal ("#2") is not a new trade
       if(HistoryDealGetInteger(d, DEAL_ENTRY) == DEAL_ENTRY_IN && (ulong)HistoryDealGetInteger(d, DEAL_MAGIC) == InpMagic &&
          StringFind(HistoryDealGetString(d, DEAL_COMMENT), "#2") < 0)

@@ -147,6 +147,29 @@ input int      InpRetestMaxBars         = 10;       // Retest must happen within
 input double   InpTp1RR                 = 1.0;      // AT_SIGNAL mode: target of position #1 (R)
 input bool     InpBeAfterTp1            = true;     // AT_SIGNAL mode: move #2 to break-even once price reaches TP1
 
+input group "=== 3c. Dynamic risk (only REDUCES risk, never increases it) ==="
+input bool     InpUseQualityScore       = true;     // Grade each signal A/B/C and size by grade
+input int      InpGradeAMin             = 4;        // Score >= this -> grade A (full risk)
+input int      InpGradeBMin             = 2;        // Score >= this -> grade B
+input double   InpRiskGradeB            = 0.6;      // Risk multiplier grade B
+input double   InpRiskGradeC            = 0.0;      // Risk multiplier grade C (0 = skip C signals)
+input int      InpLossStreakN           = 2;        // After N losing trades in a row today...
+input double   InpLossStreakFactor      = 0.5;      // ...multiply risk by this
+input double   InpProtectAfterUSD       = 100.0;    // Once today's realized net >= this...
+input double   InpProtectFactor         = 0.5;      // ...multiply risk by this (protect the day)
+input double   InpTaperRangeUSD         = 600.0;    // Risk tapers linearly over this distance above the safety buffer of the nearest floor
+input double   InpTaperMinFactor        = 0.25;     // Minimum taper multiplier
+
+input group "=== 3d. Extra entries & runner ==="
+input bool     InpUseContinuation       = true;     // Trend-continuation entries: pullback to EMA within an existing EMA/VWAP leg
+input double   InpContZoneAtr           = 0.30;     // Pullback must reach EMA +/- this ATR
+input int      InpContMinBarsSide       = 5;        // EMA must have been on the same side of VWAP for N closed bars
+input int      InpContCooldownBars      = 10;       // Bars since the last entry on the symbol
+input int      InpContMaxPerLeg         = 2;        // Max continuation entries per EMA/VWAP leg
+input bool     InpSecondRunner          = true;     // Position #2 is a runner: far target + break-even + ATR trail
+input double   InpRunnerRR              = 3.0;      // Runner target (R of position #1)
+input double   InpRunnerTrailAtr        = 1.5;      // Runner ATR trailing distance (after +1R)
+
 input group "=== 4. Filters (each independent; untested -> OFF unless safety) ==="
 input bool     InpUseTrend              = true;     // Higher-timeframe trend filter (trade only with the trend)
 input ENUM_TIMEFRAMES InpTrendTF        = PERIOD_H1; // Trend timeframe

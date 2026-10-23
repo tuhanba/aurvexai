@@ -179,10 +179,11 @@ public:
          double newSl = sl;
          string why = "";
          //--- break-even: generic, or for #2 once TP1 has been reached (AT_SIGNAL mode)
-         bool beTp1 = (InpSecondEntry == OGP_2ND_AT_SIGNAL && InpBeAfterTp1 && isSecond);
+         bool runner = (InpSecondRunner && isSecond);
+         bool beTp1 = (InpSecondEntry == OGP_2ND_AT_SIGNAL && InpBeAfterTp1 && isSecond) || runner;
          if(InpUseBreakEven || beTp1)
            {
-            double trigR = beTp1 ? InpTp1RR : InpBreakEvenRR;
+            double trigR = beTp1 ? (runner ? 1.0 : InpTp1RR) : InpBreakEvenRR;
             if(beTp1 && InpUseBreakEven)
                trigR = MinD(InpTp1RR, InpBreakEvenRR);
             double gain = (dir > 0) ? cur - open : open - cur;
@@ -194,14 +195,16 @@ public:
                why = StringFormat("break-even (ran %s >= %.2fR)", Px(s.sym, m_mfe[k]), trigR);
               }
            }
-         if(InpUseTrailing && a > 0.0)
+         bool runnerTrail = runner && initD > 0.0 && m_mfe[k] >= initD;
+         if((InpUseTrailing || runnerTrail) && a > 0.0)
            {
-            double cand = cur - dir * InpTrailAtrMult * a;
+            double mult = runnerTrail ? InpRunnerTrailAtr : InpTrailAtrMult;
+            double cand = cur - dir * mult * a;
             bool better = (dir > 0) ? (cand > newSl + 0.1 * a) : (cand < newSl - 0.1 * a);
             if(better && MathAbs(cur - cand) > minD)
               {
                newSl = cand;
-               why = StringFormat("ATR trail %.2f x %s", InpTrailAtrMult, Px(s.sym, a));
+               why = StringFormat("%sATR trail %.2f x %s", runnerTrail ? "runner " : "", mult, Px(s.sym, a));
               }
            }
          if(newSl != sl)
